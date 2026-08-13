@@ -8,7 +8,7 @@ touches exactly one new file, so several can be authored concurrently.
 import importlib
 import pkgutil
 
-from ._spec import Emitter, Part, Phase, Prop
+from ._spec import Emitter, Part, Passage, Phase, Prop
 
 CATALOG = {}
 
@@ -22,4 +22,4 @@ for _module in pkgutil.iter_modules(__path__):
                 raise ValueError(f"duplicate prop name: {_value.name}")
             CATALOG[_value.name] = _value
 
-__all__ = ["CATALOG", "Emitter", "Part", "Phase", "Prop"]
+__all__ = ["CATALOG", "Emitter", "Part", "Passage", "Phase", "Prop"]

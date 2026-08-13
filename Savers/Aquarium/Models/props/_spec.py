@@ -41,6 +41,24 @@ class Emitter:
         self.continuous = continuous
 
 
+class Passage:
+    """A route a fish can swim through the prop, as an ordered list of `swim_<name>` empties.
+
+    A hole is only interesting if something goes through it, and the swimming code cannot
+    infer that from geometry — a wreck's hull is a closed mesh whether or not there is a way
+    in. So the model states it: the empties are waypoints in order, and the space between
+    consecutive ones is guaranteed clear to `radius`.
+
+    `radius` is what decides which species fit, so it is the *tightest* clearance along the
+    route, not the widest. Under-declare it; a fish clipping a hull is far worse than a fish
+    declining a passage it would have fitted.
+    """
+
+    def __init__(self, nodes, radius=0.20):
+        self.nodes = list(nodes)
+        self.radius = radius
+
+
 class Phase:
     """One step of an animation cycle.
 
@@ -74,6 +92,7 @@ class Prop:
         min_spacing=None,
         parts=(),
         emitters=(),
+        passages=(),
         cycle=(),
         seeds=1,
     ):
@@ -90,6 +109,7 @@ class Prop:
         self.min_spacing = min_spacing        # centre-to-centre, defaults to 2x footprint
         self.parts = list(parts)
         self.emitters = list(emitters)
+        self.passages = list(passages)        # routes fish may swim through
         self.cycle = list(cycle)
         self.seeds = seeds                    # how many distinct variants to export
 
@@ -127,6 +147,10 @@ class Prop:
                     **({"continuous": True} if e.continuous else {}),
                 }
                 for e in self.emitters
+            ]
+        if self.passages:
+            data["passages"] = [
+                {"nodes": list(p.nodes), "radius": p.radius} for p in self.passages
             ]
         if self.cycle:
             data["cycle"] = [

@@ -29,6 +29,7 @@ saver's source.
 | `decor_<name>` | the model root |
 | `part_<name>` | a rigid part that moves; **its origin is its pivot** |
 | `emit_<name>` | an empty marking a particle emission point |
+| `swim_<name>` | an empty marking a waypoint on a route a fish may swim through |
 
 Anything not prefixed is static geometry and the runtime ignores it. A part's origin
 becoming its pivot is free — Blender writes the origin as the prim transform and the mesh
@@ -66,6 +67,10 @@ hinge line.
       "size": [0.002, 0.005], "speed": 0.09 }
   ],
 
+  "passages": [
+    { "nodes": ["swim_breach_port", "swim_hold", "swim_breach_star"], "radius": 0.18 }
+  ],
+
   "cycle": [
     { "phase": "idle", "duration": [7.0, 16.0] },
     { "phase": "move", "duration": 0.8, "part": "part_lid", "to": 1.0, "ease": "easeOut" },
@@ -87,6 +92,12 @@ hinge line.
   failure available here.
 - Omit `cycle` for a static prop. For something that bubbles continuously — a thermal vent
   — give the emitter `"continuous": true` and omit `cycle`.
+- `passages` is what makes a hole worth modelling. A wreck's hull is a closed mesh whether
+  or not there is a way through it, and nothing downstream can infer a route from geometry,
+  so the model states it as ordered `swim_` waypoints. `radius` is the **tightest**
+  clearance along the route, because it decides which species fit — under-declare it, since
+  a fish clipping through a hull is much worse than a fish declining a gap it would have
+  made. An arch is one passage of two waypoints; a wreck may have several.
 
 ## Roster
 
@@ -106,9 +117,14 @@ emitter), amphorae, anchor, portholes, scattered coins.
 
 **Reef:** staghorn / table / brain / mushroom coral, sea fan, tube sponge, anemone.
 
-**Plants:** kelp, seagrass, red macroalgae.
+**Plants:** kelp, giant kelp (tall stalks reaching most of the frame), seagrass, red
+macroalgae.
 
-**Terrain:** boulders, rubble, gravel patches.
+**Terrain:** rock arch and pillars, boulders, rubble, gravel patches.
+
+The arch and the wreck exist to be swum *through*, not past. A tank of things a fish
+routes around is flat; one opening a fish commits to crossing gives the depth axis
+something to prove. Both declare `passages`.
 
 ## Bake interaction
 
