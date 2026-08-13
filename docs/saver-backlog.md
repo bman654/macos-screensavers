@@ -157,3 +157,35 @@ own instance, and a shared world across displays is much harder than independent
 - **`legacyScreenSaver` crashes mean a black screen.** Heavier savers are riskier. Keep
   state small and fail soft.
 - **The preview thumbnail is tiny.** The visual has to still read at that size.
+
+## Ambient audio
+
+Wanted, and settled in direction if not in mechanism: **ambient sound only, toggleable,
+defaulting to off.** The aquarium gets a low bubbling bed. Other savers may borrow the hum
+from the orrery estate's living calendar — "the air" — which lives outside this repo, so
+whoever implements it should ask for the source rather than invent one.
+
+Default-off is not timidity. A screensaver starts *because* the user walked away, so
+unrequested sound plays to an empty room, or into a meeting they just walked into, or at
+2am. Opted-in ambience is charming; the same audio uninvited is why people uninstall
+screensavers.
+
+**Unproven — do not assume this works.** Nothing has tested whether audio actually reaches
+the output device from inside a sandboxed `legacyScreenSaver`. Audio *output* normally needs
+no entitlement, unlike microphone input, so it should be permitted — but `WKWebView` also
+looked fine and blanked after three seconds in this same host, with no diagnostic. Spike it
+before designing around it.
+
+Hazards to design for, all discovered by reasoning rather than testing:
+
+- **One instance per display.** macOS instantiates a saver for every screen, so three
+  displays means three players fighting: phasing, comb filtering and triple volume. One
+  instance has to own audio, and instances have no natural way to discover each other.
+- **The System Settings preview would play.** Selecting the saver in the thumbnail grid
+  would start the sound. It must be silent there — and `isPreview` is unreliable on Tahoe,
+  so the check has to derive from view size like everything else here.
+- **The login window runs savers too**, in a different user context, where audio routing is
+  another unknown.
+- **Every asset ships in the bundle**, since the saver is sandboxed with no network. A loop
+  long enough not to feel repetitive is real bundle weight; the model library is already
+  ~35 MB.
