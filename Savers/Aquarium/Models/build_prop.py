@@ -11,6 +11,7 @@ The counterpart to `build_fish.py` for everything that is not a fish. Run throug
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -101,6 +102,31 @@ def _join_static_parts(root, name):
     return joined
 
 
+def _pose(specs):
+    """Rotate named parts before rendering, to inspect a bubbler's open pose.
+
+    An articulated prop is authored closed, because closed is what the tank places, but
+    closed is the pose in which its interesting geometry is invisible — a clam's mantle and
+    nacre, a chest's hoard, a skeleton's raised jug. Every bubbler author needed this and
+    each invented a different workaround, so it belongs here.
+
+    Deliberately render-only: posing what gets exported would ship a chest frozen open.
+    """
+    for spec in specs:
+        name, _, degrees = spec.partition("=")
+        obj = bpy.context.scene.objects.get(name)
+        if obj is None:
+            raise SystemExit(
+                f"--pose: no object named '{name}'. Moving parts are named part_<something>; "
+                f"this prop has "
+                f"{sorted(o.name for o in bpy.context.scene.objects if o.name.startswith('part_')) or 'none'}"
+            )
+        try:
+            obj.rotation_euler.x = math.radians(float(degrees))
+        except ValueError:
+            raise SystemExit(f"--pose: '{spec}' is not <part>=<degrees>")
+
+
 def _drop_to_floor():
     """Seat the prop on z = 0 so the tank never has to guess where its bottom is."""
     lo, _ = studio.scene_bounds()
@@ -127,6 +153,9 @@ def main():
     parser.add_argument("--uv-margin", type=float, default=DEFAULT_UV_MARGIN)
     parser.add_argument("--device", default=None,
                         help="exact Cycles device name; any Metal GPU by default")
+    parser.add_argument("--pose", action="append", default=[], metavar="PART=DEGREES",
+                        help="rotate a moving part before rendering, e.g. part_lid=-80; "
+                             "repeatable, and refused with --export")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--exposure", type=float, default=-2.0,
@@ -136,6 +165,9 @@ def main():
     args = parser.parse_args(argv)
     if args.bake and not args.export:
         parser.error("--bake requires --export")
+    if args.pose and args.export:
+        parser.error("--pose is for looking at a prop, not for shipping one: exporting a "
+                     "posed model would put a chest in the tank frozen open")
 
     prop = CATALOG[args.prop]
 
@@ -147,6 +179,9 @@ def main():
         raise RuntimeError(f"building '{prop.name}' produced no root object")
     _apply_scales()
     _drop_to_floor()
+    # After the drop, so the posed render still shows the prop seated where the tank will
+    # seat it rather than floating on its own swung-open bounding box.
+    _pose(args.pose)
 
     out_dir = os.path.join(args.out, prop.name)
     os.makedirs(out_dir, exist_ok=True)

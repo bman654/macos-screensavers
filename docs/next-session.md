@@ -59,6 +59,13 @@ the parameters.
 - **`studio_lights` runs about a stop hot for large matte props**; `build_prop.py` compensates
   with `exposure=-2.0` rather than falsifying albedos. A calibration pass would be better.
 - **`gallery.build_sheet` fails on a single tile** (`xstack` "Result too large").
+- **`SceneKitProbe.worldBounds` over-reports a rotated hierarchy**, transforming each child's
+  *local* AABB corners and so returning the AABB of a rotated AABB — it called a
+  2.38 x 1.47 x 0.86 m wreck 2.66 x 2.26. Harmless as a diagnostic, wrong if placement ever
+  derives extents from geometry instead of the manifest.
+- **`rock(flatten=1.0)` still only squashes about 0.4x**, which is a boulder, not a drift. A
+  sand drift needs roughly 0.15x and it has to be a mesh-space scale. The wreck does it
+  locally; a second prop needing it should push a `drift()` into `saverlib`.
 - **`SceneKitProbe` frames on X extent**, so it crops a tall prop to its middle. Harmless for
   fish, wrong for the 1.65 m diving suit and the 2.6 m kelp. It wants a `--fit` flag.
 - **`studio.render_views` cannot frame a height band**, so tall props need a throwaway detail

@@ -17,7 +17,10 @@ saver's source.
   the correction is a `-π/2` rotation on the pivot node, exactly as `AquariumScene` already
   does for fish.
 - **The model sits on the floor at `z = 0`**, centred on X and Y. The runtime should not
-  have to guess where the bottom is.
+  have to guess where the bottom is. `build_prop.py` enforces this by seating the *lowest
+  vertex* on the floor, which has a consequence worth knowing before you design: a
+  part-buried prop cannot be made by sinking geometry below zero, because the whole model
+  is simply lifted back up. Burial has to be a mound of seabed rising over the model.
 - **Never leave scale on an object.** Build dimensions into the mesh. Scale left on a
   parent object stretches the space its children live in, so their positions arrive in the
   wrong units and rotating them shears the mesh. See `spikes/004-articulated-decor/`.
@@ -125,6 +128,25 @@ macroalgae.
 The arch and the wreck exist to be swum *through*, not past. A tank of things a fish
 routes around is flat; one opening a fish commits to crossing gives the depth axis
 something to prove. Both declare `passages`.
+
+## Looking at a moving prop
+
+A bubbler is authored closed, because closed is what the tank places — but closed is exactly
+the pose in which its most interesting geometry is hidden. Render the open pose to judge it:
+
+```bash
+tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- \
+    --prop clamshell --preview --pose part_upper_valve=-24
+```
+
+`--pose` is repeatable and is refused alongside `--export`, since exporting a posed model
+would ship a chest frozen open.
+
+**One part means a fixed distance.** For an arm-like prop this is the constraint that drives
+the whole silhouette: with the jug parented to the arm, the jug's mouth is a rigid distance
+from the shoulder, so the pose that reaches the lips is not something to tune afterwards.
+Derive the rest pose instead — place the moving end where it must finish, swing it *back* by
+the cycle's own angle, and the two can never disagree.
 
 ## Bake interaction
 
