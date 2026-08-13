@@ -28,6 +28,15 @@ tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- --prop boulder --ex
 tools/gallery.py --out /tmp/reef.png --columns 4 'build/props/*/water_00_side.png'
 ```
 
+**Look at the PNG at the size it will be seen.** A detail crop hid a kelp that read as bamboo
+at full-plant scale, and a bubbler rendered only closed hid a mantle that glowed like an LED
+when it opened. Use `--pose part=degrees` for the open pose, and judge a tall prop from its
+whole silhouette before its close-ups.
+
+**Never pipe a build through `tail`.** A run dying with a `NameError` still exits past a
+`| tail -2`, and the PNGs you then open are the previous run's — worth three iterations to one
+author and a stale-binary debug to another. Grep for `Error|Traceback` instead.
+
 **Look at the PNG.** This is the repo's hardest-won rule and it held all session: the numbers
 never tell you whether a model reads. Every species took four to seven render-and-adjust
 iterations, and in every case the thing that fixed it was visible in an image and invisible in

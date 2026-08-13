@@ -142,11 +142,15 @@ tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- \
 `--pose` is repeatable and is refused alongside `--export`, since exporting a posed model
 would ship a chest frozen open.
 
-**One part means a fixed distance.** For an arm-like prop this is the constraint that drives
-the whole silhouette: with the jug parented to the arm, the jug's mouth is a rigid distance
-from the shoulder, so the pose that reaches the lips is not something to tune afterwards.
-Derive the rest pose instead — place the moving end where it must finish, swing it *back* by
-the cycle's own angle, and the two can never disagree.
+**One part means a fixed distance.** A single rigid part holds its payload at a fixed distance
+from its pivot, so the rest pose is never a free choice: author the *contact* pose and swing it
+back by the cycle's own angle to discover where the part must idle. Do it the other way round —
+posing the idle by eye and then tuning the swing until the jug reaches the mouth — and the two
+disagree again every time the angle is retuned.
+
+For the skeleton this drove the entire silhouette, not just the arm: low shoulders, a high
+skull, a ribcage starting well up the spine, and the jug resting on a thigh rather than on
+the sand, all so that one rotation lands the jug at the lips.
 
 ## Bake interaction
 
