@@ -26,12 +26,17 @@ The probe takes any prop, not just this spike's asset:
 |---|---|---|
 | `--part` | `part_lid` | the node to rotate |
 | `--emitter` | `emit_bubbles` | the empty whose pivot radius is checked |
-| `--angles` | `0,35,70` | comma-separated degrees about X |
+| `--angles` | `0,35,70` | comma-separated degrees |
+| `--axis` | `x` | which axis to rotate about |
 | `--light` | `1.0` | multiplier, if a very dark or very pale prop needs it |
 
 **Give it the angles your prop actually opens through.** A part hinged at +Y opens through
 *negative* angles, so the default positive sweep renders it closing into its own back wall
 and looks like a modelling error that is not there.
+
+**Pass `--axis` too.** A lid hinges about X, an arm swings about Y. Rotating the wrong axis
+still reports RIGID — the pivot radius is preserved whichever axis you turn about — while the
+render shows the part swinging sideways. The verdict stays honest; only the picture lies.
 
 The probe prints the emitter's distance from the pivot at every angle and ends with a
 verdict. That number is the real test: a rigid rotation holds the radius to the last decimal,

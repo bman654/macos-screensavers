@@ -31,6 +31,13 @@ let angles = (value("--angles") ?? "0,35,70")
     .split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
 guard !angles.isEmpty else { fatalError("--angles parsed to nothing") }
 
+// A lid hinges about X but an arm swings about Y, and rotating the wrong axis still gives a
+// rigid verdict — the radius is preserved whichever axis you turn about — while the picture
+// shows the part swinging sideways. So the verdict stays trustworthy and the render stops
+// lying only if the axis is settable.
+let axis = (value("--axis") ?? "x").lowercased()
+guard ["x", "y", "z"].contains(axis) else { fatalError("--axis must be x, y or z") }
+
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
 guard let scene = try? SCNScene(url: URL(fileURLWithPath: input), options: nil) else {
@@ -110,7 +117,12 @@ print(String(format: "--- %@ pivot world (%.4f, %.4f, %.4f) ---", partName, pivo
 
 var radii: [Double] = []
 for (index, degrees) in angles.enumerated() {
-    part.eulerAngles = SCNVector3(Float(degrees) * .pi / 180.0, 0, 0)
+    let radians = Float(degrees) * .pi / 180.0
+    switch axis {
+    case "y": part.eulerAngles = SCNVector3(0, radians, 0)
+    case "z": part.eulerAngles = SCNVector3(0, 0, radians)
+    default:  part.eulerAngles = SCNVector3(radians, 0, 0)
+    }
     if let e = emitter {
         let world = e.convertPosition(SCNVector3Zero, to: nil)
         let dx = Double(world.x - pivot.x), dy = Double(world.y - pivot.y), dz = Double(world.z - pivot.z)
