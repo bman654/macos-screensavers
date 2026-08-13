@@ -2,11 +2,17 @@
 
 ## Start here
 
+- `docs/next-session.md` — current state, what to do next, and the traps that already cost
+  time once. Read this first.
+- `Shared/SaverKit/README.md` — how to write a saver, and the macOS 26 hazards the base
+  class handles for you. Read before touching any Swift here.
 - `docs/aquarium-plan.md` — the active track, its one blocker, and the decisions already
   settled. Read before touching the aquarium.
 - `spikes/001-fish-pipeline/README.md` — what the Blender→SceneKit pipeline proved, and
   the traps behind several non-obvious choices in `saverlib`. Reading this will save you
   from rediscovering them.
+- `spikes/002-saver-shell/README.md` — what the `.saver` shell and raw Metal host proved,
+  including why shaders ship as source rather than as a compiled library.
 - `docs/saver-backlog.md` — the other planned screensavers and why they are ordered the
   way they are.
 

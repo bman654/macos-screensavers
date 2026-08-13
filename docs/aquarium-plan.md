@@ -1,8 +1,12 @@
 # Aquarium — build plan
 
-Status as of the first commit: the asset pipeline is validated end to end except for
-materials. See `spikes/001-fish-pipeline/README.md` for what was proven and the traps
-found along the way.
+Status: the asset pipeline is validated end to end except for materials, and the `.saver`
+shell is built and confirmed running under the real screensaver engine. See
+`spikes/001-fish-pipeline/README.md` and `spikes/002-saver-shell/README.md` for what each
+proved and the traps found along the way.
+
+**Texture baking (§1) is now the only thing between the aquarium and looking right.** The
+fish currently render as flat white geometry — correct shape, correct motion, no markings.
 
 ## Decisions already made (do not relitigate)
 
@@ -65,18 +69,18 @@ committed assets mean building a saver never requires Blender.
 - **Camera.** Narrow FOV (~22°) for a near-orthographic 2.5D read with a little parallax.
 - **`.saver` shell.** See below — independent of everything above.
 
-## 3. The shell is a separate, unretired risk
+## 3. The shell — retired
 
-Nothing yet runs as an actual screensaver. `Shared/SaverKit` is an empty directory. The
-Tahoe hazards are known but untested here: unreliable `isPreview`, zero or
-backing-pixel bounds on init, and `mmap` meaning a stale binary keeps serving until
-`killall legacyScreenSaver`. Ad-hoc signing plus `swiftc -emit-library -Xlinker -bundle`
-is the confirmed build path; full Xcode is not needed.
+Done and verified in the real host. `Shared/SaverKit` supplies both hosts, and both a
+SceneKit saver (Aquarium) and a raw Metal saver (`spikes/002-saver-shell`) were installed
+and rendered correctly under Tahoe's `legacyScreenSaver`. See `Shared/SaverKit/README.md`
+for the hazard list and how to write a saver, and `spikes/002-saver-shell/README.md` for
+what the Metal probe proved.
 
-Worth doing early with a deliberately trivial visual, because it is the smaller and
-riskier of the two tracks and its failure modes are unrelated to the aquarium's.
+The result that mattered most was not on the original risk list: **Command Line Tools ship
+no offline Metal compiler**, so shaders must be compiled at runtime from source shipped in
+the bundle — and that turns out to be permitted inside the sandbox. Had it not been, every
+shader-based saver in `saver-backlog.md` would have needed a Metal toolchain first.
 
-**SaverKit must offer both a SceneKit host and a raw Metal full-screen host.** The
-aquarium only needs the former, but the space-scene and field-simulation savers in
-`saver-backlog.md` need the latter, and retrofitting that after building SaverKit around
-SceneKit alone would be painful.
+Still unverified: multi-display and Retina 2x (this machine has one 1x display), and
+long-run stability.

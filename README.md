@@ -10,8 +10,8 @@ diff-able, and re-derivable rather than a binary blob.
 ## Layout
 
 ```
-Shared/SaverKit/      Swift code common to every saver (ScreenSaverView base, SceneKit host,
-                      macOS 26 legacyScreenSaver workarounds)
+Shared/SaverKit/      Swift code common to every saver (ScreenSaverView base, SceneKit and
+                      raw Metal hosts, macOS 26 legacyScreenSaver workarounds)
 Savers/<Name>/        One screensaver. Sources/ (Swift), Models/ (Blender build scripts),
                       Assets/ (generated USDZ/textures, committed)
 tools/blender/        `saverlib` — reusable parametric modeling, materials, render harness
@@ -37,6 +37,17 @@ tools/build-saver.sh Aquarium -i   # ...and install to ~/Library/Screen Savers
 
 Because a loaded `.saver` is held open via `mmap`, the install step runs
 `killall legacyScreenSaver` — otherwise macOS keeps serving the previous binary.
+
+For iteration, drive a saver in a window instead of through System Settings:
+
+```bash
+tools/run-saver.swift build/Aquarium.saver --seconds 3 --screenshot /tmp/shot.png
+```
+
+Shaders ship as `.metal` **source** and are compiled at runtime, because Command Line Tools
+include no Metal compiler. Runtime compilation is verified to work inside the screensaver
+sandbox; `build-saver.sh` will additionally precompile a `default.metallib` if a Metal
+toolchain is present.
 
 ## Rebuilding assets
 
