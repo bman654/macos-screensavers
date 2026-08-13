@@ -219,8 +219,26 @@ final class ModelCache {
               let (minBound, maxBound) = ModelCache.bounds(of: imported.rootNode)
         else { return nil }
         let model = LoadedModel(template: imported.rootNode, minBound: minBound, maxBound: maxBound)
+        ModelCache.forceMetalnessIfRequested(imported.rootNode)
         loaded[asset] = model
         return model
+    }
+
+    /// DIAGNOSTIC, `AQUARIUM_FORCE_METALNESS=<0…1>`. Not a feature and not a fix.
+    ///
+    /// It exists to answer one question with a picture: metal in the tank reads as rock, and the
+    /// candidate causes are "the scene has no environment to reflect" and "the material is not
+    /// metallic". The first is fixed — see `WaterLook.environment`. This tests the second, by
+    /// forcing every material in the library metallic, which is wrong for coral and wood and is
+    /// exactly why it is a diagnostic. If brass appears under this and not without it, the
+    /// missing piece is a metalness map out of the bake, which no lighting can substitute for.
+    /// `docs/water-looks.md` records what it showed.
+    private static func forceMetalnessIfRequested(_ root: SCNNode) {
+        guard let raw = ProcessInfo.processInfo.environment["AQUARIUM_FORCE_METALNESS"],
+              let metalness = Double(raw) else { return }
+        root.enumerateHierarchy { node, _ in
+            node.geometry?.materials.forEach { $0.metalness.contents = metalness }
+        }
     }
 
     /// Union of every geometry node's box, expressed in the root's space.

@@ -102,7 +102,11 @@ legacy saver's defaults are keyed by bundle identifier, not by `Bundle.main`).
   directly overhead, water tinted a noticeably more saturated blue than the ocean look, and
   **coloured aquarium gravel** underfoot instead of sand.
 - **Real ocean.** What exists today: sand, muted blue-green water, daylight filtering down
-  from the surface.
+  from the surface. This became **two** styles once it was art-directed — `shallowReef` and
+  `deepOcean` — because the depth the water is seen from changes everything about it and
+  nothing about the tank: the two draw the same dimensions and differ only in the water
+  block and the sand it has to agree with. `docs/water-looks.md` has all three, and the
+  rule that keeps a substrate and its water coherent.
 
 The two differ only in lighting, water tint and substrate appearance. Geometry, placement,
 population and fish behaviour are shared — the split must not reach past the surface into

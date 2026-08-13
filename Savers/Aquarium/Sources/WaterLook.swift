@@ -1,0 +1,254 @@
+// What the water is made of, and what lights it.
+//
+// One look is every number that decides how the tank reads: the water's own colour, the ramp
+// down from the surface, what the metal in it reflects, the fog's shape, the three-light rig,
+// the camera's post-processing and how much matter is suspended in the water. A style picks
+// one — see `TankStyle` — and nothing outside `AquariumScene.buildEnvironment` and
+// `buildCamera` reads a light, a tint or a fog value, so the looks stay interchangeable.
+//
+// `docs/water-looks.md` is the reasoning behind every value here and holds the measurements
+// that justify them. The one thing that is not negotiable: **light reaching the seabed and
+// light scattering in the water column come from one budget.** A substrate lit as though light
+// is plentiful, seen through water tinted as though it is not, reads as a lit shelf dropping
+// off into an abyss rather than as a place. Every look is tuned so the near floor is *dimmer*
+// than the open water it is seen through, and the floor then brightens with distance as the fog
+// carries it toward the backdrop — which is the direction real haze runs. The substrate each
+// look is balanced against is named on its style, and the two cannot be retuned apart.
+
+import AppKit
+import Foundation
+import SceneKit
+
+struct WaterLook {
+    /// One light, stated the way a lighting decision is actually made: how far above the horizon
+    /// it sits and which way round. Euler angles are derived, because a light aimed by raw
+    /// eulers cannot be read back as an elevation without doing the trigonometry by hand.
+    struct Light {
+        let red: CGFloat
+        let green: CGFloat
+        let blue: CGFloat
+        let intensity: CGFloat
+        /// Degrees above the horizon the light comes *from*; 90 is straight down. Ignored for
+        /// the ambient light, which has no direction.
+        let elevation: Float
+        /// Degrees round the vertical axis; 0 sends it straight into the screen.
+        let azimuth: Float
+
+        init(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, intensity: CGFloat,
+             elevation: Float = 0, azimuth: Float = 0) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+            self.intensity = intensity
+            self.elevation = elevation
+            self.azimuth = azimuth
+        }
+
+        var color: NSColor {
+            NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1)
+        }
+
+        /// A directional light aims along its own -Z. Pitching by -elevation swings that to
+        /// `(0, -sin e, -cos e)`, so elevation 90 is a light travelling straight down.
+        var euler: SCNVector3 {
+            SCNVector3(-elevation * .pi / 180, azimuth * .pi / 180, 0)
+        }
+    }
+
+    /// The water's own colour. It is the scene background *and* the fog colour *and* the
+    /// clear colour, and those three must agree exactly or the deepest fish dissolve into a
+    /// visible wall of a slightly different shade.
+    let tint: (red: CGFloat, green: CGFloat, blue: CGFloat)
+
+    /// The colour the water reaches at the very top of the frame.
+    ///
+    /// A flat backdrop states that the water is the same in every direction, which is the one
+    /// thing that is never true underwater: light arrives from a surface overhead. The span is
+    /// fixed at the top half of the frame rather than being a parameter, because the fog is what
+    /// constrains it — the ramp has to reach `tint` exactly where the fog starts having
+    /// something to fog out against, which is the horizon, and hold it below. A ramp that stops
+    /// short draws a visible line across the frame where its slope changes; the aquarium look
+    /// did exactly that at 0.42 of the height and it read as the seam of a badly-lit backdrop.
+    let surface: (red: CGFloat, green: CGFloat, blue: CGFloat)
+
+    /// What the tank's metal reflects: the colour above the surface, the colour of the dark
+    /// water below, and how hard the whole thing is driven.
+    ///
+    /// Not decoration. In SceneKit's PBR a metallic surface takes almost all of its colour from
+    /// what it reflects, so a scene with no `lightingEnvironment` gives metal nothing to
+    /// reflect: it collapses toward its dark specular response and reads as dull stone. Three
+    /// directional lights cannot substitute — they give it highlights, not an environment.
+    ///
+    /// It belongs to the look rather than being a shipped asset for the same reason the fog
+    /// colour does: **metal must reflect the sea it is actually sitting in.** A bright
+    /// fluorescent tank and a dim deep ocean have to give their brass visibly different
+    /// reflections, and an HDR of somewhere else could only ever agree with one of them —
+    /// besides costing bundle size the generated version does not.
+    let environment: (top: (red: CGFloat, green: CGFloat, blue: CGFloat),
+                      bottom: (red: CGFloat, green: CGFloat, blue: CGFloat),
+                      intensity: CGFloat)
+
+    /// How fast the water swallows distance. The fog's *distances* are the tank's business, not
+    /// the look's — they are the only numbers here that would be stated in metres against a tank
+    /// of a particular size, and the tank's size is drawn per launch. See `Tank.fogStart`.
+    let fogDensityExponent: CGFloat
+
+    let ambient: Light
+    let key: Light
+    let rim: Light
+
+    let bloomIntensity: CGFloat
+    let bloomThreshold: CGFloat
+    let bloomBlurRadius: CGFloat
+    let vignettingIntensity: CGFloat
+    let vignettingPower: CGFloat
+
+    /// Marine snow is a property of the water, not of the tank: an open ocean is full of it, a
+    /// maintained glass tank is not. Zero suppresses the emitter entirely.
+    let snowBirthRate: CGFloat
+    let snowAlpha: CGFloat
+
+    var color: NSColor {
+        NSColor(calibratedRed: tint.red, green: tint.green, blue: tint.blue, alpha: 1)
+    }
+
+    /// What the scene's background is set to: a vertical ramp from the surface's colour at the
+    /// top of the frame down to the flat water colour at the horizon, holding it below. Narrow
+    /// on purpose — a background image is stretched to the viewport, so the ramp only has to be
+    /// one column wide and nothing about it depends on the drawable's shape.
+    var backgroundContents: Any {
+        let height: CGFloat = 512
+        let image = NSImage(size: CGSize(width: 2, height: height))
+        image.lockFocus()
+        let top = NSColor(calibratedRed: surface.red, green: surface.green,
+                          blue: surface.blue, alpha: 1)
+        // The horizon sits at the vertical centre of the frame: the floor plane meets the eye's
+        // own height only at infinity, so NDC y = 0 is where the water stops being backdrop and
+        // starts being something the fog has to match.
+        NSGradient(starting: color, ending: top)?.draw(
+            in: NSRect(x: 0, y: height / 2, width: 2, height: height / 2), angle: 90)
+        color.setFill()
+        NSRect(x: 0, y: 0, width: 2, height: height / 2).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// The environment metal reflects, as an equirectangular image: a 2:1 map whose top row is
+    /// straight up and whose bottom row is straight down.
+    ///
+    /// Two ramps meeting at the horizon rather than one running the whole way, because the knee
+    /// is the whole point. A helmet's crown then reflects the bright surface, its shoulders
+    /// reflect water of exactly the look's own colour, and its undersides reflect the dark below
+    /// — which is what puts polished and tarnished on one object without needing two materials.
+    /// A single ramp from top to bottom puts the water colour nowhere and reads as a studio
+    /// gradient wrapped round the tank.
+    var environmentContents: Any {
+        let size = CGSize(width: 256, height: 128)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let above = NSColor(calibratedRed: environment.top.red, green: environment.top.green,
+                            blue: environment.top.blue, alpha: 1)
+        let below = NSColor(calibratedRed: environment.bottom.red,
+                            green: environment.bottom.green,
+                            blue: environment.bottom.blue, alpha: 1)
+        NSGradient(starting: color, ending: above)?.draw(
+            in: NSRect(x: 0, y: size.height / 2, width: size.width, height: size.height / 2),
+            angle: 90)
+        NSGradient(starting: below, ending: color)?.draw(
+            in: NSRect(x: 0, y: 0, width: size.width, height: size.height / 2), angle: 90)
+        image.unlockFocus()
+        return image
+    }
+}
+
+// MARK: - The three looks
+
+extension WaterLook {
+    /// Deep ocean: dim, blue-shifted, and coherent about it.
+    ///
+    /// The water is dark, so the ground has to be dark — that is the whole correction. What
+    /// keeps the scene from going dead is that the *contrast* is carried by proximity rather
+    /// than by a bright floor: the fog starts early, so a near prop is the only thing in the
+    /// frame still holding its own colour and everything behind it is on its way to the
+    /// backdrop.
+    ///
+    /// The key is blue-white rather than warm. Twenty metres of water has taken the red out of
+    /// daylight long before it reaches this seabed; a warm key at depth is the single detail
+    /// that says "studio lamp" loudest. It is also at little more than half the intensity the
+    /// tank shipped with, because that intensity is most of what over-lit the floor.
+    static let deepOcean = WaterLook(
+        tint: (0.043, 0.128, 0.205),
+        surface: (0.068, 0.196, 0.310),
+        environment: (top: (0.105, 0.270, 0.420), bottom: (0.014, 0.038, 0.066),
+                      intensity: 0.85),
+        // The steepest of the three. Depth is sold by how fast things leave, not by how dark
+        // the backdrop is.
+        fogDensityExponent: 1.55,
+        ambient: Light(0.21, 0.40, 0.60, intensity: 285),
+        key: Light(0.70, 0.86, 1.0, intensity: 520, elevation: 74, azimuth: 20),
+        rim: Light(0.28, 0.56, 0.88, intensity: 240, elevation: -20, azimuth: 143),
+        // A strong vignette makes the frame edges darker than the middle, which *adds* to the
+        // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
+        // surface ramp completely.
+        bloomIntensity: 0.25, bloomThreshold: 0.95, bloomBlurRadius: 12,
+        vignettingIntensity: 0.36, vignettingPower: 1.25,
+        // Densest of the three: open ocean at depth is full of it, and it is free particulate
+        // evidence that the water is a volume.
+        snowBirthRate: 46, snowAlpha: 0.30)
+
+    /// Shallow reef: the snorkelling look. The surface is a few metres up, so the key is nearly
+    /// overhead and still carries its warmth, and the water is a real turquoise rather than a
+    /// near-black. The flattest fog of the three, because shallow water is clearer and the far
+    /// reef should stay legible rather than dissolve.
+    ///
+    /// This is the look where the one-budget rule buys brightness rather than costing it: the
+    /// sand is warmer and barely darker than the sand that shipped, and still sits well under
+    /// its own backdrop, because the water rose so much further.
+    static let shallowReef = WaterLook(
+        tint: (0.105, 0.385, 0.470),
+        surface: (0.225, 0.600, 0.665),
+        environment: (top: (0.440, 0.870, 0.940), bottom: (0.045, 0.150, 0.185),
+                      intensity: 1.0),
+        fogDensityExponent: 1.05,
+        // A shallow water column really is scattering this much. A first pass ran it cyan
+        // enough to drain the warmth out of the sand and make it read grey.
+        ambient: Light(0.42, 0.68, 0.72, intensity: 440),
+        // Still warm — at 3–5 m there is not enough water to take the red out — and pitched
+        // nearly overhead, which is where the sun is when the surface is right above you.
+        key: Light(1.0, 0.97, 0.86, intensity: 820, elevation: 82, azimuth: 12),
+        rim: Light(0.46, 0.80, 0.94, intensity: 300, elevation: -20, azimuth: 143),
+        // Most bloom, least vignette: sunny and open.
+        bloomIntensity: 0.45, bloomThreshold: 0.88, bloomBlurRadius: 12,
+        vignettingIntensity: 0.32, vignettingPower: 1.2,
+        snowBirthRate: 16, snowAlpha: 0.20)
+
+    /// Aquarium: a lit glass tank. A fluorescent blue-white key from almost directly overhead —
+    /// a hood lamp has all but no angle — and water tinted a far more saturated blue than either
+    /// ocean look, blue at double the green and eight times the red.
+    ///
+    /// It carries **more** fill than either ocean look, which is the opposite of the obvious
+    /// reading and was arrived at the hard way. A hard single source from straight overhead
+    /// models terrain beautifully — bright horizontal tops, dark undersides — and a first pass
+    /// leant on exactly that with the dimmest ambient of the three. But a fish is seen *side-on*,
+    /// and its flank is both the entire visible surface and the only part carrying the markings:
+    /// under a vertical key with no fill the tangs went blue-grey while the same fish stayed
+    /// vivid in the reef look. A home aquarium is the one place that failure is fatal, because
+    /// showing off vivid fish is what the thing is for. It is also the least physical of the
+    /// three: a small glass box is a bounce environment, every wall returning light, so a
+    /// generous fill and the strongest rim of the three are what a tank actually has.
+    static let aquarium = WaterLook(
+        tint: (0.070, 0.265, 0.560),
+        // Mild. A tank's backdrop is a lit panel, not a sky.
+        surface: (0.105, 0.350, 0.665),
+        environment: (top: (0.235, 0.600, 1.000), bottom: (0.022, 0.080, 0.180),
+                      intensity: 1.25),
+        fogDensityExponent: 1.35,
+        ambient: Light(0.46, 0.68, 0.94, intensity: 620),
+        key: Light(0.86, 0.94, 1.0, intensity: 1350, elevation: 78, azimuth: 8),
+        rim: Light(0.42, 0.68, 1.0, intensity: 430, elevation: -20, azimuth: 143),
+        // Least vignette of the three — glass and a lamp, not a diver's mask.
+        bloomIntensity: 0.40, bloomThreshold: 0.90, bloomBlurRadius: 12,
+        vignettingIntensity: 0.30, vignettingPower: 1.2,
+        // Nearly none. A maintained tank has a filter.
+        snowBirthRate: 8, snowAlpha: 0.14)
+}

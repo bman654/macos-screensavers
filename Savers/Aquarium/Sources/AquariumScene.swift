@@ -162,20 +162,40 @@ final class AquariumScene {
         // back with alpha 0 — the background has to be stated here or the saver renders over
         // nothing. This is the single most expensive trap in the whole host.
         let water = style.water
-        scene.background.contents = water.color
+        scene.background.contents = water.backgroundContents
+
+        // Without this, every metal in the tank reads as rock. A metallic PBR surface takes
+        // almost all of its colour from what it reflects, so with no environment it has nothing
+        // to reflect, collapses to its dark specular response, and the diving suit's brass
+        // helmet comes out the same dull olive as the boulder beside it. The three directional
+        // lights below cannot stand in: they give metal highlights, not an environment.
+        //
+        // It also contributes diffuse light to *everything*, and the matte rock and coral are
+        // most of the scene — so its intensity is part of the budget the substrate is balanced
+        // against, and changing it means re-running `tools/water-luminance.py`.
+        scene.lightingEnvironment.contents = water.environmentContents
+        scene.lightingEnvironment.intensity = water.environment.intensity
 
         // Fog colour matches the background exactly so the deepest fish dissolve into the
-        // backdrop instead of into a visible wall of a slightly different colour. The floor
-        // runs past `fogEnd` for the same reason: sand that simply stopped would be a rim.
+        // backdrop instead of into a visible wall of a slightly different colour. The surface
+        // ramp above is built to respect that: it reaches the flat water colour at the horizon
+        // and holds it below, so the only backdrop it brightens is backdrop the fog never
+        // touches. The floor runs past `fogEnd` for the same reason: sand that simply stopped
+        // would be a rim.
+        //
+        // The distances are the *tank's*, not the look's — they are the only numbers in this
+        // whole rig that would have to be stated in metres against a tank of a particular size,
+        // and the tank's size is drawn per launch. Only the fog's shape belongs to the water.
         scene.fogColor = water.color
         scene.fogStartDistance = CGFloat(tank.fogStart)
         scene.fogEndDistance = CGFloat(tank.fogEnd)
         scene.fogDensityExponent = water.fogDensityExponent
 
-        // A cool ambient fill for the water, a key from above standing in for the surface, and
-        // a rim from behind to separate a white fish from a dark background. Which colours and
-        // intensities those are is `WaterLook`'s business and not this function's — nothing
-        // here may grow a literal, or the styles stop being interchangeable.
+        // A fill standing in for light scattered by the water itself, a key standing in for
+        // whatever is overhead — the surface in an ocean, a hood lamp in a tank — and a rim from
+        // behind to separate a pale fish from the backdrop. Which colours and intensities those
+        // are is `WaterLook`'s business and not this function's: nothing here may grow a
+        // literal, or the styles stop being interchangeable.
         let ambient = SCNLight()
         ambient.type = .ambient
         ambient.color = water.ambient.color
@@ -193,7 +213,7 @@ final class AquariumScene {
         light.intensity = spec.intensity
         light.castsShadow = castsShadow
         let node = node(with: light)
-        node.eulerAngles = SCNVector3(spec.euler.x, spec.euler.y, spec.euler.z)
+        node.eulerAngles = spec.euler
         return node
     }
 
@@ -240,7 +260,7 @@ final class AquariumScene {
         let grain = CGFloat(tank.propScale)
         snow.particleSize = 0.013 * grain
         snow.particleSizeVariation = 0.007 * grain
-        snow.particleColor = NSColor(calibratedWhite: 0.78, alpha: 0.28)
+        snow.particleColor = NSColor(calibratedWhite: 0.78, alpha: style.water.snowAlpha)
         snow.particleColorVariation = SCNVector4(0, 0, 0.1, 0.15)
         snow.particleVelocity = 0.09 * grain
         snow.particleVelocityVariation = 0.06 * grain

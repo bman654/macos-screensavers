@@ -4,88 +4,13 @@
 // `docs/aquarium-plan.md` §2a is the brief. The split must not reach past the surface into the
 // scene's structure — geometry, placement, population and fish behaviour are shared, and a
 // style is only ever a bag of numbers handed to code that does not know which style it is.
+//
+// The water itself lives in `WaterLook` and the floor's surface in `Substrate`, because those
+// two are one decision — see `docs/water-looks.md` — and a style is where they are paired up.
 
 import AppKit
 import Foundation
 import simd
-
-// MARK: - The water and the light
-
-/// Every number the water look is made of: tint, fog, the three-light rig, the camera's
-/// post-processing, and the marine snow's density.
-///
-/// **The values in the three styles below are placeholders.** They are the ocean rig that
-/// shipped, copied verbatim into all three looks, and they are being art-directed separately.
-/// This type exists so that dropping in the real numbers is the *only* change needed: nothing
-/// outside `AquariumScene.buildEnvironment` and `buildCamera` may read a light, a tint or a fog
-/// value, and neither of those two knows which style it is rendering.
-struct WaterLook {
-    /// A light, stated as numbers rather than as an `SCNLight`, so a look is a table that can be
-    /// diffed and replaced wholesale.
-    struct Light {
-        let red: CGFloat
-        let green: CGFloat
-        let blue: CGFloat
-        let intensity: CGFloat
-        /// Euler angles in radians. Ignored for the ambient light, which has no direction.
-        let euler: SIMD3<Float>
-
-        init(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat,
-             intensity: CGFloat, euler: SIMD3<Float> = .zero) {
-            self.red = red
-            self.green = green
-            self.blue = blue
-            self.intensity = intensity
-            self.euler = euler
-        }
-
-        var color: NSColor {
-            NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1)
-        }
-    }
-
-    /// The water's own colour. It is the scene background *and* the fog colour *and* the
-    /// clear colour, and those three must agree exactly or the deepest fish dissolve into a
-    /// visible wall of a slightly different shade.
-    let tint: (red: CGFloat, green: CGFloat, blue: CGFloat)
-    let fogDensityExponent: CGFloat
-
-    let ambient: Light
-    let key: Light
-    let rim: Light
-
-    let bloomIntensity: CGFloat
-    let bloomThreshold: CGFloat
-    let bloomBlurRadius: CGFloat
-    let vignettingIntensity: CGFloat
-    let vignettingPower: CGFloat
-
-    /// Particles per second of marine snow. Zero suppresses the emitter entirely, which is what
-    /// a maintained glass tank wants.
-    let snowBirthRate: CGFloat
-
-    var color: NSColor {
-        NSColor(calibratedRed: tint.red, green: tint.green, blue: tint.blue, alpha: 1)
-    }
-
-    /// The rig from the fish spike, re-aimed for a Y-up tank: a cool ambient fill for the
-    /// water, a warm key from above standing in for the surface, and a blue rim from behind to
-    /// separate a white fish from a dark background.
-    ///
-    /// PLACEHOLDER. Every style below uses it unchanged; the three real looks land separately.
-    static let placeholder = WaterLook(
-        tint: (0.028, 0.094, 0.112),
-        fogDensityExponent: 1.25,
-        ambient: Light(0.24, 0.42, 0.52, intensity: 360),
-        key: Light(1.0, 0.97, 0.88, intensity: 900, euler: SIMD3(-1.15, 0.35, 0)),
-        rim: Light(0.36, 0.68, 0.92, intensity: 420, euler: SIMD3(0.35, 2.5, 0)),
-        bloomIntensity: 0.35,
-        bloomThreshold: 0.9,
-        bloomBlurRadius: 12,
-        vignettingIntensity: 0.55,
-        vignettingPower: 1.4,
-        snowBirthRate: 32)
-}
 
 // MARK: - The style
 
@@ -146,8 +71,12 @@ struct TankStyle {
                 // spent on a look, and it is deliberate.
                 distinctProps: 11,
                 substrate: .gravel,
-                water: .placeholder)
+                water: .aquarium)
         case .shallowReef, .deepOcean:
+            // The two ocean styles are one tank seen at two depths: same dimensions, same
+            // density, and every difference between them is the water and what the water has
+            // already done to the sand by the time it reaches the floor.
+            let deep = name == .deepOcean
             return TankStyle(
                 name: name,
                 tank: oceanTank(rand: &rand),
@@ -155,8 +84,8 @@ struct TankStyle {
                 anchorCount: 3,
                 spacingSlack: 1,
                 distinctProps: 8,
-                substrate: .sand,
-                water: .placeholder)
+                substrate: deep ? .deepSand : .reefSand,
+                water: deep ? .deepOcean : .shallowReef)
         }
     }
 
