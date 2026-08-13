@@ -97,6 +97,20 @@ Each is commented where it happens; this is the index.
 - **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
 - **Branching density is not what makes coral read as coral.** Internode length is: a tree's
   shortens at every fork, a gorgonian's stays constant.
+- **A direct mesh write does not tag the depsgraph**, so a Boolean modifier happily evaluates
+  a *stale* operand. Writing `vertices[i].co` or calling `mesh.transform()` left an arch's
+  cutter unstretched, undisplaced and unmoved as far as the solver was concerned, and every
+  early render had a suspiciously tidy circular hole. Call `obj.update_tag()` and
+  `view_layer.update()` before `evaluated_get`.
+- **The exact boolean does not report failure — it returns a wrong answer.** Given a
+  self-intersecting operand it silently returns the *union*, or an empty mesh. Both sail
+  through a clearance check, since an arch containing no rock at all measures beautifully
+  clear. Defend twice: cut with a clean primitive and erode *afterwards*, and assert that a
+  difference can only shrink the bounding box. `rock()`'s `angularity` fractures are what made
+  operands unclassifiable, so build anything destined to be cut with angularity near zero.
+- **`displace` along normals tears at silhouette-scale amplitudes.** Past the local surface
+  radius it folds rounded edges into flaps. `along_normal=False` is the safe primitive for
+  anything reshaping a large mass.
 - **`displace` with a feature size near the mesh's own edge length facets instead of
   undulating.** Sand drifts at `feature_size=0.34, strength=0.30` came out as crumpled foil;
   `strength=0.15, feature_size=0.70` on a `detail=5` sphere reads as sand. Reach for a
