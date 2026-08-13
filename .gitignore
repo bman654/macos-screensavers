@@ -10,3 +10,6 @@ __pycache__/
 
 # Spike output is regenerable; the scripts that produce it are not
 spikes/**/out/
+
+# Agent worktrees are scratch, not source
+.claude/worktrees/
