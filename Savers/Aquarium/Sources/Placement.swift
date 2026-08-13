@@ -18,22 +18,35 @@ struct PropPlacement {
     /// together across the whole reef.
     let tilt: Float
     let tiltAxis: Float
+    /// The prop's own `scaleRange` draw *times* `Tank.propScale`. The two are folded together
+    /// here on purpose: everything downstream — the spacing test, the overhang allowance, the
+    /// sink that keeps a tilted prop in the sand, and `Reef`'s pivot — must use the same
+    /// number, and a tank that spaced props as though they were still full size would come out
+    /// sparse, which is the opposite of what a small tank is for.
     let scale: Float
     /// Cached from the manifest, because the conflict test runs against every prop already
     /// placed and re-deriving it there would recompute a sine per pair.
     let radius: Float
     let minSpacing: Float
+    /// Cached for the same reason — see `ModelManifest.isManmade`, which is what decides
+    /// whether this prop is allowed to grow into its neighbours.
+    let isManmade: Bool
 }
 
 enum ReefLayout {
     /// A prop this big anchors the frame rather than decorating it. Both tests matter: the
     /// sunken ship is wide and low, the giant kelp is narrow and tall, and each is a showpiece.
+    ///
+    /// Measured against the manifest's own metres, deliberately *before* `Tank.propScale`: which
+    /// props are the showpieces is a fact about the library, not about how big this tank is, and
+    /// scaling the thresholds alongside the props would only ever return the same answer.
     private static let anchorFootprint: Float = 0.5
     private static let anchorHeight: Float = 0.9
 
-    /// How far from a cluster centre its members land — roughly the frame's half-width at the
-    /// middle of the reef, so a clump reads as a clump rather than as the whole tank.
-    private static let clusterRadius: Float = 1.5
+    /// How far from a cluster centre its members land, as a fraction of the frame's half-width
+    /// at the middle of the reef — so a clump reads as a clump rather than as the whole tank,
+    /// in a glass tank as much as in a seascape.
+    private static let clusterRadiusFraction: Float = 0.625
 
     /// The strip of floor the reef is scattered over. Carried as a value because its near
     /// edge depends on the drawable's shape — see `Tank.reefNearDepth(aspect:)` — and every
@@ -42,9 +55,9 @@ enum ReefLayout {
         let near: Float
         let far: Float
 
-        init(aspect: Float) {
-            near = Tank.reefNearDepth(aspect: aspect)
-            far = max(Tank.reefFarDepth, near + 1)
+        init(tank: Tank, aspect: Float) {
+            near = tank.reefNearDepth(aspect: aspect)
+            far = max(tank.reefFarDepth, near + tank.nearDepth * 0.18)
         }
 
         func depth(_ low: Float, _ high: Float, rand: inout Rand) -> Float {
@@ -54,11 +67,18 @@ enum ReefLayout {
         func clamp(_ depth: Float) -> Float { min(max(depth, near), far) }
     }
 
+    /// `slack` scales every prop's *declared* `minSpacing` — the breathing room an author asked
+    /// for, which is a look. It never touches `spacingRadius`, the geometric term that keeps
+    /// tilted props out of each other, and `clears` takes the larger of the two: below about
+    /// 0.6 the radii dominate and the slack simply stops buying anything. That is the only way
+    /// a tank gets genuinely crowded, because a small tank's floor shrinks faster than its
+    /// props do and the declared minimums alone cap it at about half the reference tank's
+    /// count. When fish AI starts reading `passages`, the arch may want to opt out of this.
     static func layout(props: [ModelManifest], count: Int, anchors anchorCount: Int,
-                       distinct budget: Int, aspect: Float,
+                       distinct budget: Int, tank: Tank, slack: Float, aspect: Float,
                        rand: inout Rand) -> [PropPlacement] {
         guard !props.isEmpty, count > 0 else { return [] }
-        let band = Band(aspect: aspect)
+        let band = Band(tank: tank, aspect: aspect)
 
         let anchorPool = props.filter { isAnchor($0) }
         let fillPool = props.filter { !isAnchor($0) }
@@ -76,13 +96,15 @@ enum ReefLayout {
         var clusters: [SIMD2<Float>] = []
         for index in 0..<anchorCount {
             // Stratified across the far two-thirds of the reef. An anchor near the camera fills
-            // the frame on its own — the wreck is 2.4 m across against a 2.7 m frame at 7 m.
+            // the frame on its own — in the reference tank the wreck is 2.4 m across against a
+            // 2.7 m frame at 7 m, and `Tank.propScale` holds that ratio in every other tank.
             let stratum = Float(index) / Float(max(1, anchorCount))
             let depth = band.depth(0.4 + stratum * 0.35, 0.75 + stratum * 0.25, rand: &rand)
             defer { side = -side }
             guard let placement = attempt(pool: anchorPool, used: used, budget: budget,
-                                          placed: placed, band: band, depth: depth, side: side,
-                                          near: nil, rand: &rand) else { continue }
+                                          placed: placed, band: band, tank: tank, slack: slack,
+                                          depth: depth, side: side, near: nil,
+                                          rand: &rand) else { continue }
             used[placement.manifest.name, default: 0] += 1
             clusters.append(placement.position)
             placed.append(placement)
@@ -94,7 +116,7 @@ enum ReefLayout {
         for index in 0..<extraClusters {
             let low = Float(index) / Float(extraClusters)
             let depth = band.depth(low, low + 1 / Float(extraClusters), rand: &rand)
-            let halfWidth = Tank.halfWidth(atDepth: depth)
+            let halfWidth = tank.halfWidth(atDepth: depth)
             clusters.append(SIMD2<Float>(side * rand.inRange(0.1, 0.85) * halfWidth, -depth))
             side = -side
         }
@@ -109,8 +131,9 @@ enum ReefLayout {
                 ? SIMD2<Float>(0, -band.depth(0, 1, rand: &rand))
                 : clusters[Int(rand.next() * Float(clusters.count)) % clusters.count]
             guard let placement = attempt(pool: fillPool, used: used, budget: budget,
-                                          placed: placed, band: band, depth: nil, side: 1,
-                                          near: centre, rand: &rand) else { continue }
+                                          placed: placed, band: band, tank: tank, slack: slack,
+                                          depth: nil, side: 1, near: centre,
+                                          rand: &rand) else { continue }
             used[placement.manifest.name, default: 0] += 1
             placed.append(placement)
         }
@@ -130,8 +153,9 @@ enum ReefLayout {
     /// `side` places an anchor left or right of centre; it is ignored when a cluster centre is
     /// given, since the cluster already decided which half of the tank this prop is in.
     private static func attempt(pool: [ModelManifest], used: [String: Int], budget: Int,
-                                placed: [PropPlacement], band: Band, depth fixedDepth: Float?,
-                                side: Float, near centre: SIMD2<Float>?,
+                                placed: [PropPlacement], band: Band, tank: Tank, slack: Float,
+                                depth fixedDepth: Float?, side: Float,
+                                near centre: SIMD2<Float>?,
                                 rand: inout Rand) -> PropPlacement? {
         // Once the launch has spent its budget of *distinct* models, the reef is filled from
         // the ones already loaded. This is a load-time cap, not a look: an instance is a clone
@@ -155,8 +179,12 @@ enum ReefLayout {
         else { return nil }
         let manifest = available[index]
 
-        let scale = spec.scaleRange.sample(&rand)
+        // The prop's own draw, then the tank's invariance factor on top of it.
+        let scale = spec.scaleRange.sample(&rand) * tank.propScale
         let radius = spec.spacingRadius(scale: scale)
+        let clusterRadius = clusterRadiusFraction * tank.reefFrameWidth / 2
+        let minSpacing = spec.minSpacing * scale * slack
+        let isManmade = manifest.isManmade
 
         for _ in 0..<14 {
             let depth: Float
@@ -171,14 +199,14 @@ enum ReefLayout {
             } else {
                 depth = fixedDepth ?? band.depth(0, 1, rand: &rand)
                 // Never dead centre: the middle of the frame is where the school reads best.
-                x = side * rand.inRange(0.12, 0.8) * Tank.halfWidth(atDepth: depth)
+                x = side * rand.inRange(0.12, 0.8) * tank.halfWidth(atDepth: depth)
             }
             // Half a footprint of overhang is allowed, so the reef runs off the sides of the
             // frame rather than stopping politely inside it.
-            let edge = Tank.halfWidth(atDepth: depth) + spec.footprint * scale * 0.5
+            let edge = tank.halfWidth(atDepth: depth) + spec.footprint * scale * 0.5
             let position = SIMD2<Float>(min(max(x, -edge), edge), -depth)
-            guard clears(position: position, radius: radius,
-                         minSpacing: spec.minSpacing * scale, against: placed) else { continue }
+            guard clears(position: position, radius: radius, minSpacing: minSpacing,
+                         isManmade: isManmade, against: placed) else { continue }
 
             return PropPlacement(
                 manifest: manifest,
@@ -188,22 +216,39 @@ enum ReefLayout {
                 tiltAxis: rand.inRange(0, 2 * .pi),
                 scale: scale,
                 radius: radius,
-                minSpacing: spec.minSpacing * scale)
+                minSpacing: minSpacing,
+                isManmade: isManmade)
         }
         return nil
     }
 
+    /// A pair of grown things may close to this fraction of the distance the spacing rule asks
+    /// for. Interpenetration is not uniformly wrong: coral growing out of a boulder, two rocks
+    /// merging into one mass and kelp rooted against a stone are what a reef looks like, and a
+    /// reef where nothing touches looks like a showroom. The radii are circumscribed, so 15%
+    /// of them is usually the difference between a gap and contact rather than a real overlap.
+    private static let organicOverlap: Float = 0.85
+
+    /// A pair including a made thing must stand this much further apart than merely touching.
+    /// A skeleton half inside a boulder reads as a bug, because the eye knows those two things
+    /// did not grow together, and a circumscribed radius that only just clears is not enough of
+    /// a margin to guarantee the meshes do at this scale.
+    private static let manmadeMargin: Float = 1.15
+
     /// Two props clear each other when they are further apart than both their combined tilted
-    /// radii and either one's declared centre-to-centre minimum.
+    /// radii and either one's declared centre-to-centre minimum — scaled by how tolerant the
+    /// pair is of touching.
     ///
     /// `minSpacing` is not redundant with the radii: it is where a prop states a need the
     /// geometry does not show. The arch's is more than twice its footprint because a fish has
     /// to line up on the passage before it commits to swimming through, and the treasure chest's
     /// covers the arc its lid sweeps when it opens — neither is visible in a footprint.
     private static func clears(position: SIMD2<Float>, radius: Float, minSpacing: Float,
-                               against placed: [PropPlacement]) -> Bool {
+                               isManmade: Bool, against placed: [PropPlacement]) -> Bool {
         for other in placed {
-            let required = max(radius + other.radius, max(minSpacing, other.minSpacing))
+            let tolerance = isManmade || other.isManmade ? manmadeMargin : organicOverlap
+            let required = max(radius + other.radius,
+                               max(minSpacing, other.minSpacing)) * tolerance
             if simd_distance(position, other.position) < required { return false }
         }
         return true

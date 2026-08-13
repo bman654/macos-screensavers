@@ -29,7 +29,7 @@ final class AquariumView: SaverView {
                                 scene: scene.scene,
                                 pointOfView: scene.cameraNode,
                                 sampleCount: context.isPreview ? 1 : 4,
-                                clearColor: AquariumScene.clearColor)
+                                clearColor: scene.clearColor)
         host.onUpdate = { [weak scene] frame in scene?.update(frame) }
 
         // Held so the scene outlives `makeHost`; the host only retains the `SCNScene`, not

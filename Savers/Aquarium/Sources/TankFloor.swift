@@ -7,9 +7,8 @@
 //
 // The floor's geometry, extent and height are properties of the tank and are the same whatever
 // it is made of; only the surface is a look. `Substrate` is that seam, and it holds every
-// number the appearance depends on so a second one — the aquarium style's coloured gravel — is
-// a value rather than an edit through this file. It has exactly one instance today, and one
-// call site: choosing between them is a later phase's job and nothing here anticipates it.
+// number the appearance depends on, so choosing sand or gravel is a value handed in by
+// `TankStyle` rather than an edit through this file.
 
 import AppKit
 import Foundation
@@ -42,21 +41,47 @@ struct Substrate {
                                 grainCount: 2600,
                                 tileSize: 0.70,
                                 roughness: 0.92)
+
+    /// The aquarium style's coloured gravel — **plausible numbers, not the real thing.**
+    ///
+    /// Real aquarium gravel is a scatter of individually *hued* chips, and `Substrate` cannot
+    /// say that: `grainContrast` is one shade offset applied to all three channels at once, so
+    /// the most this can produce is coarse, high-contrast grit in a single hue. That is a fair
+    /// stand-in at the distance the floor is seen from, and it keeps the aquarium style whole
+    /// without inventing a texture generator that the art direction has not asked for yet.
+    /// Giving each grain its own colour means a per-grain hue in `Substrate` and a second loop
+    /// in `tile`; that is the change, when someone wants it.
+    ///
+    /// Bigger grains and a much smaller tile than sand, because gravel chips are centimetres
+    /// across rather than fractions of a millimetre, and a glass tank is seen from two metres
+    /// rather than fifteen — the grain has to survive being that close.
+    /// Darker than sand as well, and cooler: the point of the aquarium style's floor is that it
+    /// is unmistakably *not* seabed, and at this range a light floor is the brightest thing in
+    /// the frame and pulls the eye off the fish.
+    static let gravel = Substrate(base: (0.23, 0.24, 0.29),
+                                  grainContrast: 0.155,
+                                  grainRadius: 2.4...5.6,
+                                  grainCount: 900,
+                                  tileSize: 0.16,
+                                  roughness: 0.78)
 }
 
 enum TankFloor {
-    /// Wider than the frustum is at `Tank.floorFarDepth`, so the floor never ends inside the
-    /// frame. Cheap: the whole floor is two triangles per segment.
-    private static let width: CGFloat = 17
-
     /// A plane in the XZ plane at the seabed node's own origin, running from the camera out
     /// past the fog. Its parent carries the height, which is where the drawable's aspect ratio
     /// gets into it — see `Tank.floorY(aspect:)`.
-    static func node(_ substrate: Substrate) -> SCNNode {
-        let depth = CGFloat(Tank.floorFarDepth)
+    static func node(_ substrate: Substrate, tank: Tank) -> SCNNode {
+        let depth = CGFloat(tank.floorFarDepth)
+        // Comfortably wider than the frustum is at the floor's far edge, so the floor never
+        // ends inside the frame — on any drawable shape, since a wider one only makes the
+        // frustum shorter. Derived rather than fixed because a two-metre tank given the
+        // reference tank's seventeen metres of floor would tile its grain sixty times across
+        // four metres of visible sand. Cheap either way: two triangles per segment.
+        let width = CGFloat(2.5 * tank.halfWidth(atDepth: tank.floorFarDepth))
         let plane = SCNPlane(width: width, height: depth)
-        // One segment per ~1.5 m. A single quad would take its lighting from four corners
-        // spread over 34 m, which under a directional key reads as a flat wash.
+        // A single quad would take its lighting from four corners spread across the whole
+        // tank, which under a directional key reads as a flat wash. A segment count rather
+        // than a spacing, so it stays proportional as the floor scales with the tank.
         plane.widthSegmentCount = 12
         plane.heightSegmentCount = 24
 

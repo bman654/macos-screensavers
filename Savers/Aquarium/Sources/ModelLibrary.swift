@@ -121,6 +121,24 @@ struct ModelManifest: Decodable {
     let category: ModelCategory
     let placement: PlacementSpec?
     let fish: FishSpec?
+
+    /// Whether the eye reads this prop as *made* rather than grown, which is what decides how
+    /// closely `ReefLayout` lets it stand to its neighbours.
+    ///
+    /// The category is almost the whole answer: rock, coral and plant grow into each other and
+    /// look better for it, while a skeleton, a chest or a wreck was put there and has to clear
+    /// what is around it. `thermal_vent` is the exception the category cannot express — it is
+    /// filed as a decoration because it is animated, but it is a geological feature and is
+    /// happier growing out of the rocks than standing clear of them.
+    ///
+    /// One day the manifest should say this itself, since it is authoring data and
+    /// `docs/decorations.md` is the contract for it. A field added for a single prop, before a
+    /// second one needs it, would cost a pass over every model in the library to earn nothing.
+    var isManmade: Bool {
+        category == .decoration && !ModelManifest.grownDecorations.contains(name)
+    }
+
+    private static let grownDecorations: Set<String> = ["thermal_vent"]
 }
 
 // MARK: - Library

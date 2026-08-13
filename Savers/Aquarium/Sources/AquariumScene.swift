@@ -21,9 +21,14 @@ final class AquariumScene {
     let cameraNode = SCNNode()
 
     /// Only reached if HDR is ever turned off — see `SceneKitHost.clearColor`. Kept in step
-    /// with the scene background so the two can never disagree.
-    static let clearColor = MTLClearColor(red: Tank.water.red, green: Tank.water.green,
-                                          blue: Tank.water.blue, alpha: 1)
+    /// with the scene background so the two can never disagree. An instance property because
+    /// the water's colour belongs to the style, and the style is drawn at launch.
+    let clearColor: MTLClearColor
+
+    /// What kind of tank this launch is, and therefore how big it is, how densely it is
+    /// decorated, what its floor is made of and how it is lit.
+    private let style: TankStyle
+    private var tank: Tank { style.tank }
 
     /// The sand and everything standing on it, in one node whose origin is the floor. Every
     /// prop is placed in its space, so responding to a reshaped drawable is one assignment
@@ -38,15 +43,20 @@ final class AquariumScene {
     /// resized — and a tank laid out for the old shape would otherwise be half outside the frame.
     private var aspect: Float
 
-    /// How much of the library one launch draws. The preview thumbnail runs alongside the rest
-    /// of System Settings, so it takes a thinner tank; the composition is identical.
+    /// How much of the library the *reference* tank draws. The preview thumbnail runs alongside
+    /// the rest of System Settings, so it takes a thinner tank; the composition is identical.
+    ///
+    /// Both counts are then adjusted for the tank actually drawn: props by the style's declared
+    /// density, fish by the tank's own size — see `TankStyle.propDensity` and
+    /// `Tank.schoolCount`. Neither adjustment belongs here, because neither is a property of
+    /// the preview.
     private static let propCount = (preview: 12, full: 30)
-    private static let anchorCount = (preview: 1, full: 3)
     private static let fishCount = (preview: 8, full: 22)
-    /// How many *distinct* models a launch may import — the launch's load budget rather than a
-    /// look. Instances are clones and cost almost nothing; each new model is another archive to
-    /// read. The school is self-limiting, since a species arrives as a whole school.
-    private static let distinctProps = (preview: 5, full: 8)
+    /// The preview's share of the style's distinct-model budget, which is the launch's load
+    /// budget rather than a look. Instances are clones and cost almost nothing; each new model
+    /// is another archive to read. The school is self-limiting, since a species arrives as a
+    /// whole school.
+    private static let previewDistinctShare: Float = 0.625
 
     /// Locates the model library. Always resolved against the host's bundle — inside a
     /// screensaver `Bundle.main` is `legacyScreenSaver.appex`, so it silently finds nothing.
@@ -69,32 +79,41 @@ final class AquariumScene {
         let cache = ModelCache(directory: directory)
         rand = Rand(seed: AquariumScene.launchSeed())
 
+        // Drawn first, and from the launch stream rather than a fork, because the ocean's own
+        // dimensions are part of the draw and everything below is measured against them.
+        style = TankStyle.draw(TankStyle.launchStyle(), rand: &rand)
+        clearColor = MTLClearColor(red: style.water.tint.red, green: style.water.tint.green,
+                                   blue: style.water.tint.blue, alpha: 1)
         aspect = Tank.aspect(of: drawableSize)
 
         buildEnvironment()
         buildCamera()
-        if !isPreview { addMarineSnow() }
+        if !isPreview && style.water.snowBirthRate > 0 { addMarineSnow() }
 
-        seabed.addChildNode(TankFloor.node(.sand))
+        seabed.addChildNode(TankFloor.node(style.substrate, tank: style.tank))
+        let props = isPreview ? AquariumScene.propCount.preview : AquariumScene.propCount.full
+        let budget = isPreview
+            ? max(3, Int((Float(style.distinctProps) * AquariumScene.previewDistinctShare)
+                    .rounded()))
+            : style.distinctProps
         let placements = ReefLayout.layout(
             props: library.props,
-            count: isPreview ? AquariumScene.propCount.preview : AquariumScene.propCount.full,
-            anchors: isPreview ? AquariumScene.anchorCount.preview
-                               : AquariumScene.anchorCount.full,
-            distinct: isPreview ? AquariumScene.distinctProps.preview
-                                : AquariumScene.distinctProps.full,
-            aspect: aspect, rand: &rand)
+            count: style.tank.propCount(props, density: style.propDensity, aspect: aspect),
+            anchors: isPreview ? 1 : style.anchorCount,
+            distinct: budget,
+            tank: style.tank, slack: style.spacingSlack, aspect: aspect, rand: &rand)
         seabed.addChildNode(Reef.node(placements: placements, cache: cache))
         scene.rootNode.addChildNode(seabed)
 
+        let fish = isPreview ? AquariumScene.fishCount.preview : AquariumScene.fishCount.full
         let school = School(
             library: library, cache: cache,
-            count: isPreview ? AquariumScene.fishCount.preview : AquariumScene.fishCount.full,
-            aspect: aspect, rand: &rand)
+            count: style.tank.schoolCount(fish),
+            tank: style.tank, aspect: aspect, rand: &rand)
         scene.rootNode.addChildNode(school.node)
         self.school = school
 
-        seabed.position = SCNVector3(0, Tank.floorY(aspect: aspect), 0)
+        seabed.position = SCNVector3(0, tank.floorY(aspect: aspect), 0)
     }
 
     /// A different tank every launch, which is the whole point of drawing one — but tuning a
@@ -132,7 +151,7 @@ final class AquariumScene {
     private func adoptAspect(_ newAspect: Float) {
         guard newAspect != aspect, newAspect > 0 else { return }
         aspect = newAspect
-        seabed.position = SCNVector3(0, Tank.floorY(aspect: aspect), 0)
+        seabed.position = SCNVector3(0, tank.floorY(aspect: aspect), 0)
         school?.adoptAspect(newAspect)
     }
 
@@ -142,46 +161,45 @@ final class AquariumScene {
         // With `wantsHDR` on, the pass's `MTLClearColor` is discarded and the drawable comes
         // back with alpha 0 — the background has to be stated here or the saver renders over
         // nothing. This is the single most expensive trap in the whole host.
-        scene.background.contents = Tank.waterColor
+        let water = style.water
+        scene.background.contents = water.color
 
         // Fog colour matches the background exactly so the deepest fish dissolve into the
         // backdrop instead of into a visible wall of a slightly different colour. The floor
         // runs past `fogEnd` for the same reason: sand that simply stopped would be a rim.
-        scene.fogColor = Tank.waterColor
-        scene.fogStartDistance = CGFloat(Tank.fogStart)
-        scene.fogEndDistance = CGFloat(Tank.fogEnd)
-        scene.fogDensityExponent = 1.25
+        scene.fogColor = water.color
+        scene.fogStartDistance = CGFloat(tank.fogStart)
+        scene.fogEndDistance = CGFloat(tank.fogEnd)
+        scene.fogDensityExponent = water.fogDensityExponent
 
-        // The rig from the fish spike, re-aimed for a Y-up tank: a cool ambient fill for the
-        // water, a warm key from above standing in for the surface, and a blue rim from
-        // behind to separate a white fish from a dark background.
+        // A cool ambient fill for the water, a key from above standing in for the surface, and
+        // a rim from behind to separate a white fish from a dark background. Which colours and
+        // intensities those are is `WaterLook`'s business and not this function's — nothing
+        // here may grow a literal, or the styles stop being interchangeable.
         let ambient = SCNLight()
         ambient.type = .ambient
-        ambient.color = NSColor(calibratedRed: 0.24, green: 0.42, blue: 0.52, alpha: 1)
-        ambient.intensity = 360
+        ambient.color = water.ambient.color
+        ambient.intensity = water.ambient.intensity
         scene.rootNode.addChildNode(node(with: ambient))
 
-        let key = SCNLight()
-        key.type = .directional
-        key.color = NSColor(calibratedRed: 1.0, green: 0.97, blue: 0.88, alpha: 1)
-        key.intensity = 900
-        key.castsShadow = false
-        let keyNode = node(with: key)
-        keyNode.eulerAngles = SCNVector3(-1.15, 0.35, 0)
-        scene.rootNode.addChildNode(keyNode)
+        scene.rootNode.addChildNode(directional(water.key, castsShadow: false))
+        scene.rootNode.addChildNode(directional(water.rim, castsShadow: false))
+    }
 
-        let rim = SCNLight()
-        rim.type = .directional
-        rim.color = NSColor(calibratedRed: 0.36, green: 0.68, blue: 0.92, alpha: 1)
-        rim.intensity = 420
-        let rimNode = node(with: rim)
-        rimNode.eulerAngles = SCNVector3(0.35, 2.5, 0)
-        scene.rootNode.addChildNode(rimNode)
+    private func directional(_ spec: WaterLook.Light, castsShadow: Bool) -> SCNNode {
+        let light = SCNLight()
+        light.type = .directional
+        light.color = spec.color
+        light.intensity = spec.intensity
+        light.castsShadow = castsShadow
+        let node = node(with: light)
+        node.eulerAngles = SCNVector3(spec.euler.x, spec.euler.y, spec.euler.z)
+        return node
     }
 
     private func buildCamera() {
         let camera = SCNCamera()
-        camera.fieldOfView = Tank.fieldOfView
+        camera.fieldOfView = tank.fieldOfView
         // Pinned horizontal so the framing does not jump between the System Settings
         // thumbnail and the full screen if their aspect ratios differ. The price is that the
         // *vertical* extent then varies with the drawable's shape, which is why every vertical
@@ -194,11 +212,11 @@ final class AquariumScene {
         // brings SceneKit's tone mapping, which is what keeps the white fish from clipping.
         camera.wantsHDR = true
         camera.wantsExposureAdaptation = false
-        camera.bloomIntensity = 0.35
-        camera.bloomThreshold = 0.9
-        camera.bloomBlurRadius = 12
-        camera.vignettingIntensity = 0.55
-        camera.vignettingPower = 1.4
+        camera.bloomIntensity = style.water.bloomIntensity
+        camera.bloomThreshold = style.water.bloomThreshold
+        camera.bloomBlurRadius = style.water.bloomBlurRadius
+        camera.vignettingIntensity = style.water.vignettingIntensity
+        camera.vignettingPower = style.water.vignettingPower
 
         cameraNode.camera = camera
         cameraNode.position = SCNVector3(0, 0, 0)
@@ -206,7 +224,7 @@ final class AquariumScene {
     }
 
     /// Mid-tank, where snow reads at a useful size against both the near and the far fish.
-    private let snowDepth: Float = 14
+    private var snowDepth: Float { tank.nearDepth + 0.45 * (tank.farDepth - tank.nearDepth) }
 
     private func addMarineSnow() {
         let snow = SCNParticleSystem()
@@ -214,14 +232,18 @@ final class AquariumScene {
         // static rather than as drifting matter. The sprite is generated rather than shipped
         // so there is no second asset to keep in the bundle.
         snow.particleImage = AquariumScene.softDot()
-        snow.birthRate = 32
+        snow.birthRate = style.water.snowBirthRate
         snow.particleLifeSpan = 16
-        snow.particleSize = 0.013
-        snow.particleSizeVariation = 0.007
+        // Suspended matter is scenery, not wildlife: like every decoration it holds its
+        // on-screen size rather than its metres, so a close-in tank gets physically finer
+        // flecks drifting at a proportionally slower real speed and the frame looks the same.
+        let grain = CGFloat(tank.propScale)
+        snow.particleSize = 0.013 * grain
+        snow.particleSizeVariation = 0.007 * grain
         snow.particleColor = NSColor(calibratedWhite: 0.78, alpha: 0.28)
         snow.particleColorVariation = SCNVector4(0, 0, 0.1, 0.15)
-        snow.particleVelocity = 0.09
-        snow.particleVelocityVariation = 0.06
+        snow.particleVelocity = 0.09 * grain
+        snow.particleVelocityVariation = 0.06 * grain
         snow.emittingDirection = SCNVector3(0, -1, 0)
         snow.spreadingAngle = 40
         // Twice the visible height at the emitter's depth. A wider drawable has a *shorter*
@@ -229,9 +251,12 @@ final class AquariumScene {
         // birth rate held constant, matching the box to the frame is what keeps the on-screen
         // density the same on a 32:9 display as on 16:9. Sized once, because replacing the
         // emitter shape restarts every particle already in flight.
-        let snowHeight = 4 * Tank.halfHeight(atDepth: snowDepth, aspect: aspect)
-        snow.emitterShape = SCNBox(width: 10, height: CGFloat(snowHeight),
-                                   length: 16, chamferRadius: 0)
+        let snowDepth = self.snowDepth
+        let snowHeight = 4 * tank.halfHeight(atDepth: snowDepth, aspect: aspect)
+        snow.emitterShape = SCNBox(width: CGFloat(3.7 * tank.halfWidth(atDepth: snowDepth)),
+                                   height: CGFloat(snowHeight),
+                                   length: CGFloat(tank.farDepth - tank.nearDepth) * 0.82,
+                                   chamferRadius: 0)
         snow.birthLocation = .volume
         snow.loops = true
         snow.isLightingEnabled = false

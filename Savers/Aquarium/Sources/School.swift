@@ -73,14 +73,19 @@ final class School {
     private var fishes: [Fish] = []
     private var rand: Rand
     private var aspect: Float
+    /// The tank this school swims in. Held rather than looked up because every margin a fish is
+    /// judged by — its depth band, its speed, the ceiling, the sand — is one of these numbers.
+    private let tank: Tank
 
     /// Draws species until the tank is stocked, then a school of each.
     ///
     /// Species are drawn without replacement: two schools of the same fish is the one outcome
     /// that makes a "mixed" school look like a bug rather than a choice.
-    init(library: ModelLibrary, cache: ModelCache, count: Int, aspect: Float, rand: inout Rand) {
+    init(library: ModelLibrary, cache: ModelCache, count: Int, tank: Tank, aspect: Float,
+         rand: inout Rand) {
         self.rand = rand.fork()
         self.aspect = aspect
+        self.tank = tank
 
         var pool = library.fish
         var spawned = 0
@@ -218,8 +223,8 @@ final class School {
     private func place(_ fish: Fish, spawningOffScreen: Bool,
                        stratum: Float? = nil, spreadIndex: Int = 0) {
         let band = fish.depthBand
-        let near = Tank.nearDepth + band.lower * (Tank.farDepth - Tank.nearDepth)
-        let far = Tank.nearDepth + band.upper * (Tank.farDepth - Tank.nearDepth)
+        let near = tank.nearDepth + band.lower * (tank.farDepth - tank.nearDepth)
+        let far = tank.nearDepth + band.upper * (tank.farDepth - tank.nearDepth)
         // Jittered off the stratum by a fraction of one stratum's width, so the opening layout
         // is spread without being a visible ladder of evenly spaced depths.
         let fraction = stratum.map { min(max($0 + rand.inRange(-0.035, 0.035), 0), 1) }
@@ -235,7 +240,7 @@ final class School {
                                      towardFar * speed * sin(tilt))
 
         let margin = fish.length * 1.05
-        let edge = Tank.halfWidth(atDepth: depth) + margin
+        let edge = tank.halfWidth(atDepth: depth) + margin
         // Golden-ratio stride: consecutive fish land far apart horizontally even though their
         // depths are adjacent, so the opening frame reads as a spread school. Indexed across
         // the whole tank rather than within one species, or two species would stack.
@@ -245,15 +250,22 @@ final class School {
         }
         let x = spawningOffScreen ? -horizontal * edge : (spread ?? rand.inRange(-edge, edge))
 
-        let halfHeight = Tank.halfHeight(atDepth: depth, aspect: aspect)
+        let halfHeight = tank.halfHeight(atDepth: depth, aspect: aspect)
         fish.bobAmplitude = halfHeight * 0.07
         // The sand is a floor now, and at the far end of the tank it sits well inside the
         // frustum — a fish spawned by the old rule would have started buried. The clearance is
         // its own length plus the bob it is about to do, since the bob is applied on top of a
         // height it holds for the whole crossing.
         let ceiling = halfHeight * Tank.verticalFill
-        let sand = Tank.floorY(aspect: aspect) + fish.length * Tank.fishFloorClearance
-            + fish.bobAmplitude
+        let floor = tank.floorY(aspect: aspect)
+        // A fish keeps the real metres its manifest declares while the tank shrinks around it,
+        // so in a small tank that clearance is most of the visible water and every fish spawns
+        // at exactly the ceiling — a flat line of animals along the top of the frame. Spending
+        // at most half the water above the sand on it keeps the school spread, and a big fish
+        // cruising low over the gravel is what a small tank actually looks like. In the
+        // reference tank this only ever binds on the 1.5 m moray, which it improves.
+        let sand = min(floor + fish.length * Tank.fishFloorClearance + fish.bobAmplitude,
+                       (floor + ceiling) / 2)
         fish.position = SIMD3<Float>(x, rand.inRange(min(max(-ceiling, sand), ceiling), ceiling),
                                      -depth)
 
@@ -282,16 +294,16 @@ final class School {
 
     private func hasLeftTank(_ fish: Fish) -> Bool {
         let depth = -fish.position.z
-        if depth < Tank.depthCullNear || depth > Tank.depthCullFar { return true }
+        if depth < tank.depthCullNear || depth > tank.depthCullFar { return true }
         // Vertical as well as horizontal. A fish holds its world height while its depth
         // changes, so one that started high in the far, tall part of the frustum can end up
         // above the near, short part of it — and a crossing only ever *ends* horizontally, so
         // without this it would stay invisible for the rest of a crossing and the school would
         // silently look thinner. The margin is well outside anything `place` produces, so this
         // fires only once a fish is genuinely out of frame, and the respawn is off-screen.
-        if abs(fish.position.y) > Tank.halfHeight(atDepth: depth, aspect: aspect)
+        if abs(fish.position.y) > tank.halfHeight(atDepth: depth, aspect: aspect)
             + fish.length { return true }
-        let edge = Tank.halfWidth(atDepth: depth) + fish.length * 1.25
+        let edge = tank.halfWidth(atDepth: depth) + fish.length * 1.25
         return abs(fish.position.x) > edge && fish.position.x * fish.velocity.x > 0
     }
 
