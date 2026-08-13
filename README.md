@@ -51,3 +51,9 @@ Assets are committed so that building a saver never requires Blender.
 Third-party screensavers on macOS 26 must still use the legacy `ScreenSaverView` API —
 Apple's replacement engine is private. Known Tahoe-specific hazards are documented in
 `Shared/SaverKit/README.md` and handled by the base class.
+
+## Planning documents
+
+- `docs/aquarium-plan.md` — active track: remaining work, settled decisions, the baking blocker
+- `docs/saver-backlog.md` — planned savers beyond the aquarium, with reference images
+- `spikes/001-fish-pipeline/README.md` — what the asset pipeline proved, and the traps found
