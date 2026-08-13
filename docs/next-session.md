@@ -49,6 +49,9 @@ the parameters.
    bake with their hierarchy intact and hinge correctly in SceneKit.
 2. **Tank population.** Draw a random assortment per launch, placed and spaced from each
    model's manifest. `props/_spec.py` already emits everything the placement pass needs.
+   **Space by `(footprint + height * sin(maxTilt)) * scale`.** Every prop declares its
+   footprint untilted, by design — see `docs/decorations.md`. Ignore the tilt term and two
+   maximum-scale pillars overlap by 14 cm, and the diving suit is already tight at scale 1.0.
 3. **Baking the committed library.** No model has been baked into `Savers/Aquarium/Assets/`
    yet; only probes have run. That is a mechanical pass once the library settles.
 4. The rest of `docs/aquarium-plan.md` §2: water look, depth lanes and fish AI, camera.

@@ -87,6 +87,13 @@ hinge line.
   thing the scene wants: a reef needs a lot of coral and one sunken ship.
 - `footprint` is a radius in metres and `minSpacing` a centre-to-centre distance, which is
   all the placement pass needs to avoid interpenetration without collision geometry.
+- **`footprint` is the untilted radius at scale 1.0, and the runtime is what adds the rest.**
+  Tilting a prop swings its top out by `height * sin(maxTilt)`, so the placement pass must
+  space by `(footprint + height * sin(maxTilt)) * scale`, not by `footprint * scale`. This is
+  deliberately the runtime's job rather than each author's: every value it needs is already in
+  the manifest, and the alternative is a rule that every author must remember and that no
+  render can catch. It is not a small correction — a 1.35 m prop tilted 2.5° gains 59 mm of
+  reach, and two of them at maximum scale overlap by 14 cm if it is ignored.
 - `weight` biases random draw; `maxPerScene` caps the showpieces.
 - `parts[].openDegrees` defines what `to: 1.0` means, so the cycle stays in normalized
   terms and the angle can be retuned without rewriting the timing.
