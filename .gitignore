@@ -1,0 +1,12 @@
+build/
+*.saver
+.DS_Store
+
+# Blender
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
+
+# Spike output is regenerable; the scripts that produce it are not
+spikes/**/out/
