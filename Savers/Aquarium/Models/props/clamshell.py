@@ -142,14 +142,26 @@ def _pearlescent_material(name, seed):
     _set(noise, "Roughness", 0.58)
     links.new(mapping.outputs["Vector"], noise.inputs["Vector"])
 
+    # The colour has to live here, in the albedo, because the two nodes below that actually
+    # make nacre look like nacre — Coat and Iridescence — do not survive the bake.
+    # UsdPreviewSurface has no equivalent of either, so what reaches the tank is base colour,
+    # roughness and normal alone. A ramp tuned to be the *pale substrate* under an
+    # iridescent coat therefore arrives as the whole material, and pale plus 8-bit sRGB
+    # encoding (linear 0.78 is already 230/255) baked the interior to near-white — a hard
+    # bright band where the two valve interiors meet at the rim, which reads as a render
+    # artifact rather than as shell.
+    #
+    # So: darker, and carrying its own hue shifts. Real mother-of-pearl is not white; it is
+    # dun to sea-green to lilac to a cold blue, and painting that variation into the albedo
+    # is the only way any of it reaches SceneKit.
     nacre = nodes.new("ShaderNodeValToRGB")
     stops = nacre.color_ramp.elements
-    stops[0].position = 0.20
-    stops[0].color = (0.50, 0.42, 0.31, 1.0)
-    stops[1].position = 0.78
-    stops[1].color = (0.78, 0.72, 0.60, 1.0)
-    middle = stops.new(0.50)
-    middle.color = (0.62, 0.68, 0.67, 1.0)
+    stops[0].position = 0.15
+    stops[0].color = (0.32, 0.29, 0.26, 1.0)
+    stops[1].position = 0.85
+    stops[1].color = (0.44, 0.50, 0.57, 1.0)
+    stops.new(0.40).color = (0.38, 0.46, 0.44, 1.0)
+    stops.new(0.62).color = (0.51, 0.45, 0.50, 1.0)
     links.new(noise.outputs["Fac"], nacre.inputs["Fac"])
 
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
