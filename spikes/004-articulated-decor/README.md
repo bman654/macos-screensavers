@@ -20,6 +20,29 @@ swiftc -O spikes/004-articulated-decor/HingeProbe.swift -o /tmp/hingeprobe \
 
 Add `--object-scale` to the Blender command to reproduce the failure described below.
 
+The probe takes any prop, not just this spike's asset:
+
+| Flag | Default | |
+|---|---|---|
+| `--part` | `part_lid` | the node to rotate |
+| `--emitter` | `emit_bubbles` | the empty whose pivot radius is checked |
+| `--angles` | `0,35,70` | comma-separated degrees about X |
+| `--light` | `1.0` | multiplier, if a very dark or very pale prop needs it |
+
+**Give it the angles your prop actually opens through.** A part hinged at +Y opens through
+*negative* angles, so the default positive sweep renders it closing into its own back wall
+and looks like a modelling error that is not there.
+
+The probe prints the emitter's distance from the pivot at every angle and ends with a
+verdict. That number is the real test: a rigid rotation holds the radius to the last decimal,
+while a part that inherited a non-uniform parent scale shears instead of turning and the
+radius drifts. The sheared version looks entirely plausible in a render, so do not trust the
+image for this — trust the drift.
+
+Recompile before every run. A stale `/tmp/hingeprobe` silently answers with the previous
+build, which has cost time twice; `swiftc` failing while an old binary still runs is the
+worst version of it.
+
 ## What held
 
 - **Named nodes survive.** `childNode(withName:recursively:)` finds `part_lid` and
