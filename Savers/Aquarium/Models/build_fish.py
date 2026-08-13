@@ -55,15 +55,22 @@ def build(spec):
         band_softness=spec.band_softness,
         outline_color=spec.outline_color,
         outline_width=spec.outline_width,
+        stripes=spec.stripes,
+        stripe_color=spec.stripe_color,
+        stripe_softness=spec.stripe_softness,
+        diagonal_stripes=spec.diagonal_stripes,
+        spots=spec.spots,
+        patches=spec.patches,
+        split=spec.split,
         mouth=spec.mouth,
     )
     assign(body_obj, skin)
 
-    membrane = fin_material(f"{spec.name}_fin", spec.fin_color)
-    tail_membrane = (
-        membrane if spec.caudal_color == spec.fin_color
-        else fin_material(f"{spec.name}_caudal", spec.caudal_color)
-    )
+    membrane = fin_material(f"{spec.name}_fin", spec.fin_color, **(spec.fin_style or {}))
+    same_tail = (spec.caudal_color == spec.fin_color
+                 and spec.caudal_style == spec.fin_style)
+    tail_membrane = membrane if same_tail else fin_material(
+        f"{spec.name}_caudal", spec.caudal_color, **(spec.caudal_style or {}))
     for obj, is_caudal in _build_fins(spec, body):
         obj.parent = root
         assign(obj, tail_membrane if is_caudal else membrane)
@@ -74,6 +81,29 @@ def build(spec):
         assign(obj, iris)
 
     return root
+
+
+def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
+    """Write the fin's own (along-root, root-to-tip) coordinate into a UV layer.
+
+    `build_fin` lays its grid out as one column of v per u, so a vertex's index still
+    carries the (u, v) it was built at; the UV then rides through solidify, subdivision
+    and the join, which no object-space coordinate can do — each fin points a different
+    way and none of them keeps an origin of its own after `join_parts`.
+
+    The layer is deliberately named UVMap, which is also what the eye spheres' own UVs
+    are called: the join merges layers by name, and a second layer would leave the fin
+    material reading whichever one the join happened to mark active for rendering.
+    """
+    mesh = obj.data
+    uv = mesh.uv_layers.get(name) or mesh.uv_layers.new(name=name)
+    coordinates = []
+    for loop in mesh.loops:
+        u, v = divmod(loop.vertex_index, samples_v)
+        coordinates.extend((u / (samples_u - 1), v / (samples_v - 1)))
+    uv.data.foreach_set("uv", coordinates)
+    mesh.update()
+    return obj
 
 
 def _build_fins(spec, body):
@@ -91,7 +121,7 @@ def _build_fins(spec, body):
             root=dorsal_root(body, f.t0, f.t1, sink=f.sink),
             out_dir=lambda u: up, span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), False))
+        ), False, f))
 
     if spec.anal:
         f = spec.anal
@@ -100,7 +130,7 @@ def _build_fins(spec, body):
             root=ventral_root(body, f.t0, f.t1, sink=f.sink),
             out_dir=lambda u: down, span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), False))
+        ), False, f))
 
     if spec.caudal:
         f = spec.caudal
@@ -110,7 +140,7 @@ def _build_fins(spec, body):
             out_dir=lambda u: Vector((-1.0, 0.0, 0.0)),
             span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), True))
+        ), True, f))
 
     # Paired fins are mirrored onto both flanks.
     for attr, theta_frac, direction in (
@@ -130,8 +160,10 @@ def _build_fins(spec, body):
                 span=f.span, rake=f.rake, curl=f.curl * side, flare=f.flare,
                 curl_axis=(0, 0, 1), samples_u=f.samples_u, samples_v=f.samples_v,
                 **common,
-            ), False))
-    return fins
+            ), False, f))
+
+    return [(_fin_uv(obj, f.samples_u, f.samples_v), is_caudal)
+            for obj, is_caudal, f in fins]
 
 
 def _bake_modifiers(obj):
@@ -202,6 +234,15 @@ def _build_eyes(spec, body):
     return eyes
 
 
+def _join(fish, spec):
+    joined = join_parts(fish, f"fish_{spec.name}")
+    print(f"[build_fish] joined into '{joined.name}': "
+          f"{len(joined.data.vertices)} verts, "
+          f"{len(joined.data.materials)} material slots, "
+          f"uv layers {[layer.name for layer in joined.data.uv_layers]}")
+    return joined
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--species", default="clownfish", choices=sorted(CATALOG))
@@ -213,6 +254,9 @@ def main():
     parser.add_argument("--save-blend", default=None)
     parser.add_argument("--no-join", action="store_true",
                         help="keep parts as separate objects (renders identically)")
+    parser.add_argument("--join", action="store_true",
+                        help="join before rendering, the way --export does, to confirm "
+                             "the materials still read once the parts are one mesh")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = parser.parse_args(argv)
 
@@ -224,6 +268,8 @@ def main():
 
     out_dir = os.path.join(args.out, spec.name)
     os.makedirs(out_dir, exist_ok=True)
+
+    joined = _join(fish, spec) if args.join else None
 
     if args.render or not (args.preview or args.export):
         studio.studio_lights(radius=spec.length * 3.0)
@@ -241,11 +287,8 @@ def main():
         print(f"[build_fish] underwater sheet: {sheet}")
 
     if args.export:
-        if not args.no_join:
-            joined = join_parts(fish, f"fish_{spec.name}")
-            print(f"[build_fish] joined into '{joined.name}': "
-                  f"{len(joined.data.vertices)} verts, "
-                  f"{len(joined.data.materials)} material slots")
+        if not args.no_join and joined is None:
+            joined = _join(fish, spec)
         os.makedirs(os.path.dirname(os.path.abspath(args.export)), exist_ok=True)
         bpy.ops.wm.usd_export(
             filepath=os.path.abspath(args.export),
@@ -260,4 +303,7 @@ def main():
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.save_blend))
 
 
-main()
+# Guarded so other build scripts can import `build` and `join_parts` rather than
+# duplicating fish assembly; Blender runs a --python script with __name__ == "__main__".
+if __name__ == "__main__":
+    main()

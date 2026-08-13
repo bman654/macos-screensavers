@@ -14,12 +14,36 @@ BLUE_TANG = Species(
            (0.78, 0.0056), (1.00, 0.0028)],
     spine=[(0.00, -0.0045), (0.26, 0.0010), (1.00, 0.0)],
     exponent=2.8,
-    colors=((0.10, 0.35, 0.88), (0.06, 0.24, 0.78), (0.02, 0.09, 0.42)),
-    fin_color=(0.06, 0.20, 0.62),
+    # Royal blue, deliberately well short of a saturated primary. The studio key drives
+    # irradiance past 2, so any blue albedo much above 0.4 clips its own channel while
+    # red and green keep climbing — which is exactly how a royal blue fish turns pale
+    # sky blue in a render that has nothing else wrong with it.
+    colors=((0.045, 0.145, 0.40), (0.020, 0.075, 0.30), (0.004, 0.020, 0.105)),
+    fin_color=(0.030, 0.100, 0.345),
     caudal_color=(0.98, 0.76, 0.04),
-    bands=[(0.86, 0.030)],
+    bands=[(0.87, 0.026)],
     band_color=(0.02, 0.02, 0.04),
     outline_width=0.0,
+    # The palette marking: a black band along the back from the eye, a riser at the
+    # peduncle end and a return along the lower flank, which together enclose the bare
+    # blue oval the fish is named for. Ellipsoids taper at their ends, which is what
+    # gives the marking its drawn-with-a-brush taper without any extra machinery.
+    patches=[
+        dict(center=(0.0380, 0.0, 0.0150), radii=(0.0135, 0.100, 0.0170),
+             color=(0.015, 0.015, 0.03), softness=0.30),
+        dict(center=(-0.0020, 0.0, 0.0245), radii=(0.0470, 0.100, 0.0130),
+             color=(0.015, 0.015, 0.03), softness=0.30),
+        dict(center=(-0.0300, 0.0, 0.0020), radii=(0.0110, 0.100, 0.0290),
+             color=(0.015, 0.015, 0.03), softness=0.30),
+        dict(center=(-0.0140, 0.0, -0.0195), radii=(0.0355, 0.100, 0.0115),
+             color=(0.015, 0.015, 0.03), softness=0.30),
+    ],
+    # Royal blue fins darkening to a near-black margin, and a yellow tail whose rays are
+    # what makes the fan read as a fan at all once the fin is nearly opaque.
+    fin_style=dict(tip_color=(0.014, 0.048, 0.21), edge_color=(0.02, 0.02, 0.05),
+                   edge_width=0.09, opacity=0.96),
+    caudal_style=dict(tip_color=(0.99, 0.62, 0.02), edge_color=(0.05, 0.04, 0.02),
+                      edge_width=0.07, opacity=0.98),
     mouth=((0.0580, 0.0, -0.0105), (0.0045, 0.0070, 0.0028)),
     scale_count=72.0,
     scale_depth=0.13,
