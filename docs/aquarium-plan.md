@@ -5,8 +5,9 @@ shell is built and confirmed running under the real screensaver engine. See
 `spikes/001-fish-pipeline/README.md` and `spikes/002-saver-shell/README.md` for what each
 proved and the traps found along the way.
 
-**Texture baking (§1) is now the only thing between the aquarium and looking right.** The
-fish currently render as flat white geometry — correct shape, correct motion, no markings.
+**Texture baking is done** (§1), so models now reach SceneKit with their real colours,
+markings and scale relief instead of as flat white geometry. The active work is building
+out the model library — species, reef, and decorations — and then populating the tank.
 
 ## Decisions already made (do not relitigate)
 
@@ -24,17 +25,29 @@ fish currently render as flat white geometry — correct shape, correct motion, 
   school with a per-fish phase offset.
 - **Models are parametric Python, not sculpted binaries.** See the root `CLAUDE.md`.
 
-## 1. Texture baking — the blocker
+## 1. Texture baking — retired
 
-Nothing procedural survives USD export. Every generated material arrives in SceneKit as
-flat white, so all banding, countershading, scales, mouth and roughness variation is
-currently lost. UsdPreviewSurface cannot represent Voronoi/ColorRamp/noise nodes.
+Nothing procedural survives USD export: UsdPreviewSurface cannot represent
+Voronoi/ColorRamp/noise nodes, so every generated material arrived in SceneKit as flat
+white and all banding, countershading, scales, mouth and roughness variation was lost.
 
-Planned `saverlib/bake.py`:
+`saverlib/bake.py` now bakes those materials into an atlas and swaps in a single material
+that reads it. See `spikes/005-texture-bake/README.md`. Two results worth carrying
+forward:
 
-1. `ensure_cycles()` — enable the Cycles addon and select the Metal GPU. Verified
-   available: `Apple M1 Max (GPU - 32 cores)` enumerates as a METAL device. EEVEE cannot
-   bake, so this is required, not optional.
+- **Baking is cheap, not slow.** The plan below budgeted for a slow authoring-time step.
+  A 2048² three-map bake runs in about 5.6s once Cycles' Metal kernels are cached, so
+  re-baking fits inside the normal edit-render-look loop.
+- **A mesh with live modifiers must never be baked.** Unwrapping sees the base mesh while
+  baking sees the evaluated one, so a Solidify shell silently shares texels with the faces
+  it grew from. `bake_atlas` refuses rather than warns.
+
+What it does, which is what was planned here:
+
+1. `ensure_cycles()` — enable the Cycles addon and select a Metal GPU. EEVEE cannot bake,
+   so this is required, not optional. It takes any Metal device and refuses to fall back
+   to the CPU; pinning one machine's device name would make shared library code refuse to
+   run anywhere else.
 2. Join first, then Smart UV Project the joined mesh so all three material slots share
    one non-overlapping atlas.
 3. Bake three maps into that atlas:
@@ -45,21 +58,23 @@ Planned `saverlib/bake.py`:
 4. Save PNGs, set roughness and normal images to Non-Color.
 5. Replace the three materials with a single Principled material reading the atlas, so a
    fish becomes one material, one draw call, one texture set.
-6. Export with `export_textures=True` and re-run `SceneKitProbe` — the material summary
-   should read `texture`, not `colour(0.906, 0.906, 0.906)`.
+6. Export with `export_textures_mode="NEW"` — the older `export_textures` bool is a
+   retained alias that drives nothing — and re-run `SceneKitProbe`, whose material summary
+   now reads `texture` rather than `colour(0.906, 0.906, 0.906)`.
 
-Bake resolution: start at 2048² and check whether the black band outlines stay crisp;
-they are the highest-frequency feature and will alias first. Set `render.bake.margin`
-generously or seams will show as bright fringes underwater.
-
-Expect this to be slow. That is fine — it runs once per species at authoring time, and
-committed assets mean building a saver never requires Blender.
+Settled at 2048² with a 32px bake margin, which keeps the clownfish's black band outlines
+crisp — they are the highest-frequency feature and alias first — and shows no seam
+fringing underwater.
 
 ## 2. Remaining aquarium work, in dependency order
 
-- **Tank environment.** Plants and rocks via the same `saverlib` primitives — a plant
-  frond is a fin membrane with different numbers, a rock is a lofted body with noise.
-  This is the test of whether the primitives generalize past fish.
+- **The model library.** A roster of reef species, plus coral, plants, rocks and
+  decorations, each committed with a manifest so the tank can place and animate it without
+  knowing what it is. See `docs/decorations.md` for that contract and
+  `spikes/004-articulated-decor/` for how the animated bubblers hinge. This is also the
+  test of whether the primitives generalize past fish: a plant frond is a fin membrane
+  with different numbers, a rock is a lofted body with noise, and coral is a branching
+  swept tube.
 - **Water look.** Caustics as an animated gobo on a spotlight; god rays as additive
   drifting planes; marine snow as an `SCNParticleSystem`; exponential depth fog. The fog
   is what sells the 2.5D depth more than anything else.
@@ -67,6 +82,8 @@ committed assets mean building a saver never requires Blender.
   occasionally change lanes; boids-ish separation within a school. Real 3D depth gives
   clean occlusion behind plants and rocks for free.
 - **Camera.** Narrow FOV (~22°) for a near-orthographic 2.5D read with a little parallax.
+- **Population.** Each launch draws a random assortment from the library, weighted and
+  spaced by each model's manifest, so the tank is a different tank every time.
 - **`.saver` shell.** See below — independent of everything above.
 
 ## 3. The shell — retired
