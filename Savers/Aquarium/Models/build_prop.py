@@ -6,13 +6,14 @@ The counterpart to `build_fish.py` for everything that is not a fish. Run throug
     tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- \
         --prop staghorn_coral --render --preview
     tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- \
-        --prop treasure_chest --export Savers/Aquarium/Assets/treasure_chest.usdz
+        --prop treasure_chest --export Savers/Aquarium/Assets/treasure_chest.usdz --bake
 """
 
 import argparse
 import json
 import os
 import sys
+import time
 
 import bpy
 
@@ -21,6 +22,13 @@ _REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 sys.path[:0] = [os.path.join(_REPO, "tools", "blender"), _HERE]
 
 from saverlib import studio  # noqa: E402
+from saverlib.bake import (  # noqa: E402
+    DEFAULT_MARGIN,
+    DEFAULT_RESOLUTION,
+    DEFAULT_UV_MARGIN,
+    bake_atlas,
+    bake_atlas_objects,
+)
 from props import CATALOG  # noqa: E402
 
 
@@ -43,6 +51,56 @@ def _apply_scales():
     bpy.ops.object.select_all(action="DESELECT")
 
 
+def _bake_modifiers(obj):
+    """Replace one mesh with its evaluated form before UV unwrapping.
+
+    This deliberately mirrors the local helper in `build_fish.py` rather than importing a
+    command-line model builder as a library. Joining keeps only the active object's modifier
+    stack, while baking an unevaluated mesh assigns the modifier-generated faces overlapping
+    UVs; evaluating first avoids both silent failures.
+    """
+    if not obj.modifiers:
+        return
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    baked = bpy.data.meshes.new_from_object(evaluated)
+    previous = obj.data
+    obj.modifiers.clear()
+    obj.data = baked
+    if previous.users == 0:
+        bpy.data.meshes.remove(previous)
+
+
+def _mesh_objects(root):
+    if root.type == "MESH":
+        raise ValueError(
+            f"prop root '{root.name}' must be an Empty so its geometry is not skipped"
+        )
+    return [obj for obj in root.children_recursive if obj.type == "MESH"]
+
+
+def _join_static_parts(root, name):
+    """Evaluate and join a static prop without importing from `build_fish.py`."""
+    meshes = _mesh_objects(root)
+    if not meshes:
+        raise RuntimeError(f"building '{name}' produced no mesh")
+    for obj in meshes:
+        _bake_modifiers(obj)
+    if len(meshes) == 1:
+        return meshes[0]
+
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in meshes:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    result = bpy.ops.object.join()
+    if "FINISHED" not in result:
+        raise RuntimeError(f"joining static prop '{name}' failed: {result}")
+    joined = bpy.context.view_layer.objects.active
+    joined.name = name
+    return joined
+
+
 def _drop_to_floor():
     """Seat the prop on z = 0 so the tank never has to guess where its bottom is."""
     lo, _ = studio.scene_bounds()
@@ -60,6 +118,15 @@ def main():
     parser.add_argument("--render", action="store_true", help="studio turntable")
     parser.add_argument("--preview", action="store_true", help="underwater lighting")
     parser.add_argument("--export", default=None, help="write a .usdz to this path")
+    parser.add_argument("--bake", action="store_true",
+                        help="bake procedural materials before export")
+    parser.add_argument("--textures", default=None,
+                        help="directory for baked atlas PNGs; defaults beside the export")
+    parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
+    parser.add_argument("--margin", type=int, default=DEFAULT_MARGIN)
+    parser.add_argument("--uv-margin", type=float, default=DEFAULT_UV_MARGIN)
+    parser.add_argument("--device", default=None,
+                        help="exact Cycles device name; any Metal GPU by default")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--exposure", type=float, default=-2.0,
@@ -67,13 +134,17 @@ def main():
     parser.add_argument("--save-blend", default=None)
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = parser.parse_args(argv)
+    if args.bake and not args.export:
+        parser.error("--bake requires --export")
 
     prop = CATALOG[args.prop]
 
     studio.reset_scene()
     studio.setup_render(resolution=(900, 700), samples=args.samples,
                         exposure=args.exposure)
-    prop.build(args.seed)
+    root = prop.build(args.seed)
+    if root is None:
+        raise RuntimeError(f"building '{prop.name}' produced no root object")
     _apply_scales()
     _drop_to_floor()
 
@@ -99,10 +170,52 @@ def main():
     if args.export:
         export_path = os.path.abspath(args.export)
         os.makedirs(os.path.dirname(export_path), exist_ok=True)
+
+        if args.bake:
+            stem = os.path.splitext(os.path.basename(export_path))[0]
+            texture_dir = os.path.abspath(
+                args.textures
+                or os.path.join(os.path.dirname(export_path), f"{stem}_textures")
+            )
+            started = time.monotonic()
+            if prop.parts:
+                meshes = _mesh_objects(root)
+                for obj in meshes:
+                    _bake_modifiers(obj)
+                _drop_to_floor()
+                paths = bake_atlas_objects(
+                    meshes,
+                    texture_dir,
+                    atlas_name=prop.name,
+                    resolution=args.resolution,
+                    margin=args.margin,
+                    uv_margin=args.uv_margin,
+                    device_name=args.device,
+                )
+            else:
+                joined = _join_static_parts(root, f"prop_{prop.name}")
+                _drop_to_floor()
+                paths = bake_atlas(
+                    joined,
+                    texture_dir,
+                    atlas_name=prop.name,
+                    resolution=args.resolution,
+                    margin=args.margin,
+                    uv_margin=args.uv_margin,
+                    device_name=args.device,
+                )
+            for kind, path in paths.items():
+                print(f"[build_prop] {kind}: {path}")
+            print(
+                f"[build_prop] baked {args.resolution}x{args.resolution}, "
+                f"margin {args.margin}px in {time.monotonic() - started:.1f}s"
+            )
+
         bpy.ops.wm.usd_export(
             filepath=export_path,
             export_materials=True,
             export_textures_mode="NEW",
+            overwrite_textures=True,
             evaluation_mode="RENDER",
             generate_preview_surface=True,
         )

@@ -1,7 +1,7 @@
 """A massive brain coral with its maze pattern built into the mesh."""
 
 import random
-from math import cos, exp, pi, radians, sin, tau
+from math import cos, exp, pi, sin, tau
 
 import bpy
 from mathutils import Vector
@@ -40,8 +40,8 @@ def _ridge_value(point, noise, direction, connectors):
         centre += _line_offset(noise, line, across, z)
         distance = min(distance, abs(along - centre))
 
-    # Short links between neighbours produce Y-junctions without singular points or
-    # collapsing the spacing of the surrounding folds.
+    # Short links between continuing neighbours make H-rungs and enclosed cells without
+    # singular points or collapsing the spacing of the surrounding folds.
     for line, start, end, direction_sign in connectors:
         if not start <= across <= end:
             continue
@@ -63,13 +63,26 @@ def _build_mesh(seed):
     heading = rng.uniform(0.0, tau)
     direction = (cos(heading), sin(heading))
     connectors = []
-    for _ in range(7):
-        start = rng.uniform(-0.165, 0.105)
+    connector_count = 32
+    line_fractions = (-0.78, -0.28, 0.28, 0.78)
+    for index in range(connector_count):
+        span = rng.uniform(0.030, 0.052)
+        band = index // len(line_fractions)
+        centre = -0.170 + 0.340 * band / (
+            connector_count // len(line_fractions) - 1)
+        centre += rng.uniform(-0.004, 0.004)
+        line_limit = max(2, int(
+            ((_RADIUS * _RADIUS - centre * centre) ** 0.5) / _RIDGE_SPACING) - 2)
+        line_fraction = line_fractions[index % len(line_fractions)]
+        line = round(line_limit * (line_fraction + rng.uniform(-0.06, 0.06)))
+        direction_sign = rng.choice((-1, 1))
+        if abs(line + direction_sign) > line_limit:
+            direction_sign *= -1
         connectors.append((
-            rng.randint(-11, 10),
-            start,
-            start + rng.uniform(0.040, 0.072),
-            rng.choice((-1, 1)),
+            line,
+            centre - 0.5 * span,
+            centre + 0.5 * span,
+            direction_sign,
         ))
 
     vertices = [(0.0, 0.0, _HEIGHT)]
@@ -132,12 +145,16 @@ def _build_mesh(seed):
         name="ridge_mask", type="FLOAT", domain="POINT")
     ridge_attr.data.foreach_set("value", ridge_values)
 
+    rim_vertices = set(range(edge, edge + _SEGMENTS))
+    for mesh_edge in mesh.edges:
+        if mesh_edge.vertices[0] in rim_vertices and mesh_edge.vertices[1] in rim_vertices:
+            mesh_edge.use_edge_sharp = True
+
     coral = bpy.data.objects.new("part_brain_coral", mesh)
     bpy.context.collection.objects.link(coral)
     split = coral.modifiers.new("Floor Rim", "EDGE_SPLIT")
-    split.split_angle = radians(38.0)
-    split.use_edge_angle = True
-    split.use_edge_sharp = False
+    split.use_edge_angle = False
+    split.use_edge_sharp = True
     return coral
 
 
@@ -145,7 +162,7 @@ def _brain_coral_material(seed):
     material = rock_material(
         f"brain_coral_{seed}", size=0.42,
         base=(0.105, 0.058, 0.018), secondary=(0.225, 0.142, 0.045),
-        speckle=0.04, roughness=0.84, algae=0.40, seed=seed,
+        speckle=0.04, roughness=0.84, algae=0.0, seed=seed,
     )
     nodes = material.node_tree.nodes
     links = material.node_tree.links
@@ -169,7 +186,75 @@ def _brain_coral_material(seed):
     crest.location = (420, 80)
     links.new(strength.outputs["Value"], crest.inputs[0])
     links.new(substrate, crest.inputs[1])
-    links.new(crest.outputs["Color"], base_input)
+
+    valley = nodes.new("ShaderNodeMath")
+    valley.operation = "SUBTRACT"
+    valley.inputs[0].default_value = 1.0
+    valley.location = (250, 520)
+    links.new(ridge.outputs["Fac"], valley.inputs[1])
+    deep_valley = nodes.new("ShaderNodeMath")
+    deep_valley.operation = "MULTIPLY"
+    deep_valley.location = (420, 520)
+    links.new(valley.outputs["Value"], deep_valley.inputs[0])
+    links.new(valley.outputs["Value"], deep_valley.inputs[1])
+
+    geometry = nodes.new("ShaderNodeNewGeometry")
+    geometry.location = (80, 740)
+    normal = nodes.new("ShaderNodeSeparateXYZ")
+    normal.location = (250, 740)
+    links.new(geometry.outputs["Normal"], normal.inputs["Vector"])
+    upward = nodes.new("ShaderNodeMapRange")
+    upward.clamp = True
+    upward.inputs["From Min"].default_value = 0.15
+    upward.inputs["From Max"].default_value = 0.80
+    upward.location = (420, 740)
+    links.new(normal.outputs["Z"], upward.inputs["Value"])
+
+    coordinates = nodes.new("ShaderNodeTexCoord")
+    coordinates.location = (80, 980)
+    patches = nodes.new("ShaderNodeTexNoise")
+    patches.inputs["Scale"].default_value = 13.0
+    patches.inputs["Detail"].default_value = 5.0
+    patches.inputs["Roughness"].default_value = 0.65
+    patches.location = (250, 980)
+    links.new(coordinates.outputs["Object"], patches.inputs["Vector"])
+    coverage = nodes.new("ShaderNodeMapRange")
+    coverage.clamp = True
+    coverage.inputs["From Min"].default_value = 0.36
+    coverage.inputs["From Max"].default_value = 0.66
+    coverage.location = (420, 980)
+    links.new(patches.outputs["Fac"], coverage.inputs["Value"])
+
+    valley_growth = nodes.new("ShaderNodeMath")
+    valley_growth.operation = "MULTIPLY"
+    valley_growth.location = (600, 650)
+    links.new(deep_valley.outputs["Value"], valley_growth.inputs[0])
+    links.new(upward.outputs["Result"], valley_growth.inputs[1])
+    patch_growth = nodes.new("ShaderNodeMath")
+    patch_growth.operation = "MULTIPLY"
+    patch_growth.location = (770, 650)
+    links.new(valley_growth.outputs["Value"], patch_growth.inputs[0])
+    links.new(coverage.outputs["Result"], patch_growth.inputs[1])
+    growth_strength = nodes.new("ShaderNodeMath")
+    growth_strength.operation = "MULTIPLY"
+    growth_strength.inputs[1].default_value = 0.82
+    growth_strength.location = (940, 650)
+    links.new(patch_growth.outputs["Value"], growth_strength.inputs[0])
+
+    algae_tint = nodes.new("ShaderNodeMixRGB")
+    algae_tint.blend_type = "MIX"
+    algae_tint.inputs[1].default_value = (0.020, 0.155, 0.010, 1.0)
+    algae_tint.inputs[2].default_value = (0.100, 0.265, 0.025, 1.0)
+    algae_tint.location = (770, 900)
+    links.new(patches.outputs["Fac"], algae_tint.inputs[0])
+
+    growth = nodes.new("ShaderNodeMixRGB")
+    growth.blend_type = "MIX"
+    growth.location = (1120, 300)
+    links.new(growth_strength.outputs["Value"], growth.inputs[0])
+    links.new(crest.outputs["Color"], growth.inputs[1])
+    links.new(algae_tint.outputs["Color"], growth.inputs[2])
+    links.new(growth.outputs["Color"], base_input)
 
     # Fine stone bump competes with the millimetre-scale folds under underwater lighting.
     next(node for node in nodes if node.type == "BUMP").inputs["Strength"].default_value = 0.24
@@ -190,11 +275,11 @@ BRAIN_CORAL = Prop(
     name="brain_coral",
     build=build,
     category="coral",
-    footprint=0.22,
+    footprint=0.23,
     height=0.23,
     tilt_range=(-3.0, 3.0),
-    scale_range=(0.90, 1.02),
+    scale_range=(0.90, 1.00),
     weight=1.25,
-    min_spacing=0.44,
+    min_spacing=0.46,
     seeds=3,
 )

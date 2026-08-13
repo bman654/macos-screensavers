@@ -110,9 +110,27 @@ emitter), amphorae, anchor, portholes, scattered coins.
 
 **Terrain:** boulders, rubble, gravel patches.
 
-## Bake interaction — unresolved
+## Bake interaction
 
-Texture baking joins a model into a single mesh so it becomes one material and one draw
-call. An articulated model cannot be joined, because its parts have to move. So a
-decoration must either be baked per-part into a shared atlas, or unwrapped and baked
-without joining. Settle this before authoring the bubblers, not after.
+`build_prop.py --export <asset.usdz> --bake` is the production path. It evaluates every live
+modifier before unwrapping; `bake_atlas` deliberately refuses modifiers because generated
+faces would otherwise overlap the base mesh's UVs and silently corrupt the result.
+
+Static props are evaluated, joined, unwrapped, and baked exactly like fish. The result is one
+mesh with one atlas material and base-colour, roughness, and tangent-space normal textures.
+Joining is correct even for a large source hierarchy: staghorn's thicket plus holdfast and
+anemone's crown plus column both bake this way.
+
+Articulated props are not joined. Each mesh is Smart UV Projected, and those layouts are
+scaled into disjoint tiles in one shared UV space. Tile gutters are derived from the pixel bake
+margin so one object's dilation cannot overwrite another's seam padding. Blender bakes the
+complete selected object set to each image in one call; every mesh then receives the same atlas
+material while named nodes, parenting, origins, and pivots remain unchanged. Linked mesh data
+must first be made single-user. A two-part hinge probe arrived in SceneKit with textures on
+both pieces, and `part_lid` still rotated correctly about its hinge. One shared atlas is the
+settled path for articulated props; per-part texture sets are unnecessary.
+
+Custom vertex attributes need not survive USD export. Cycles evaluates them as part of the
+procedural material and writes the resulting colour into the atlas. This was visually verified
+for staghorn's pale `tipness` growth tips and anemone's `tentacle_t` base-to-tip gradient in
+both their atlas PNGs and SceneKit renders.
