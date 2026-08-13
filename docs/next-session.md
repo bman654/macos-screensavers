@@ -86,6 +86,14 @@ Each is commented where it happens; this is the index.
 - **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
 - **Branching density is not what makes coral read as coral.** Internode length is: a tree's
   shortens at every fork, a gorgonian's stays constant.
+- **`rock_material` has a brightness floor around 0.19 median luminance**, so albedo stops
+  buying darkness long before black. Measured through the prop builder's own `exposure=-2.0`:
+  base 0.050 renders at 0.440, 0.010 at 0.258, and 0.002 still at 0.192 — a 25x albedo range
+  compressed into barely 2x. The residual is the fixed dielectric specular response, which is
+  achromatic, so it desaturates as well as lightens. `speckle` is *not* the cause: sweeping it
+  0.10 to 0.80 changed aggregate luminance immeasurably, because the flecks are too sparse to
+  matter. Anything meant to read near-black must earn it by contrast with a brighter
+  neighbour, not by driving base toward zero.
 
 ## Unverified — do not assume these work
 
