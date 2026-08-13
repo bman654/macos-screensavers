@@ -81,10 +81,36 @@ fringing underwater.
 - **Depth lanes and fish AI.** 5–7 discrete z-lanes, fish swim within a lane and
   occasionally change lanes; boids-ish separation within a school. Real 3D depth gives
   clean occlusion behind plants and rocks for free.
+  - **Clownfish should be tied to an anemone.** They are site-attached in the wild rather
+    than free-roaming, so a clownfish that patrols the whole tank like a tang is wrong.
+    Give them a host anemone from the placed props and have them stay within about a body
+    length or two of it, retreating into it rather than crossing open water. This is the
+    one species-specific behaviour worth the exception; everything else can share one
+    swimming model. If no anemone was drawn, fall back to ordinary crossings.
 - **Camera.** Narrow FOV (~22°) for a near-orthographic 2.5D read with a little parallax.
 - **Population.** Each launch draws a random assortment from the library, weighted and
   spaced by each model's manifest, so the tank is a different tank every time.
 - **`.saver` shell.** See below — independent of everything above.
+
+## 2a. Two tank styles
+
+The tank ships two selectable looks, chosen in the screensaver's own settings sheet
+(`ScreenSaverView.configureSheet` with `ScreenSaverDefaults` for persistence — note that a
+legacy saver's defaults are keyed by bundle identifier, not by `Bundle.main`).
+
+- **Aquarium.** Reads like a lit glass tank: a bright, cool, fluorescent-blue key from
+  directly overhead, water tinted a noticeably more saturated blue than the ocean look, and
+  **coloured aquarium gravel** underfoot instead of sand.
+- **Real ocean.** What exists today: sand, muted blue-green water, daylight filtering down
+  from the surface.
+
+The two differ only in lighting, water tint and substrate appearance. Geometry, placement,
+population and fish behaviour are shared — the split must not reach past the surface into
+the scene's structure, or every later feature pays for it twice.
+
+Worth stating because the first render made it obvious: the current water is too dark and
+too green to read as an aquarium. That is correct for the ocean style and wrong for the
+other one, which is what motivated the split.
 
 ## 3. The shell — retired
 
