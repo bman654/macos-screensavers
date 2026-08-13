@@ -1,103 +1,96 @@
 # Where to pick up
 
-Written 2026-08-13, at the end of the session that built the `.saver` shell.
+Rewritten 2026-08-13, at the end of the session that built the model library.
 
 ## State
 
-The shell track is **done and verified in the real screensaver engine**. Both savers were
-installed to `~/Library/Screen Savers` and rendered correctly in the System Settings
-preview, so `legacyScreenSaver` genuinely loads and runs this code. They are still
-installed; rebuild and reinstall to refresh them.
-
-The asset pipeline was already validated in `spikes/001-fish-pipeline`. What is new is
-everything between a `.usdz` on disk and pixels on a screen.
+**The asset pipeline is finished end to end**, and the model library is most of the way
+there. Nothing is blocked.
 
 ```
-Shared/SaverKit/              SaverView, RenderHost, SceneKitHost, MetalHost, ShaderLibrary
-tools/build-saver.sh          compile → bundle → sign → install
-tools/run-saver.swift         windowed dev harness (screenshot, preview, live reshape)
-Savers/Aquarium/              SceneKit saver: 14 fish, depth fog, marine snow
-spikes/002-saver-shell/       raw Metal saver proving the other host
+14 fish species        Savers/Aquarium/Models/species/<name>.py
+ 7 reef props          Savers/Aquarium/Models/props/<name>.py
+   the bake            tools/blender/saverlib/bake.py
+   primitives          tools/blender/saverlib/{tube,hardsurface,surfaces,markings}.py
 ```
 
-Read `Shared/SaverKit/README.md` first. It is the orientation doc: how to write a saver,
-the macOS 26 hazard table, and which of them SaverKit already handles for you.
+Texture baking is **done** and is no longer a blocker for anything — fish, static props and
+articulated props all bake. See `spikes/005-texture-bake/README.md`. Baking is cheap (about
+5–6s for a 2048² three-map bake once the Metal kernels are cached), so it belongs inside the
+authoring loop rather than as a batch step at the end.
 
-## The one result that changes what is possible
-
-**Command Line Tools ship no offline Metal compiler**, so shaders cannot be precompiled on
-this machine — they ship as `.metal` source and are compiled at runtime. That turns out to
-be **permitted inside the screensaver sandbox**, which is what makes the shader-based half
-of `saver-backlog.md` buildable without installing Xcode. If it had been blocked, every
-field-simulation and space saver would have needed a toolchain first.
-
-## Next: texture baking
-
-This is now the only thing between the aquarium and looking right. The fish have correct
-shape and correct motion and are flat white, because nothing procedural survives USD
-export. `docs/aquarium-plan.md` §1 has the full plan for `saverlib/bake.py`; it was written
-before any of this session's work and is still accurate.
-
-After that, in `aquarium-plan.md` §2 order: tank environment, water look, depth lanes and
-fish AI, camera.
-
-## Loop
+## Loops
 
 ```bash
-tools/build-saver.sh Aquarium
-tools/run-saver.swift build/Aquarium.saver --seconds 3 --screenshot /tmp/aq.png
+tools/blender/run.sh Savers/Aquarium/Models/build_fish.py -- --species clownfish --render --preview
+tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- --prop staghorn_coral --render --preview
+tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- --prop boulder --export /tmp/b.usdz --bake
+tools/gallery.py --out /tmp/reef.png --columns 4 'build/props/*/water_00_side.png'
 ```
 
-Then **look at the PNG**. The repo rule that you render and inspect before declaring
-something done applies to savers exactly as it does to models — several bugs this session
-compiled cleanly, ran without error, and drew nothing.
+**Look at the PNG.** This is the repo's hardest-won rule and it held all session: the numbers
+never tell you whether a model reads. Every species took four to seven render-and-adjust
+iterations, and in every case the thing that fixed it was visible in an image and invisible in
+the parameters.
 
-`--size WxH`, `--preview`, and `--resize WxH` (reshapes halfway through, to exercise
-aspect-ratio handling) are the other flags worth knowing. Use `--screenshot`: the
-interactive path deliberately takes keyboard focus and is disruptive in a loop.
+## Next, in order
 
-`tools/build-saver.sh <saver> --install` also runs `killall legacyScreenSaver`, without
-which macOS keeps serving the previous binary from its `mmap`ed copy.
+1. **Decorations.** `docs/decorations.md` has the roster and the manifest contract. The three
+   bubblers (treasure chest, clamshell, skeleton with a jug) are unblocked — articulated props
+   bake with their hierarchy intact and hinge correctly in SceneKit.
+2. **Tank population.** Draw a random assortment per launch, placed and spaced from each
+   model's manifest. `props/_spec.py` already emits everything the placement pass needs.
+3. **Baking the committed library.** No model has been baked into `Savers/Aquarium/Assets/`
+   yet; only probes have run. That is a mechanical pass once the library settles.
+4. The rest of `docs/aquarium-plan.md` §2: water look, depth lanes and fish AI, camera.
+
+## Known gaps, deliberately left
+
+- **`mouth` should probably fold into `patches`.** Now that `mouth_color` is settable it is
+  just a patch with frozen softness and weaker validation. Deferred because it touches all
+  fourteen species files.
+- **`cap_rings` is not exposed by `build_branching`**, and rounded tip caps are ~40% of a
+  branching prop's vertices. A passthrough is the cheapest geometry win available.
+- **`BranchingResult` reports no generation or arc position**, so the staghorn recovers
+  generation by inverting the radius decay. It works; it is fragile-adjacent.
+- **The boulder is the weakest prop** — faceted, and its own worked-example origins show.
+- **Scale relationships between props have never been checked in one scene.** Each was
+  authored to real metres independently.
+- **`studio_lights` runs about a stop hot for large matte props**; `build_prop.py` compensates
+  with `exposure=-2.0` rather than falsifying albedos. A calibration pass would be better.
+- **`gallery.build_sheet` fails on a single tile** (`xstack` "Result too large").
+
+## Traps that cost real time this session
+
+Each is commented where it happens; this is the index.
+
+- **Never leave scale on an object.** A non-uniform parent scale puts children in a stretched
+  space: their positions arrive in the wrong units and rotating them *shears* instead of
+  turning. Fatal for anything hinged. `spikes/004-articulated-decor/`.
+- **Never bake a mesh with live modifiers.** Unwrapping sees the base mesh, baking sees the
+  evaluated one, so a Solidify shell silently shares texels with the faces it grew from. No
+  error, no visual tell. `bake_atlas` refuses.
+- **Custom vertex attributes need not survive export** — Cycles evaluates them during the bake
+  and writes the result into the atlas.
+- **A positive `diagonal_stripes` angle rises rearward.** The algebra says otherwise; a
+  rendered pair settled it and is now a permanent swatch.
+- **A caudal lobe's width comes from `flare`, not `span`.** Span spike → needles, flat span →
+  paddles, monotone falloff into the cut → tapered points.
+- **A ColorRamp holds 32 stops**, so roughly three outlined bands per ramp. It now raises.
+- **Colours render about twice as bright as written** under the studio key, and accents clip
+  harder than ground colours. Black markings read as charcoal — do not compensate, the
+  exporter bakes albedo.
+- **Cosine ring spacing puts the first ring a fraction of a millimetre from the pole**, so on a
+  long body an end control point sized like a compact fish's builds a flat disc across the
+  snout.
+- **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
+- **Branching density is not what makes coral read as coral.** Internode length is: a tree's
+  shortens at every fork, a gorgonian's stays constant.
 
 ## Unverified — do not assume these work
 
-- **Retina 2x and multi-display.** The development display is a single 1x ultrawide, so
-  that code path has never actually executed. The scale arithmetic was exercised by forcing
-  `contentsScale`, which is not the same thing. Brandon has a Retina laptop display
-  available — **opening the laptop and previewing both savers is a five-minute test and
-  should be done early**, because a scale bug would affect every saver.
-- **Long-run stability.** Timing precision is proven numerically out to a week, but nothing
-  has run for more than seconds.
-- **The `default.metallib` path** in `ShaderLibrary` and `build-saver.sh` cannot execute
-  here at all, for lack of a Metal toolchain.
-
-## Traps that cost real time, so they do not cost it twice
-
-All of these are commented at the code that handles them; this is the index.
-
-- A wrong `NSPrincipalClass` fails **silently**. CFBundle falls back to the first class in
-  the bundle regardless of type, with `bundleLoaded: true` and empty stderr. A saver class
-  must be declared `@objc(<Name>View)`. Guarded by `build-saver.sh` and `run-saver.swift`.
-- `RenderHost`'s protocol-extension defaults are **statically dispatched**. A conforming
-  class that does not redeclare a member freezes its witness, and a subclass's override is
-  silently ignored. Already caused one bug. See `MetalHost`.
-- `camera.wantsHDR = true` discards your `MTLClearColor` and returns **alpha 0**. Set
-  `scene.background.contents` instead.
-- SceneKit wraps any node mutation outside its render loop in an implicit animation stamped
-  with `CACurrentMediaTime()`, while our clock starts at zero — so the scene renders as if
-  nothing moved. Handled in `SceneKitHost` with a zero-duration `SCNTransaction`.
-- `.bgra8Unorm` displays SceneKit's linear output as if already sRGB-encoded, crushing the
-  image to near-black. `SceneKitHost` uses `.bgra8Unorm_srgb`.
-- AppKit's `cacheDisplay` cannot capture a `CAMetalLayer` — it silently yields a black PNG.
-  The harness uses ScreenCaptureKit current-process capture.
-- The runtime shader path concatenates every `.metal` file into one translation unit and
-  cannot `#include` project headers. Neither fails on a machine with the Metal toolchain,
-  which is the worst direction for a trap.
-
-## Loose ends
-
-- `SceneKitHost` has no resize hook, so `AquariumScene` reads `drawableSize` from
-  `FrameContext` every frame and learns about a reshape one frame late. Correct and cheap;
-  add an `onResize` hook if a second SceneKit saver wants it, not before.
-- `Savers/Aquarium/Assets/clownfish.usdz` is the untextured placeholder. Regenerate it once
-  baking works.
+- **Retina 2x and multi-display.** Still never executed; this machine has one 1x display.
+  Opening the laptop and previewing is a five-minute test that would de-risk every saver.
+- **Long-run stability.** Proven numerically to a week, but nothing has run for more than
+  seconds.
+- **The `default.metallib` path**, for lack of a Metal toolchain on this machine.
