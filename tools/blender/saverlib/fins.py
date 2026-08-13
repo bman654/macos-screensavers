@@ -40,6 +40,24 @@ def build_fin(
     `flare` is a Profile over v giving how much wider than its root the membrane grows,
     spread along the root's own direction. Without it a fin can only extend, never
     widen, which turns a tail fan into a spike no matter how the span is tuned.
+
+    On a short root — a caudal fin, whose root is only the depth of the peduncle — the
+    parameter names mislead, and this is worth reading before tuning a tail:
+
+    * A lobe's *width* comes almost entirely from `flare`, not from `span`. `flare`
+      spreads a whole range of u sideways as v grows, so a tall lobe is built out of
+      many u samples fanned apart; `span` only decides how far each of them reaches.
+    * A sharp spike in `span` therefore gives two needles, not two lobes: only the one
+      or two u samples at the spike reach far, and there is nothing beside them to fill
+      in. A flat span gives blunt paddles for the mirror-image reason.
+    * What gives lobes that taper to points is a span that falls *monotonically* from
+      each end of the root into the central notch. Every u then reaches slightly less
+      than its neighbour towards the centre, and the outline is a curve rather than a
+      step.
+
+    In short: shape the silhouette with the slope of `span` across u, and set the tail's
+    overall spread with `flare`. Tuning the peak value of `span` is the least effective
+    of the three and is where a forked tail usually goes wrong.
     """
     span = as_profile(span)
     rake = as_profile(rake)

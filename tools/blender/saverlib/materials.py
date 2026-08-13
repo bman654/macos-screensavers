@@ -1,435 +1,24 @@
-"""Procedural materials for fish.
+"""The materials a fish is made of: skin, fin membrane, eye.
 
-Everything is generated from shader nodes in object space rather than painted onto a UV
-map. That keeps a species definition to a handful of numbers, lets one material serve a
-whole school with per-object colour variation, and avoids shipping texture images.
+Each one assembles shader nodes in object space rather than sampling a painted texture,
+so a species is a handful of numbers and one material can serve a whole school. The
+marking vocabulary those numbers are spent on — bands, stripes, spots, patches, an eye
+ring, a two-tone split — lives in `markings.py`, along with the node helpers both
+modules use; this file is what turns those masks into a shaded surface.
 
-`fish_material` carries a vocabulary of markings — bands, stripes, diagonal stripes,
-spots, patches and a two-tone split — that a species picks from and places explicitly.
-Explicit placement rather than a tuned periodic frequency is the load-bearing decision
-here: real markings sit at particular places on an animal and do not repeat, so landing
-three bars correctly by adjusting a wave frequency is guesswork. The one marking that is
-genuinely periodic on the animal, the angelfish's diagonal ruling, is the one marking
-specified by spacing.
-
-Node socket names moved around in Blender 4.0 (Specular -> Specular IOR Level, and so on),
-so inputs are set through `_set` which ignores names the current build does not have.
+`_ramp` and `_set` are re-exported here deliberately: `surfaces.py` imports them from
+this module and they are the two helpers every material in the package needs.
 """
 
-from math import cos, pi, radians, sin
+from math import pi
 
 import bpy
 
-
-def _set(node, name, value):
-    socket = node.inputs.get(name)
-    if socket is not None:
-        socket.default_value = value
-
-
-_BLACK = (0.0, 0.0, 0.0, 1.0)
-_WHITE = (1.0, 1.0, 1.0, 1.0)
-
-
-# -- generic node helpers ------------------------------------------------------------
-
-
-def _link_or_set(nt, socket, value):
-    if isinstance(value, bpy.types.NodeSocket):
-        nt.links.new(value, socket)
-    elif value is not None:
-        socket.default_value = value
-
-
-def _math(nt, operation, a, b=None, location=(0, 0), clamp=False):
-    node = nt.nodes.new("ShaderNodeMath")
-    node.operation = operation
-    node.location = location
-    node.use_clamp = clamp
-    _link_or_set(nt, node.inputs[0], a)
-    _link_or_set(nt, node.inputs[1], b)
-    return node.outputs[0]
-
-
-def _ramp(node, stops):
-    """Overwrite a ColorRamp's elements with (position, rgba) stops."""
-    elements = node.color_ramp.elements
-    while len(elements) > 1:
-        elements.remove(elements[-1])
-    elements[0].position, elements[0].color = stops[0]
-    for position, color in stops[1:]:
-        element = elements.new(position)
-        element.color = color
-
-
-def _ramp_node(nt, fac, stops, location=(0, 0), interpolation="LINEAR"):
-    node = nt.nodes.new("ShaderNodeValToRGB")
-    node.location = location
-    _ramp(node, stops)
-    node.color_ramp.interpolation = interpolation
-    nt.links.new(fac, node.inputs["Fac"])
-    return node.outputs["Color"]
-
-
-def _mix_color(nt, base_color, factor, color, location=(0, 0), blend="MIX"):
-    """Lay a flat colour over `base_color` wherever `factor` is 1."""
-    mix = nt.nodes.new("ShaderNodeMix")
-    mix.location = location
-    mix.data_type = "RGBA"
-    mix.blend_type = blend
-    nt.links.new(factor, mix.inputs["Factor"])
-    nt.links.new(base_color, mix.inputs[6])
-    mix.inputs[7].default_value = (*color, 1.0)
-    return mix.outputs[2]
-
-
-def _mask_stops(intervals, fade, epsilon=1e-3):
-    """ColorRamp stops for a 0/1 mask that is 1 inside each interval.
-
-    Positions must be strictly increasing and inside 0..1 or the ramp silently reorders
-    itself. Where two stops collide — because an interval runs off the end of the range
-    and clamps, or because two intervals overlap — the "on" stop wins, which is what the
-    union of a set of intervals means.
-    """
-    stops = [(0.0, _BLACK)]
-    for start, end in sorted(intervals):
-        stops.extend([
-            (start - fade, _BLACK),
-            (start, _WHITE),
-            (end, _WHITE),
-            (end + fade, _BLACK),
-        ])
-    stops.append((1.0, _BLACK))
-
-    cleaned = []
-    for position, color in stops:
-        position = min(1.0, max(0.0, position))
-        if cleaned and position <= cleaned[-1][0] + epsilon:
-            if color == _WHITE:
-                cleaned[-1] = (cleaned[-1][0], _WHITE)
-            continue
-        cleaned.append((position, color))
-    return cleaned
-
-
-def _band_stops(bands, softness):
-    return _mask_stops([(c - hw, c + hw) for c, hw in bands], softness)
-
-
-def _outline_stops(bands, softness, width):
-    intervals = []
-    for center, half_width in bands:
-        intervals.append((center - half_width - softness - width, center - half_width - softness))
-        intervals.append((center + half_width + softness, center + half_width + softness + width))
-    return _mask_stops(intervals, softness * 0.5)
-
-
-# -- marking parameter handling ------------------------------------------------------
-
-
-def _as_dicts(value):
-    return [value] if isinstance(value, dict) else list(value)
-
-
-def _fields(params, required, defaults, what):
-    """Validate one marking dict and fill in its defaults.
-
-    An unknown key is an error rather than a shrug. A misspelled key otherwise renders
-    perfectly and draws nothing, which is the most expensive failure mode in a pipeline
-    whose only feedback is looking at the picture.
-    """
-    unknown = sorted(set(params) - set(required) - set(defaults))
-    if unknown:
-        raise ValueError(f"{what}: unknown key(s) {unknown}; "
-                         f"expected {sorted(set(required) | set(defaults))}")
-    missing = sorted(k for k in required if k not in params)
-    if missing:
-        raise ValueError(f"{what}: missing key(s) {missing}")
-    values = dict(defaults)
-    values.update(params)
-    return values
-
-
-def _colored_groups(entries, default_color):
-    """Group (position, half_width[, color]) entries by colour, keeping order.
-
-    One ramp serves every entry of a colour, so the common case — a whole marking in one
-    colour — costs the same two nodes it always did, and a per-entry colour costs two
-    more only when it is actually used.
-    """
-    groups = []
-    for entry in entries:
-        position, half_width = float(entry[0]), float(entry[1])
-        color = tuple(entry[2]) if len(entry) > 2 else tuple(default_color)
-        for existing, members in groups:
-            if existing == color:
-                members.append((position, half_width))
-                break
-        else:
-            groups.append((color, [(position, half_width)]))
-    return groups
-
-
-# -- body coordinates ----------------------------------------------------------------
-
-
-class _Flank:
-    """The object-space coordinates every body marking is placed in.
-
-    `t` runs 0 at the nose to 1 at the tail base, `h` runs 0 at the belly to 1 at the
-    back, and both are warped by one shared noise field so marking edges are organic
-    rather than ruler-straight. Sharing a single warp matters where two markings meet:
-    they wobble together instead of shearing past each other.
-
-    `height` is the same vertical coordinate unwarped, which is what countershading
-    wants — a wobbling belly-to-back gradient reads as a dirty render, not as an animal.
-    """
-
-    def __init__(self, nt, coord, body_length, body_height, warp=0.05):
-        self.nt = nt
-        self.coord = coord
-        self.length = body_length
-        self._column = 0
-
-        nodes, links = nt.nodes, nt.links
-        separate = nodes.new("ShaderNodeSeparateXYZ")
-        separate.location = (-1000, 200)
-        links.new(coord.outputs["Object"], separate.inputs["Vector"])
-        self.object = coord.outputs["Object"]
-
-        height = nodes.new("ShaderNodeMapRange")
-        height.location = (-820, 200)
-        _set(height, "From Min", -body_height)
-        _set(height, "From Max", body_height)
-        links.new(separate.outputs["Z"], height.inputs["Value"])
-        self.height = height.outputs["Result"]
-
-        # Object X maps to normalized nose->tail position; see Body.x().
-        position = nodes.new("ShaderNodeMapRange")
-        position.location = (-820, -160)
-        _set(position, "From Min", body_length * 0.5)
-        _set(position, "From Max", -body_length * 0.5)
-        links.new(separate.outputs["X"], position.inputs["Value"])
-
-        noise = nodes.new("ShaderNodeTexNoise")
-        noise.location = (-1000, -640)
-        _set(noise, "Scale", 3.0 / max(body_length, 1e-6))
-        _set(noise, "Detail", 2.0)
-        links.new(coord.outputs["Object"], noise.inputs["Vector"])
-
-        wobble = nodes.new("ShaderNodeMath")
-        wobble.location = (-800, -640)
-        wobble.operation = "MULTIPLY_ADD"
-        wobble.inputs[1].default_value = warp
-        wobble.inputs[2].default_value = -0.5 * warp
-        links.new(noise.outputs["Fac"], wobble.inputs[0])
-
-        self.t = _math(nt, "ADD", position.outputs["Result"], wobble.outputs["Value"],
-                       (-620, -400))
-        self.h = _math(nt, "ADD", self.height, wobble.outputs["Value"], (-620, 60))
-        # Height expressed in body lengths, so an angle in the (t, z) plane is the angle
-        # the stripe actually makes on screen rather than one distorted by body depth.
-        self.z_norm = _math(nt, "MULTIPLY", separate.outputs["Z"],
-                            1.0 / max(body_length, 1e-6), (-820, -60))
-
-    def slot(self, row=-40):
-        """Node position for the next marking layer.
-
-        Positions only matter when someone opens the generated .blend by hand, but a
-        stack of ten mix nodes at the same coordinate is unreadable when they do.
-        """
-        self._column += 1
-        return (-200 + 180 * self._column, row)
-
-
-def _confine(nt, flank, mask, t_range=None, h_range=None, fade=0.04, location=(-400, -1000)):
-    """Restrict a mask to a span of body position and/or body height."""
-    for value, span in ((flank.t, t_range), (flank.h, h_range)):
-        if not span:
-            continue
-        limit = _ramp_node(nt, value, _mask_stops([tuple(span)], fade), location)
-        mask = _math(nt, "MULTIPLY", mask, limit, (location[0] + 180, location[1]))
-        location = (location[0], location[1] - 200)
-    return mask
-
-
-# -- markings ------------------------------------------------------------------------
-
-
-def _add_bands(nt, flank, base_color, bands, color, softness, outline_color, outline_width):
-    """Vertical bars placed by nose->tail position, each with a darker outline."""
-    for group_color, members in _colored_groups(bands, color):
-        mask = _ramp_node(nt, flank.t, _band_stops(members, softness), (-420, -200))
-        base_color = _mix_color(nt, base_color, mask, group_color, flank.slot())
-
-    if outline_width > 0.0:
-        plain = [(float(b[0]), float(b[1])) for b in bands]
-        mask = _ramp_node(nt, flank.t, _outline_stops(plain, softness, outline_width),
-                          (-420, -560))
-        base_color = _mix_color(nt, base_color, mask, outline_color, flank.slot())
-    return base_color
-
-
-def _add_stripes(nt, flank, base_color, stripes, color, softness):
-    """Longitudinal stripes placed by body height, 0 at the belly and 1 at the back."""
-    for group_color, members in _colored_groups(stripes, color):
-        mask = _ramp_node(nt, flank.h, _band_stops(members, softness), (-420, 120))
-        base_color = _mix_color(nt, base_color, mask, group_color, flank.slot())
-    return base_color
-
-
-def _add_diagonals(nt, flank, base_color, entries):
-    """Parallel stripes ruled across the flank at an angle — the emperor angelfish.
-
-    Angle is measured from the long axis, so 0 rules the body into longitudinal stripes
-    and 90 into vertical bars. Spacing and the stripe's own width are in body lengths,
-    which keeps a ruling looking the same on a 6cm fish and a 30cm one.
-    """
-    for params in _as_dicts(entries):
-        p = _fields(params, ("color",),
-                    dict(angle=25.0, spacing=0.075, width=0.45, softness=0.18,
-                         t_range=None, h_range=None),
-                    "diagonal_stripes")
-        theta = radians(p["angle"])
-        spacing = max(float(p["spacing"]), 1e-4)
-
-        along = _math(nt, "MULTIPLY", flank.t, sin(theta), (-620, -760))
-        across = _math(nt, "MULTIPLY", flank.z_norm, cos(theta), (-620, -860))
-        phase = _math(nt, "ADD", along, across, (-440, -800))
-        # WRAP turns the ruling coordinate into one sawtooth per stripe, so a single
-        # ramp draws every stripe: the periodicity is in the coordinate, not the ramp.
-        cell = nt.nodes.new("ShaderNodeMath")
-        cell.location = (-260, -800)
-        cell.operation = "WRAP"
-        nt.links.new(phase, cell.inputs[0])
-        cell.inputs[1].default_value = spacing
-        cell.inputs[2].default_value = 0.0
-        repeat = _math(nt, "DIVIDE", cell.outputs[0], spacing, (-80, -800))
-
-        half = 0.5 * min(max(float(p["width"]), 0.02), 0.96)
-        mask = _ramp_node(nt, repeat, _mask_stops([(0.5 - half, 0.5 + half)],
-                                                  half * float(p["softness"]) * 2.0),
-                          (100, -800))
-        mask = _confine(nt, flank, mask, p["t_range"], p["h_range"], location=(280, -800))
-        base_color = _mix_color(nt, base_color, mask, p["color"], flank.slot())
-    return base_color
-
-
-def _spot_mask(nt, vector, cells, size, coverage, softness, seed, location=(-800, -1900)):
-    """A mask of round dots — one per Voronoi cell that survives the coverage draw.
-
-    `cells` is cells per unit of the incoming coordinate, `size` the dot radius as a
-    fraction of a cell. Scaling all three axes equally is what keeps a dot round; the
-    scale texture stretches its cells along the body deliberately, dots must not.
-    """
-    x, y = location
-    mapping = nt.nodes.new("ShaderNodeMapping")
-    mapping.location = (x, y)
-    mapping.inputs["Scale"].default_value = (cells, cells, cells)
-    # Seeding by translation keeps the pattern deterministic and gives every species its
-    # own draw from the same texture.
-    mapping.inputs["Location"].default_value = (seed * 13.37, seed * 7.71, seed * 3.13)
-    nt.links.new(vector, mapping.inputs["Vector"])
-
-    voronoi = nt.nodes.new("ShaderNodeTexVoronoi")
-    voronoi.location = (x + 180, y)
-    voronoi.feature = "F1"
-    voronoi.distance = "EUCLIDEAN"
-    _set(voronoi, "Scale", 1.0)
-    _set(voronoi, "Randomness", 1.0)
-    nt.links.new(mapping.outputs["Vector"], voronoi.inputs["Vector"])
-
-    radius = max(min(float(size), 0.7), 0.02)
-    edge = max(radius * (1.0 - min(max(float(softness), 0.0), 1.0)), 1e-3)
-    dot = _ramp_node(nt, voronoi.outputs["Distance"],
-                     [(0.0, _WHITE), (edge, _WHITE), (radius, _BLACK), (1.0, _BLACK)],
-                     (x + 360, y))
-
-    if coverage >= 1.0:
-        return dot
-    # The cell colour is a per-cell random; thresholding it thins the pattern out
-    # without moving the dots that remain.
-    keep = _ramp_node(nt, voronoi.outputs["Color"],
-                      _mask_stops([(0.0, float(coverage))], 1e-3), (x + 360, y - 220))
-    return _math(nt, "MULTIPLY", dot, keep, (x + 540, y - 110))
-
-
-def _add_spots(nt, flank, base_color, entries):
-    for params in _as_dicts(entries):
-        p = _fields(params, ("color",),
-                    dict(count=16.0, size=0.34, coverage=0.75, softness=0.35, seed=0.0,
-                         t_range=None, h_range=None),
-                    "spots")
-        mask = _spot_mask(nt, flank.object, float(p["count"]) / max(flank.length, 1e-6),
-                          p["size"], p["coverage"], p["softness"], float(p["seed"]))
-        mask = _confine(nt, flank, mask, p["t_range"], p["h_range"], location=(-100, -1900))
-        base_color = _mix_color(nt, base_color, mask, p["color"], flank.slot())
-    return base_color
-
-
-def _patch_mask(nt, coord, center, radii, softness=0.25, location=(-1000, -900)):
-    """A soft-edged mask over an ellipsoidal region of object space.
-
-    Everything placed this way — a mouth, a face mask, a saddle, the tang's paisley — is
-    a shading trick rather than geometry. At the size a fish occupies on screen a
-    modelled feature is never visible, but a face with nothing on it reads as unfinished
-    from every angle.
-
-    The distance is measured in all three axes, so to put the same blotch on both flanks
-    give the Y radius something like ten times the body's half-width. Merely exceeding
-    the half-width is not enough: the flank's own Y offset still eats into the distance
-    budget, and the mark fades to a smudge well inside its stated X and Z extent.
-    """
-    x, y = location
-    nodes, links = nt.nodes, nt.links
-
-    offset = nodes.new("ShaderNodeVectorMath")
-    offset.location = (x, y)
-    offset.operation = "SUBTRACT"
-    offset.inputs[1].default_value = center
-    links.new(coord.outputs["Object"], offset.inputs[0])
-
-    normalize = nodes.new("ShaderNodeVectorMath")
-    normalize.location = (x + 180, y)
-    normalize.operation = "DIVIDE"
-    normalize.inputs[1].default_value = radii
-    links.new(offset.outputs["Vector"], normalize.inputs[0])
-
-    distance = nodes.new("ShaderNodeVectorMath")
-    distance.location = (x + 360, y)
-    distance.operation = "LENGTH"
-    links.new(normalize.outputs["Vector"], distance.inputs[0])
-
-    mask = _ramp_node(nt, distance.outputs["Value"],
-                      [(0.0, _WHITE), (max(0.0, 1.0 - softness), _WHITE), (1.0, _BLACK)],
-                      (x + 540, y))
-    return mask
-
-
-def _add_patches(nt, flank, base_color, entries):
-    row = -900
-    for params in _as_dicts(entries):
-        p = _fields(params, ("center", "radii", "color"), dict(softness=0.25), "patches")
-        mask = _patch_mask(nt, flank.coord, p["center"], p["radii"], p["softness"],
-                           (-1000, row))
-        base_color = _mix_color(nt, base_color, mask, p["color"], flank.slot())
-        row -= 220
-    return base_color
-
-
-def _add_split(nt, flank, base_color, params):
-    """A two-tone body: everything behind `t` takes the second colour.
-
-    `hardness` 1 is a knife edge and 0 blends the two tones across most of the body,
-    which is the difference between a gramma and a hawkfish.
-    """
-    p = _fields(params, ("color",), dict(t=0.5, hardness=0.6), "split")
-    fade = (1.0 - min(max(float(p["hardness"]), 0.0), 1.0)) * 0.35
-    center = float(p["t"])
-    stops = [(max(0.0, min(center - fade, 0.998)), _BLACK),
-             (min(1.0, max(center + fade, 0.999)), _WHITE)]
-    mask = _ramp_node(nt, flank.t, stops, (-420, 320), interpolation="EASE")
-    return _mix_color(nt, base_color, mask, p["color"], flank.slot())
+from .markings import (  # noqa: F401  (_ramp/_set are re-exported for surfaces.py)
+    _BLACK, _WHITE, _Flank, _add_bands, _add_diagonals, _add_eye_ring, _add_patches,
+    _add_split, _add_spots, _add_stripes, _as_dicts, _fields, _mask_stops, _math,
+    _mix_color, _patch_mask, _ramp, _ramp_node, _set, _spot_mask,
+)
 
 
 def fish_material(
@@ -455,6 +44,7 @@ def fish_material(
     split=None,
     mouth=None,
     mouth_color=(0.10, 0.035, 0.025),
+    eye_ring=None,
     roughness=0.44,
     roughness_variation=0.16,
     mottle=0.12,
@@ -480,6 +70,10 @@ def fish_material(
       the Banggai cardinal's white flecks fall across its black bars.
     * `patches` last, because they are placed by hand for a reason: a face mask or a
       saddle is meant to cover whatever is underneath it.
+
+    `mouth` and `eye_ring` are drawn after all of those, on the same reasoning: they
+    belong to a feature that exists at a fixed place on the head, so nothing scattered
+    over the flank may cross them.
     """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -524,6 +118,8 @@ def fish_material(
         center, radii = mouth
         mask = _patch_mask(nt, coord, center, radii, location=(-1000, -680))
         base_color = _mix_color(nt, base_color, mask, mouth_color, flank.slot())
+    if eye_ring:
+        base_color = _add_eye_ring(nt, flank, base_color, eye_ring, body_length)
 
     if mottle > 0.0:
         # Low-frequency tonal drift. A perfectly even albedo is one of the strongest
@@ -624,9 +220,35 @@ def fish_material(
     return mat
 
 
-def fin_material(name, color, tip_color=None, edge_color=None, edge_width=0.10,
-                 opacity=0.92, spots=None, ray_count=26.0, ray_contrast=0.5,
-                 roughness=0.52, translucency=0.08):
+def _along_stops(entries, color, tip_color):
+    """Split `along_colors` into the root ramp and the tip ramp it implies.
+
+    An entry is `(u, color)` or `(u, color, tip_color)`. Omitting the entry's tip colour
+    falls back to the material's own `tip_color`, and to the entry's colour when there
+    isn't one — exactly the rule the constant case already follows.
+    """
+    root, tip, previous = [], [], None
+    for entry in entries:
+        u = float(entry[0])
+        if not 0.0 <= u <= 1.0:
+            raise ValueError(f"along_colors: u must be in 0..1, got {u}")
+        if previous is not None and u <= previous:
+            raise ValueError("along_colors: positions must strictly increase along the "
+                             f"root, got {u} after {previous}")
+        previous = u
+        base = tuple(entry[1])
+        end = tuple(entry[2]) if len(entry) > 2 else (tuple(tip_color) if tip_color
+                                                     else base)
+        root.append((u, (*base, 1.0)))
+        tip.append((u, (*end, 1.0)))
+    if not root:
+        raise ValueError("along_colors: needs at least one (u, color) stop")
+    return root, tip
+
+
+def fin_material(name, color, tip_color=None, along_colors=None, edge_color=None,
+                 edge_width=0.10, opacity=0.92, spots=None, ray_count=26.0,
+                 ray_contrast=0.5, roughness=0.52, translucency=0.08):
     """A fin membrane: root-to-tip gradient, bright margin, fin rays, optional spots.
 
     Colour is driven by the fin's own UV, whose V runs 0 at the root to 1 at the
@@ -636,6 +258,17 @@ def fin_material(name, color, tip_color=None, edge_color=None, edge_width=0.10,
     later joined into one mesh, so there is no per-fin origin left to measure from. The
     UV is written by the same grid that builds the membrane, travels through solidify
     and subdivision, and survives the join because every part writes into one layer.
+
+    So `color` is the membrane at the root, `tip_color` at the trailing edge, and
+    `along_colors` optionally makes both of those a function of U instead of constants:
+    a list of `(u, color)` or `(u, color, tip_color)` stops, interpolated linearly, held
+    flat outside the first and last stop. Put two stops close together for a hard
+    transition and far apart for a wash — the same explicit-placement idea the body
+    markings use, rather than a blend the caller has to tune backwards into.
+
+    That is what a single continuous fin spanning a two-tone body needs: one dorsal
+    running the length of a royal gramma has to be violet where the body is violet and
+    gold where the body is gold, and it is one fin, so it cannot be two materials.
 
     Fins were previously pale and half transparent, which made a tall dorsal disappear
     against the body. A reef fish's fins are part of the animal: mostly opaque, with the
@@ -672,10 +305,28 @@ def fin_material(name, color, tip_color=None, edge_color=None, edge_width=0.10,
     ray_shade = _ramp_node(nt, rays.outputs["Fac"],
                            [(0.0, (lo, lo, lo, 1.0)), (1.0, _WHITE)], (-540, -220))
 
-    membrane = _ramp_node(nt, out,
-                          [(0.0, (*color, 1.0)),
-                           (1.0, (*(tip_color or color), 1.0))],
-                          (-540, 160), interpolation="EASE")
+    if along_colors:
+        root_stops, tip_stops = _along_stops(along_colors, color, tip_color)
+        root_color = _ramp_node(nt, along, root_stops, (-740, 380))
+        tip_at_u = _ramp_node(nt, along, tip_stops, (-740, 180))
+        # The constant case is a ColorRamp on V with EASE interpolation, so the U-varying
+        # case reproduces that curve as an explicit factor rather than blending linearly
+        # and quietly giving the two paths different gradients.
+        reach = _ramp_node(nt, out, [(0.0, _BLACK), (1.0, _WHITE)], (-740, -20),
+                           interpolation="EASE")
+        blend = nodes.new("ShaderNodeMix")
+        blend.location = (-540, 160)
+        blend.data_type = "RGBA"
+        blend.blend_type = "MIX"
+        links.new(reach, blend.inputs["Factor"])
+        links.new(root_color, blend.inputs[6])
+        links.new(tip_at_u, blend.inputs[7])
+        membrane = blend.outputs[2]
+    else:
+        membrane = _ramp_node(nt, out,
+                              [(0.0, (*color, 1.0)),
+                               (1.0, (*(tip_color or color), 1.0))],
+                              (-540, 160), interpolation="EASE")
 
     base_color = nodes.new("ShaderNodeMix")
     base_color.location = (-300, 60)

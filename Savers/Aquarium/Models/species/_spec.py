@@ -11,8 +11,29 @@ arbitrary it was arrived at by rendering and adjusting.
 
 
 class Fin:
+    """One fin's shape, and optionally its own colour and styling.
+
+    Shape is `span`/`rake`/`curl`/`flare` over u along the root; see
+    `saverlib.fins.build_fin`, which documents which of them actually controls what on a
+    short root.
+
+    `color` and `style` override the species-level `fin_color`/`fin_style` — or
+    `caudal_color`/`caudal_style` for the caudal — for this fin alone. Both default to
+    the species value, and `style` **replaces** it rather than merging into it, the same
+    way `caudal_style` always has: a fin that names a style states the whole style, so
+    reading a species file never means holding two dicts in your head at once.
+
+    This exists because fins are not interchangeable. A bannerfish's rear dorsal is
+    yellow while its banner is white, a flame angelfish's pectorals stay orange while
+    its dorsal and anal go purple-black, and a damselfish's pectorals are nearly clear
+    while nothing else is. Every one of those is one fin differing from its neighbours.
+
+    Fins sharing a colour and style share one material, so giving four fins the same
+    override still costs one `fin_material`.
+    """
+
     def __init__(self, t0, t1, span, rake=0.0, curl=0.0, flare=0.0, sink=0.15,
-                 samples_u=18, samples_v=10):
+                 samples_u=18, samples_v=10, color=None, style=None):
         self.t0 = t0
         self.t1 = t1
         self.span = span
@@ -22,6 +43,8 @@ class Fin:
         self.sink = sink
         self.samples_u = samples_u
         self.samples_v = samples_v
+        self.color = color
+        self.style = style
 
 
 class Species:
@@ -49,6 +72,7 @@ class Species:
         patches=None,
         split=None,
         mouth=None,
+        mouth_color=(0.10, 0.035, 0.025),
         scale_count=55.0,
         scale_depth=0.3,
         dorsal=None,
@@ -88,6 +112,11 @@ class Species:
         self.patches = patches                # [dict]: centre/radii/colour in metres
         self.split = split                    # dict: t/colour/hardness
         self.mouth = mouth                    # ((cx, cy, cz), (rx, ry, rz)) in metres
+        # The mouth's own colour. The default is a dark red gape, which is right on a
+        # clownfish and wrong on anything whose lips are pale or whose skin is not warm:
+        # left unsettable it rendered as a pink smear on an emperor angelfish and on a
+        # moray, and both were driven to cover it with a `patches` entry instead.
+        self.mouth_color = mouth_color
         self.scale_count = scale_count
         self.scale_depth = scale_depth
         self.dorsal = dorsal
@@ -97,10 +126,16 @@ class Species:
         self.caudal = caudal
         self.caudal_spread = caudal_spread
         self.caudal_color = caudal_color or fin_color
-        # Extra keyword arguments for `fin_material`: tip_color, edge_color, edge_width,
-        # opacity, spots. The tail inherits the body fins' styling unless it asks for
-        # its own, since a fish whose fins are edged usually has an edged tail too.
+        # Extra keyword arguments for `fin_material`: tip_color, along_colors,
+        # edge_color, edge_width, opacity, spots, ray_count, ray_contrast. The tail
+        # inherits the body fins' styling unless it asks for its own, since a fish whose
+        # fins are edged usually has an edged tail too. Either can be overridden on a
+        # single fin with `Fin(color=..., style=...)`.
         self.fin_style = fin_style
         self.caudal_style = fin_style if caudal_style is None else caudal_style
         self.eye = eye                        # (t, height 0=flank 1=spine, radius/length)
+        # A ring of skin round the eye socket: an RGB colour, or a dict adding `width`
+        # (ring thickness as a fraction of the eye's radius, default 0.55) and
+        # `softness`. Its position and size come from `eye` — a species never restates
+        # them. Off unless asked for.
         self.eye_ring = eye_ring

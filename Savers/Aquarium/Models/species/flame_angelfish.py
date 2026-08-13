@@ -28,6 +28,10 @@ FLAME_ANGELFISH = Species(
         dict(center=(-0.0205, 0.0, 0.0035), radii=(0.0017, 0.100, 0.0108),
              color=(0.012, 0.008, 0.016), softness=0.28),
     ],
+    # The purple-black dorsal and anal, barred and edged in electric blue. This is the
+    # species default; the paired fins below opt out of it entirely, which is the point
+    # — on this fish the vertical fins and the paired fins are not the same colour, and
+    # before per-fin styling the paired ones had to be dragged into the purple-black too.
     fin_style=dict(tip_color=(0.025, 0.010, 0.10), edge_color=(0.020, 0.14, 0.50),
                    edge_width=0.10, opacity=0.96, ray_contrast=1.65),
     caudal_style=dict(tip_color=(0.96, 0.29, 0.045), edge_color=(0.36, 0.035, 0.025),
@@ -43,12 +47,21 @@ FLAME_ANGELFISH = Species(
              span=[(0.0, 0.0035), (0.22, 0.0105), (0.58, 0.0135), (0.84, 0.0095),
                    (1.0, 0.0030)],
              rake=0.003, sink=0.22, samples_u=20),
+    # Orange, translucent pectorals — they fan in front of the flank and have to read as
+    # part of the orange body rather than as a piece of the dark dorsal that came loose.
     pectoral=Fin(t0=0.28, t1=0.39,
                  span=[(0.0, 0.0035), (0.48, 0.0105), (1.0, 0.0035)],
-                 rake=0.0035, curl=0.0025, sink=0.30, samples_u=12, samples_v=10),
+                 rake=0.0035, curl=0.0025, sink=0.30, samples_u=12, samples_v=10,
+                 color=(0.88, 0.26, 0.020),
+                 style=dict(tip_color=(0.97, 0.52, 0.080), opacity=0.68,
+                            ray_contrast=0.45)),
+    # The pelvics are flame orange like the belly they hang from, not blue-black.
     pelvic=Fin(t0=0.34, t1=0.43,
                span=[(0.0, 0.0025), (0.5, 0.0075), (1.0, 0.0025)],
-               rake=0.002, sink=0.35, samples_u=10),
+               rake=0.002, sink=0.35, samples_u=10,
+               color=(0.82, 0.11, 0.010),
+               style=dict(tip_color=(0.95, 0.33, 0.035), opacity=0.94,
+                          ray_contrast=0.6)),
     caudal=Fin(t0=0.0, t1=1.0,
                span=[(0.0, 0.0115), (0.30, 0.0148), (0.50, 0.0155),
                      (0.70, 0.0148), (1.0, 0.0115)],

@@ -63,17 +63,15 @@ def build(spec):
         patches=spec.patches,
         split=spec.split,
         mouth=spec.mouth,
+        mouth_color=spec.mouth_color,
+        eye_ring=_eye_ring(spec, body),
     )
     assign(body_obj, skin)
 
-    membrane = fin_material(f"{spec.name}_fin", spec.fin_color, **(spec.fin_style or {}))
-    same_tail = (spec.caudal_color == spec.fin_color
-                 and spec.caudal_style == spec.fin_style)
-    tail_membrane = membrane if same_tail else fin_material(
-        f"{spec.name}_caudal", spec.caudal_color, **(spec.caudal_style or {}))
-    for obj, is_caudal in _build_fins(spec, body):
+    membranes = _fin_materials(spec)
+    for obj, kind, fin in _build_fins(spec, body):
         obj.parent = root
-        assign(obj, tail_membrane if is_caudal else membrane)
+        assign(obj, membranes(kind, fin))
 
     iris = eye_material(f"{spec.name}_eye")
     for obj in _build_eyes(spec, body):
@@ -81,6 +79,56 @@ def build(spec):
         assign(obj, iris)
 
     return root
+
+
+def _fin_materials(spec):
+    """Resolve each fin to its membrane material, one material per distinct look.
+
+    A fin takes the species' `fin_color`/`fin_style` — `caudal_color`/`caudal_style` for
+    the tail — unless it overrides either itself. Fins that end up asking for the same
+    pair share a material, so the common case of every fin looking alike still builds
+    exactly one, and a species that styles four fins separately builds four rather than
+    one per fin instance.
+    """
+    built = []
+
+    def resolve(kind, fin):
+        caudal = kind == "caudal"
+        default_color = spec.caudal_color if caudal else spec.fin_color
+        default_style = spec.caudal_style if caudal else spec.fin_style
+        color = tuple(default_color if fin.color is None else fin.color)
+        style = default_style if fin.style is None else fin.style
+        for known_color, known_style, material in built:
+            if known_color == color and known_style == style:
+                return material
+        material = fin_material(f"{spec.name}_{kind}_fin", color, **(style or {}))
+        built.append((color, style, material))
+        return material
+
+    return resolve
+
+
+def _eye_placement(spec, body):
+    """Where the eye sits on the body surface, and how big it is."""
+    t, height, radius_frac = spec.eye
+    return body.surface_point(t, height * (math.pi / 2.0)), radius_frac * spec.length
+
+
+def _eye_ring(spec, body):
+    """Turn `Species.eye_ring` into the annulus `fish_material` draws.
+
+    The species gives a colour (or a colour plus a width); the placement is derived from
+    `Species.eye` so the ring cannot drift away from the eye it belongs to when the eye
+    moves.
+    """
+    if not spec.eye_ring:
+        return None
+    params = dict(spec.eye_ring) if isinstance(spec.eye_ring, dict) \
+        else {"color": spec.eye_ring}
+    point, radius = _eye_placement(spec, body)
+    params.setdefault("center", (point.x, 0.0, point.z))
+    params.setdefault("radius", radius)
+    return params
 
 
 def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
@@ -107,8 +155,14 @@ def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
 
 
 def _build_fins(spec, body):
-    """Return (object, is_caudal) pairs. Fins get one subdivision level and a very thin
-    solidify: at two levels the modifier stack inflates a flat membrane into a pillow."""
+    """Return (object, kind, Fin) triples, `kind` being the species field the fin came
+    from. Fins get one subdivision level and a very thin solidify: at two levels the
+    modifier stack inflates a flat membrane into a pillow.
+
+    The kind travels with the object because it is what picks the fin's material: the
+    caudal falls back to the species' tail colours and everything else to its fin
+    colours, and the two mirrored copies of a paired fin must land on one material.
+    """
     fins = []
     up = Vector((0.0, 0.0, 1.0))
     down = Vector((0.0, 0.0, -1.0))
@@ -121,7 +175,7 @@ def _build_fins(spec, body):
             root=dorsal_root(body, f.t0, f.t1, sink=f.sink),
             out_dir=lambda u: up, span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), False, f))
+        ), "dorsal", f))
 
     if spec.anal:
         f = spec.anal
@@ -130,7 +184,7 @@ def _build_fins(spec, body):
             root=ventral_root(body, f.t0, f.t1, sink=f.sink),
             out_dir=lambda u: down, span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), False, f))
+        ), "anal", f))
 
     if spec.caudal:
         f = spec.caudal
@@ -140,7 +194,7 @@ def _build_fins(spec, body):
             out_dir=lambda u: Vector((-1.0, 0.0, 0.0)),
             span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), True, f))
+        ), "caudal", f))
 
     # Paired fins are mirrored onto both flanks.
     for attr, theta_frac, direction in (
@@ -160,10 +214,10 @@ def _build_fins(spec, body):
                 span=f.span, rake=f.rake, curl=f.curl * side, flare=f.flare,
                 curl_axis=(0, 0, 1), samples_u=f.samples_u, samples_v=f.samples_v,
                 **common,
-            ), False, f))
+            ), attr, f))
 
-    return [(_fin_uv(obj, f.samples_u, f.samples_v), is_caudal)
-            for obj, is_caudal, f in fins]
+    return [(_fin_uv(obj, f.samples_u, f.samples_v), kind, f)
+            for obj, kind, f in fins]
 
 
 def _bake_modifiers(obj):
@@ -214,10 +268,21 @@ def join_parts(root, name):
 
 
 def _build_eyes(spec, body):
-    t, height, radius_frac = spec.eye
-    theta = height * (math.pi / 2.0)
-    radius = radius_frac * spec.length
-    point = body.surface_point(t, theta)
+    """Two spheres seated into the head, sized by `Species.eye`.
+
+    The trap in here is the 0.62 below: the eye's centre is pushed only 62% of the way
+    out to the flank, so the sphere has to be *wider than that remaining 38%* to show at
+    all. On a narrow head — a snout, a small fish, anything whose half-width at the eye's
+    t is a couple of millimetres — a plausible-sounding radius is swallowed whole and the
+    face renders blank, which looks like a missing object rather than a small number.
+
+    So the radius is a fraction of body *length*, not of the local width, and if a face
+    comes back with no eyes on it the fix is to raise `radius/length` (the third element
+    of `eye`) rather than to go hunting for a build failure. Lowering the second element
+    moves the eye down the flank, where the body is at its widest and the sphere has the
+    most room; putting it up near the spine is the same problem again.
+    """
+    point, radius = _eye_placement(spec, body)
 
     eyes = []
     for side in (1.0, -1.0):
