@@ -266,9 +266,14 @@ guard let saverView = saverType.init(frame: frame, isPreview: options.isPreview)
 // hostile to the workflow it exists to support. `.accessory` also keeps it out of the Dock
 // and the app switcher.
 //
-// The window must still be on screen and composited: the screenshot path captures it through
-// ScreenCaptureKit, so ordering it front without focus is the correct trade, and hiding it
-// off-screen would risk it never being composited at all.
+// The window must still be composited, because the screenshot path captures it through
+// ScreenCaptureKit — but it does not have to be *visible to the developer*. The capture uses
+// `SCContentFilter(desktopIndependentWindow:)`, which reads that one window's own content and
+// is therefore indifferent to anything stacked in front of it. So the window is parked at
+// desktop level during a capture: still rendered, still captured, but permanently behind every
+// real window instead of flashing into the middle of the screen on every run. Not stealing
+// focus was never sufficient — a window that merely appears, several times a minute, across
+// several concurrent agents, is its own kind of hostile.
 application.setActivationPolicy(options.screenshotPath == nil ? .regular : .accessory)
 
 // A borderless screenshot window makes the requested dimensions describe only saver content.
@@ -286,7 +291,9 @@ if options.screenshotPath == nil {
     window.makeKeyAndOrderFront(nil)
     application.activate(ignoringOtherApps: true)
 } else {
-    // Scripted capture: visible and composited, but never key and never activated.
+    // Scripted capture: composited so it can be captured, but sunk beneath every ordinary
+    // window so it never covers what the developer is looking at, and never key or activated.
+    window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
     window.orderFrontRegardless()
 }
 saverView.startAnimation()

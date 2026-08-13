@@ -738,9 +738,15 @@ DIVING_SUIT = Prop(
     footprint=0.58,
     height=1.65,
     tilt_range=(-3.0, 3.0),
-    # A diving suit is a known size. Letting the tank scale it freely would produce a
-    # three-metre one standing next to a fish, which is the one error nobody forgives.
-    scale_range=(0.94, 1.06),
+    # Placed at roughly two thirds of true size, which is deliberate and worth defending.
+    # Authored at human scale it stood 1.65 m — the second tallest thing in the library,
+    # over the 1.3 m arch and nearly twice the wreck's height — and a figure reads far larger
+    # than terrain of the same size, so it towered over the scene it was meant to decorate.
+    # The rest of the library is ornament scaled to the frame rather than to life: the wreck
+    # is a boat in miniature and the coral heads are a third of a metre. Keeping the one
+    # man-made figure at true scale made it the ruler that showed everything else up.
+    # Narrow range still, because a diver is a *recognisable* size even when not a true one.
+    scale_range=(0.55, 0.68),
     weight=0.45,
     max_per_scene=1,
     min_spacing=1.25,

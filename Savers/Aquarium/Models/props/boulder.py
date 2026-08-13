@@ -32,8 +32,13 @@ BOULDER = Prop(
     name="boulder",
     build=build,
     category="rock",
-    footprint=0.26,
-    height=0.34,
+    # Measured off the built mesh at scale 1.0: 0.592 x 0.576 x 0.433 m, so the half-extent
+    # is 0.296 and the circumscribed radius 0.41. Declared between the two: a boulder is
+    # round enough that the circumscribed radius would waste a lot of seabed, and rock
+    # meeting rock is the one overlap that reads as natural rather than as a mistake.
+    # The previous 0.26 was under the half-extent, which let neighbours genuinely encroach.
+    footprint=0.31,
+    height=0.44,
     tilt_range=(-8.0, 8.0),
     scale_range=(0.55, 1.60),
     weight=2.4,
