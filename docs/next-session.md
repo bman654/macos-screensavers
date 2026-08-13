@@ -97,6 +97,11 @@ Each is commented where it happens; this is the index.
 - **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
 - **Branching density is not what makes coral read as coral.** Internode length is: a tree's
   shortens at every fork, a gorgonian's stays constant.
+- **`displace` with a feature size near the mesh's own edge length facets instead of
+  undulating.** Sand drifts at `feature_size=0.34, strength=0.30` came out as crumpled foil;
+  `strength=0.15, feature_size=0.70` on a `detail=5` sphere reads as sand. Reach for a
+  *broader, weaker* displacement than instinct suggests, and add mesh resolution before
+  adding noise frequency.
 - **`obj.matrix_world` is lazy, so `obj.matrix_world = m @ obj.matrix_world` silently discards
   a `.location` set in the same tick.** It collapsed four boot pieces into a flat stack at
   z = 0. Same trap as spike 003's note about `scene_bounds` seeing stale matrices: force the
