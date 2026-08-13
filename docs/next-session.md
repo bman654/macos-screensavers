@@ -59,6 +59,10 @@ the parameters.
 - **`studio_lights` runs about a stop hot for large matte props**; `build_prop.py` compensates
   with `exposure=-2.0` rather than falsifying albedos. A calibration pass would be better.
 - **`gallery.build_sheet` fails on a single tile** (`xstack` "Result too large").
+- **`SceneKitProbe` frames on X extent**, so it crops a tall prop to its middle. Harmless for
+  fish, wrong for the 1.65 m diving suit and the 2.6 m kelp. It wants a `--fit` flag.
+- **`studio.render_views` cannot frame a height band**, so tall props need a throwaway detail
+  render to judge anything but the whole silhouette. Two prop authors wrote one independently.
 
 ## Traps that cost real time this session
 
@@ -86,6 +90,10 @@ Each is commented where it happens; this is the index.
 - **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
 - **Branching density is not what makes coral read as coral.** Internode length is: a tree's
   shortens at every fork, a gorgonian's stays constant.
+- **`obj.matrix_world` is lazy, so `obj.matrix_world = m @ obj.matrix_world` silently discards
+  a `.location` set in the same tick.** It collapsed four boot pieces into a flat stack at
+  z = 0. Same trap as spike 003's note about `scene_bounds` seeing stale matrices: force the
+  depsgraph, or compose the transform rather than reading back what you just wrote.
 - **`rock_material` has a brightness floor around 0.19 median luminance**, so albedo stops
   buying darkness long before black. Measured through the prop builder's own `exposure=-2.0`:
   base 0.050 renders at 0.440, 0.010 at 0.258, and 0.002 still at 0.192 — a 25x albedo range
