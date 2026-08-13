@@ -104,7 +104,9 @@ def bake_atlas_objects(
     Each object is unwrapped into a disjoint, padded tile in one shared UV space. Blender
     then bakes the complete selected object set into each shared image in one operator call.
 
-    Returns absolute paths keyed by ``base_color``, ``roughness``, and ``normal``.
+    Returns absolute paths keyed by ``base_color``, ``roughness``, and ``normal``. A
+    ``metalness`` path is included only when the source materials cannot be represented by
+    one scalar metallic value.
     """
     objects = list(objects)
     _validate_inputs(objects, resolution, margin, uv_margin)
@@ -115,6 +117,13 @@ def bake_atlas_objects(
     atlas_name = _safe_name(atlas_name or objects[0].name)
 
     _unwrap(objects, uv_margin, margin, resolution)
+
+    materials = list(dict.fromkeys(
+        material
+        for obj in objects
+        for material in _source_materials(obj)
+    ))
+    metallic = _uniform_metallic(materials)
 
     images = {
         "base_color": _new_image(
@@ -127,26 +136,24 @@ def bake_atlas_objects(
             f"{atlas_name}_normal", resolution, "Non-Color"
         ),
     }
+    if metallic is None:
+        images["metalness"] = _new_image(
+            f"{atlas_name}_metalness", resolution, "Non-Color"
+        )
 
     scene = bpy.context.scene
     scene.render.bake.margin = margin
     scene.render.bake.margin_type = "EXTEND"
-    scene.render.bake.use_pass_direct = False
-    scene.render.bake.use_pass_indirect = False
-    scene.render.bake.use_pass_color = True
     scene.render.bake.normal_space = "TANGENT"
 
-    materials = list(dict.fromkeys(
-        material
-        for obj in objects
-        for material in _source_materials(obj)
-    ))
-    for kind, bake_type in (
-        ("base_color", "DIFFUSE"),
-        ("roughness", "ROUGHNESS"),
-        ("normal", "NORMAL"),
-    ):
-        _bake(objects, materials, images[kind], bake_type, margin)
+    # A DIFFUSE colour bake is not authored albedo for a metal: the metallic fraction has no
+    # diffuse lobe, so precisely the colour which should tint its reflection disappears.
+    # Emission evaluates the same colour graph without involving any BSDF lobe or lighting.
+    _bake_input(objects, materials, images["base_color"], "Base Color", margin)
+    _bake(objects, materials, images["roughness"], "ROUGHNESS", margin)
+    if "metalness" in images:
+        _bake_input(objects, materials, images["metalness"], "Metallic", margin)
+    _bake(objects, materials, images["normal"], "NORMAL", margin)
 
     paths = {}
     for kind, image in images.items():
@@ -156,7 +163,7 @@ def bake_atlas_objects(
         image.save()
         paths[kind] = path
 
-    material = _atlas_material(atlas_name, images)
+    material = _atlas_material(atlas_name, images, metallic)
     for obj in objects:
         obj.data.materials.clear()
         obj.data.materials.append(material)
@@ -330,6 +337,39 @@ def _source_materials(obj):
     return list(dict.fromkeys(materials))
 
 
+def _principled(material):
+    outputs = [
+        node
+        for node in material.node_tree.nodes
+        if node.type == "OUTPUT_MATERIAL" and node.is_active_output
+    ]
+    if len(outputs) != 1:
+        raise ValueError(f"material '{material.name}' needs one active Material Output")
+    surface = outputs[0].inputs["Surface"]
+    if not surface.is_linked or surface.links[0].from_node.type != "BSDF_PRINCIPLED":
+        raise ValueError(
+            f"material '{material.name}' must connect a Principled BSDF directly to Surface"
+        )
+    return outputs[0], surface.links[0].from_node
+
+
+def _uniform_metallic(materials):
+    """Return one scalar if every source has the same constant metallic input.
+
+    ``None`` means an atlas is required. This keeps the fourth map off ordinary dielectric
+    assets while preserving mixed materials and procedural corrosion masks.
+    """
+    values = []
+    for material in materials:
+        _, principled = _principled(material)
+        socket = principled.inputs["Metallic"]
+        if socket.is_linked:
+            return None
+        values.append(float(socket.default_value))
+    first = values[0]
+    return first if all(abs(value - first) <= 1e-6 for value in values[1:]) else None
+
+
 def _select_bake_target(materials, image):
     """Point every source material's active node at `image`, which is how the bake
     operator is told where to write. Returns the nodes so they can be taken back out."""
@@ -346,6 +386,45 @@ def _select_bake_target(materials, image):
         nodes.active = target
         targets.append((material, target))
     return targets
+
+
+def _bake_input(objects, materials, image, input_name, margin):
+    """Bake one Principled input as unlit data, restoring every source material."""
+    patches = []
+    try:
+        for material in materials:
+            output, principled = _principled(material)
+            nodes = material.node_tree.nodes
+            links = material.node_tree.links
+            surface = output.inputs["Surface"]
+            original_source = surface.links[0].from_socket
+            emission = nodes.new("ShaderNodeEmission")
+            emission.name = f"__bake_{input_name.lower().replace(' ', '_')}"
+            patches.append((material, emission, original_source, surface))
+
+            source = principled.inputs[input_name]
+            if source.is_linked:
+                links.new(source.links[0].from_socket, emission.inputs["Color"])
+            elif source.type == "RGBA":
+                emission.inputs["Color"].default_value = source.default_value
+            else:
+                value = float(source.default_value)
+                emission.inputs["Color"].default_value = (value, value, value, 1.0)
+            emission.inputs["Strength"].default_value = 1.0
+
+            links.remove(surface.links[0])
+            links.new(emission.outputs["Emission"], surface)
+
+        _bake(objects, materials, image, "EMIT", margin)
+    finally:
+        for material, emission, original_source, surface in reversed(patches):
+            nodes = material.node_tree.nodes
+            links = material.node_tree.links
+            if emission in nodes.values():
+                nodes.remove(emission)
+            for link in list(surface.links):
+                links.remove(link)
+            links.new(original_source, surface)
 
 
 def _bake(objects, materials, image, bake_type, margin):
@@ -371,7 +450,7 @@ def _bake(objects, materials, image, bake_type, margin):
             material.node_tree.nodes.remove(target)
 
 
-def _atlas_material(atlas_name, images):
+def _atlas_material(atlas_name, images, metallic):
     material = bpy.data.materials.new(f"{atlas_name}_atlas")
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -396,12 +475,21 @@ def _atlas_material(atlas_name, images):
     roughness.image = images["roughness"]
     links.new(roughness.outputs["Color"], principled.inputs["Roughness"])
 
+    if "metalness" in images:
+        metalness = nodes.new("ShaderNodeTexImage")
+        metalness.name = "Metalness Atlas"
+        metalness.location = (-420, -220)
+        metalness.image = images["metalness"]
+        links.new(metalness.outputs["Color"], principled.inputs["Metallic"])
+    else:
+        principled.inputs["Metallic"].default_value = metallic
+
     normal_texture = nodes.new("ShaderNodeTexImage")
     normal_texture.name = "Normal Atlas"
-    normal_texture.location = (-420, -260)
+    normal_texture.location = (-420, -440)
     normal_texture.image = images["normal"]
     normal = nodes.new("ShaderNodeNormalMap")
-    normal.location = (-40, -220)
+    normal.location = (-40, -400)
     normal.space = "TANGENT"
     links.new(normal_texture.outputs["Color"], normal.inputs["Color"])
     links.new(normal.outputs["Normal"], principled.inputs["Normal"])

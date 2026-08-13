@@ -23,7 +23,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from saverlib import (
-    TARNISH, VERDIGRIS, Noise, Profile, SweptTube, assign, beveled_box,
+    BRASS, TARNISH, VERDIGRIS, Noise, Profile, SweptTube, assign, beveled_box,
     bounding_radius, glass_material, metal_material, revolve, rock, rock_material,
     shade_smooth,
 )
@@ -617,17 +617,12 @@ def _materials(seed):
 
     There is no canvas material in `surfaces.py` and none was written. `wood_material` is
     the wrong shape — its grain is a directional streak along object X, which runs across a
-    limb swept along Z and turns a sleeve into planking. `rock_material` is the right shape
-    by accident: broad tonal drift, mid-frequency mottle and a roughness break-up are what
-    a heavy weave shows at this distance once `speckle` drops the mineral tell.
+    limb swept along Z and turns a sleeve into planking. `rock_material` has the broad tonal
+    drift, mid-frequency mottle and roughness break-up that heavy weave shows at this distance.
     """
-    # Tuned against the *baked* result, not the preview: the atlas bakes a diffuse albedo
-    # and the exported material is not metallic, so brass reads from colour alone. Hence a
-    # deliberately dull alloy rather than the `BRASS` constant — verdigris is near-black
-    # where it pits, and against polished brass that five-to-one value step came out of
-    # SceneKit as leopard print. Closing the value gap turns the same patches back into
-    # tarnish; the hue is what still says brass.
-    brass = metal_material(f"suit_brass_{seed}", size=0.22, base=(0.40, 0.265, 0.085),
+    # A true metal bake makes pre-dulling compound the blue environment tint. Corrosion
+    # supplies the age; brighter shared brass preserves the helmet's identifying highlight.
+    brass = metal_material(f"suit_brass_{seed}", size=0.22, base=BRASS,
                            corrosion=0.38, patina=VERDIGRIS, roughness=0.26,
                            algae=0.32, seed=seed)
     ground_brass = metal_material(f"suit_brass_low_{seed}", size=0.16,
