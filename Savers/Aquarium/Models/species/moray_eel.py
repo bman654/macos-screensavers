@@ -13,6 +13,10 @@ _BLOTCH = (0.008, 0.010, 0.005)
 
 MORAY_EEL = Species(
     name="moray_eel",
+    body_length_m=1.50,
+    school=(1, 1),
+    depth_band=(0.70, 1.00),
+    weight=0.2,
     length=0.280,
     # A ribbon: about 9x longer than it is deep. The depth is nearly constant from behind
     # the head to two-thirds back, because an eel has no peduncle to taper into — the

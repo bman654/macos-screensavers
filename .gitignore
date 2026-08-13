@@ -2,6 +2,13 @@ build/
 *.saver
 .DS_Store
 
+# Generated model library. Models are code — these are build outputs of
+# tools/build-library.py, not sources. Committing them would put ~35 MB into
+# history on every re-bake, and a re-bake is a normal part of the authoring loop.
+# Run tools/build-library.py before tools/build-saver.sh on a fresh clone.
+Savers/*/Assets/*.usdz
+Savers/*/Assets/*.json
+
 # Blender
 *.blend1
 *.blend2

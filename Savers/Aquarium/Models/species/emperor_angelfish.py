@@ -8,6 +8,10 @@ _YELLOW = (0.980, 0.720, 0.050)
 
 EMPEROR_ANGELFISH = Species(
     name="emperor_angelfish",
+    body_length_m=0.40,
+    school=(1, 1),
+    depth_band=(0.55, 0.95),
+    weight=0.35,
     length=0.155,
     # Deep oval, but a thick one: an angelfish is a slab, not the disc a tang is.
     top=[(0.00, 0.0090), (0.05, 0.0272), (0.14, 0.0400), (0.28, 0.0476),

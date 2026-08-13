@@ -7,6 +7,10 @@ _FLECK = (0.96, 0.97, 0.98)
 
 BANGGAI_CARDINALFISH = Species(
     name="banggai_cardinalfish",
+    body_length_m=0.08,
+    school=(5, 12),
+    depth_band=(0.30, 0.70),
+    weight=1.0,
     length=0.078,
     # Deep and knife-thin, with a big blunt head. The body is deliberately understated:
     # on this fish the silhouette is carried by the fins, and a deeper body would eat the

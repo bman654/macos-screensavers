@@ -8,6 +8,10 @@ _CHALK = (0.900, 0.895, 0.850)
 
 FOXFACE_RABBITFISH = Species(
     name="foxface_rabbitfish",
+    body_length_m=0.24,
+    school=(1, 2),
+    depth_band=(0.35, 0.80),
+    weight=0.6,
     length=0.155,
     # A deep compressed oval that runs forward into a long tapering snout: the profile
     # is still narrowing at t=0.16, which is where the "fox" face comes from.

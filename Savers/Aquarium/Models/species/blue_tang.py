@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 BLUE_TANG = Species(
     name="blue_tang",
+    body_length_m=0.25,
+    school=(2, 5),
+    depth_band=(0.15, 0.65),
+    weight=0.9,
     length=0.125,
     # Near-circular disc, extremely compressed laterally.
     top=[(0.00, 0.0050), (0.05, 0.0225), (0.15, 0.0345), (0.32, 0.0400),

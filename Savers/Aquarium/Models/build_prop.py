@@ -128,9 +128,14 @@ def _pose(specs):
 
 
 def _drop_to_floor():
-    """Seat the prop on z = 0 so the tank never has to guess where its bottom is."""
-    lo, _ = studio.scene_bounds()
-    if lo.z == 0.0:
+    """Seat the prop on z = 0 so the tank never has to guess where its bottom is.
+
+    Exact bounds, not `scene_bounds`: this number is the model's contract with the tank, and
+    a bounding-box approximation is a superset for anything rotated. A listing wreck was
+    exported floating 0.65 m over the seabed because of it.
+    """
+    lo, _ = studio.world_mesh_bounds()
+    if abs(lo.z) < 1e-6:
         return
     for obj in bpy.context.scene.objects:
         if obj.parent is None:

@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 LYRETAIL_ANTHIAS = Species(
     name="lyretail_anthias",
+    body_length_m=0.11,
+    school=(8, 20),
+    depth_band=(0.05, 0.55),
+    weight=1.6,
     length=0.086,
     # An elegant perch-like oval: moderately deep, laterally compressed, and smoothly
     # tapered into a narrow peduncle rather than carrying the depth of a tang to the tail.

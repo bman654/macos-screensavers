@@ -10,6 +10,10 @@ _FIN_WHITE_TIP = (0.97, 0.97, 0.94)
 
 BANNERFISH = Species(
     name="bannerfish",
+    body_length_m=0.20,
+    school=(1, 2),
+    depth_band=(0.20, 0.65),
+    weight=0.8,
     length=0.115,
     # A tall disc, deeper than it is long once the fins are counted, drawn out to a
     # short pointed snout.

@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 COPPERBAND_BUTTERFLYFISH = Species(
     name="copperband_butterflyfish",
+    body_length_m=0.20,
+    school=(1, 2),
+    depth_band=(0.45, 0.85),
+    weight=0.6,
     length=0.135,
     # A narrow forceps-like tube occupies the first fifth of the profile, then flares
     # abruptly into the tall, strongly compressed butterflyfish disc.

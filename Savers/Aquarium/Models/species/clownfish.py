@@ -4,6 +4,12 @@ from ._spec import Fin, Species
 
 CLOWNFISH = Species(
     name="clownfish",
+    body_length_m=0.09,
+    school=(2, 4),
+    # Strongly site-attached to a host anemone; keep its lane among the reef props.
+    # Pairing it to the anemone prop belongs in fish placement/AI, not the model catalog.
+    depth_band=(0.35, 0.75),
+    weight=1.3,
     length=0.095,
     # Stocky and egg-shaped: depth is over half the body length, and the snout is blunt.
     top=[(0.00, 0.0060), (0.06, 0.0195), (0.16, 0.0250), (0.30, 0.0268),

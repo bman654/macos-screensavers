@@ -22,6 +22,10 @@ def _at(fin_t0, fin_t1, body_t):
 
 ROYAL_GRAMMA = Species(
     name="royal_gramma",
+    body_length_m=0.08,
+    school=(1, 3),
+    depth_band=(0.55, 0.95),
+    weight=0.9,
     length=0.060,
     # Slender basslet body: low-backed and much rounder in section than a disc fish.
     top=[(0.00, 0.0038), (0.07, 0.0074), (0.19, 0.0104), (0.38, 0.0112),

@@ -1,10 +1,12 @@
-// The tank: a school of clownfish swimming through fogged water at a range of depths.
+// The tank: a reef on a sand floor, and a mixed school crossing the water above it.
 //
-// This is the shell proof, not the finished aquarium. There are no plants, rocks, caustics
-// or god rays yet, and the model is still untextured flat white because the Cycles bake step
-// in `docs/aquarium-plan.md` is unfinished. What it does prove is that the whole chain —
-// USDZ in the bundle, the skeleton-free swim modifier, depth fog, HDR and particles — runs
-// inside `SaverView`'s drawable.
+// Everything in it is drawn from the model library at launch — see `ModelLibrary` for the
+// manifest contract, `ReefLayout` for how the reef is spaced and `School` for the fish. This
+// file owns only what is true of the whole tank: the scene, the camera, the light, the water,
+// and the per-frame update that drives them.
+//
+// Still missing from `docs/aquarium-plan.md` §2: caustics, god rays, fish AI and the animated
+// props — a chest's lid and a vent's bubbles are declared in the manifests and not yet read.
 //
 // Everything here is `internal`: SaverKit and the saver's sources compile into one module.
 
@@ -13,130 +15,6 @@ import Foundation
 import Metal
 import SceneKit
 import simd
-
-// MARK: - Swim deformation
-
-/// A travelling sine wave down the body, applied in the vertex stage.
-///
-/// Proven in `spikes/001-fish-pipeline`. It works in the mesh's own object space, which is
-/// only valid because the fish is exported as a single joined mesh — reaching for world
-/// space via `u_modelTransform` inside a geometry modifier produces shredded geometry and a
-/// magenta surface, with no diagnostic. The `tailward²` envelope holds the head steady; a
-/// fish that translates bodily side to side reads as a bar of soap.
-private let swimModifier = """
-#pragma arguments
-float swimPhase;
-float swimAmplitude;
-float swimWaves;
-float bodyMinX;
-float bodyLength;
-
-#pragma body
-float tailward = clamp((bodyMinX + bodyLength - _geometry.position.x) / bodyLength, 0.0, 1.0);
-float envelope = tailward * tailward;
-_geometry.position.y += sin(tailward * swimWaves * 6.2831853 - swimPhase)
-                      * swimAmplitude * envelope;
-"""
-
-// MARK: - Tank constants
-
-private enum Tank {
-    /// Narrow enough to read as near-orthographic 2.5D, wide enough that the depth lanes
-    /// still show parallax. Fixed by `docs/aquarium-plan.md`.
-    static let fieldOfView: CGFloat = 22
-    static let halfFOVTangent = Float(tan(fieldOfView * .pi / 180 / 2))
-
-    /// `projectionDirection` is pinned horizontal, so the horizontal extent is fixed by the
-    /// field of view alone and it is the *vertical* extent that shrinks as the drawable gets
-    /// wider — half-height is exactly half-width divided by the aspect ratio, verified against
-    /// the matrix `SCNCamera.projectionTransform(withViewportSize:)` actually builds. Vertical
-    /// placement therefore has to come from the real drawable: on a 32:9 display the visible
-    /// half-height is barely half of what 16:9 gives, and fish laid out against an assumed
-    /// 16:9 spend whole crossings outside the frame.
-    static let verticalFill: Float = 0.62
-
-    /// Used only for a degenerate drawable size, which `SaverView` should never hand over.
-    static let fallbackAspect: Float = 16.0 / 9.0
-
-    /// Depth range the school occupies, in metres in front of the camera. The near limit is
-    /// far enough back that a fish leaving the tank does so off-screen rather than popping.
-    static let nearDepth: Float = 5.5
-    static let farDepth: Float = 25.0
-    static let depthCullNear: Float = 4.6
-    static let depthCullFar: Float = 27.0
-
-    /// Body length in metres. At the near depth this spans roughly a fifth of the frame and
-    /// at the far depth about a twentieth, which is the range that makes fog legible.
-    static let fishLength: Float = 0.42
-
-    /// Screen-space speed is what the eye judges, and that is angular — so world speed has to
-    /// grow with depth or the far fish crawl.
-    static let speedPerDepth: Float = 0.023
-
-    static let water = (red: 0.028, green: 0.094, blue: 0.112)
-    static let waterColor = NSColor(calibratedRed: CGFloat(water.red), green: CGFloat(water.green),
-                                    blue: CGFloat(water.blue), alpha: 1)
-
-    static func halfWidth(atDepth depth: Float) -> Float { depth * halfFOVTangent }
-
-    static func halfHeight(atDepth depth: Float, aspect: Float) -> Float {
-        halfWidth(atDepth: depth) / aspect
-    }
-
-    static func aspect(of drawableSize: CGSize) -> Float {
-        guard drawableSize.width > 0, drawableSize.height > 0 else { return fallbackAspect }
-        return Float(drawableSize.width / drawableSize.height)
-    }
-}
-
-// MARK: - Deterministic RNG
-
-/// Seeded so a layout that looked right in a render is the same layout next launch; tuning
-/// numbers against a school that reshuffles every run is guesswork.
-private struct Rand {
-    private var state: UInt64
-
-    init(seed: UInt64) { state = seed &* 0x9E37_79B9_7F4A_7C15 }
-
-    mutating func next() -> Float {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        z ^= z >> 31
-        return Float(z >> 40) / Float(1 << 24)
-    }
-
-    mutating func inRange(_ lower: Float, _ upper: Float) -> Float {
-        lower + (upper - lower) * next()
-    }
-
-    mutating func sign() -> Float { next() < 0.5 ? -1 : 1 }
-}
-
-// MARK: - One fish
-
-private final class Fish {
-    let node: SCNNode
-    /// Held directly because the swim phase is a material uniform, and walking the hierarchy
-    /// to find them again every frame would be the most expensive thing in the update.
-    let materials: [SCNMaterial]
-
-    var position = SIMD3<Float>(repeating: 0)
-    var velocity = SIMD3<Float>(repeating: 0)
-    var beat: Float = 1.5
-    var phaseOffset: Float = 0
-    var bobRate: Float = 0.3
-    var bobPhase: Float = 0
-    var bobAmplitude: Float = 0
-
-    init(node: SCNNode, materials: [SCNMaterial]) {
-        self.node = node
-        self.materials = materials
-    }
-}
-
-// MARK: - The scene
 
 final class AquariumScene {
     let scene = SCNScene()
@@ -147,32 +25,49 @@ final class AquariumScene {
     static let clearColor = MTLClearColor(red: Tank.water.red, green: Tank.water.green,
                                           blue: Tank.water.blue, alpha: 1)
 
-    private var fishes: [Fish] = []
-    private var rand = Rand(seed: 0x5EA_F15)
+    /// The sand and everything standing on it, in one node whose origin is the floor. Every
+    /// prop is placed in its space, so responding to a reshaped drawable is one assignment
+    /// rather than a walk over the reef.
+    private let seabed = SCNNode()
+    private var school: School?
+    private var rand: Rand
 
     /// Width over height of the drawable. Every vertical extent in the tank is derived from
     /// this, and it is re-read each frame from `FrameContext` because a view can change shape
     /// under a live scene — a display mode change, or the System Settings preview being
-    /// resized — and fish laid out for the old shape would otherwise be left outside the frame.
+    /// resized — and a tank laid out for the old shape would otherwise be half outside the frame.
     private var aspect: Float
 
-    /// Locates the school's asset. Always resolved against the host's bundle — inside a
+    /// How much of the library one launch draws. The preview thumbnail runs alongside the rest
+    /// of System Settings, so it takes a thinner tank; the composition is identical.
+    private static let propCount = (preview: 12, full: 30)
+    private static let anchorCount = (preview: 1, full: 3)
+    private static let fishCount = (preview: 8, full: 22)
+    /// How many *distinct* models a launch may import — the launch's load budget rather than a
+    /// look. Instances are clones and cost almost nothing; each new model is another archive to
+    /// read. The school is self-limiting, since a species arrives as a whole school.
+    private static let distinctProps = (preview: 5, full: 8)
+
+    /// Locates the model library. Always resolved against the host's bundle — inside a
     /// screensaver `Bundle.main` is `legacyScreenSaver.appex`, so it silently finds nothing.
+    ///
+    /// It returns a URL rather than the bundle because that is what the view hands to `init`,
+    /// and one file is enough: `build-saver.sh` `ditto`s `Assets/` flat into `Resources/`, so
+    /// the directory this URL sits in *is* the library. Falling back to the clownfish keeps an
+    /// index-less bundle loading, which is what a partially regenerated library looks like.
     static func modelURL(in bundle: Bundle) -> URL? {
-        bundle.url(forResource: "clownfish", withExtension: "usdz")
+        bundle.url(forResource: "index", withExtension: "json")
+            ?? bundle.url(forResource: "clownfish", withExtension: "usdz")
     }
 
-    /// Returns nil when the model cannot be loaded, so the saver degrades to black instead of
-    /// trapping — a crashed screensaver is an unrecoverable black screen for the user anyway,
-    /// but a trap also takes `legacyScreenSaver` down with it.
+    /// Declared failable to match the host's expectations, and deliberately never nil: a tank
+    /// with an unreadable library still renders fogged water, whereas returning nil renders an
+    /// unrecoverable black screen. Every model that fails to load simply does not appear.
     init?(modelURL: URL, isPreview: Bool, drawableSize: CGSize) {
-        guard let imported = try? SCNScene(url: modelURL, options: nil),
-              let (minBound, maxBound) = AquariumScene.worldBounds(of: imported.rootNode)
-        else { return nil }
-
-        // `SCNVector3` is CGFloat-componented on macOS; everything downstream is Float.
-        let bodyLength = Float(maxBound.x - minBound.x)
-        guard bodyLength > 0 else { return nil }
+        let directory = modelURL.deletingLastPathComponent()
+        let library = ModelLibrary.load(from: directory)
+        let cache = ModelCache(directory: directory)
+        rand = Rand(seed: AquariumScene.launchSeed())
 
         aspect = Tank.aspect(of: drawableSize)
 
@@ -180,21 +75,36 @@ final class AquariumScene {
         buildCamera()
         if !isPreview { addMarineSnow() }
 
-        let template = imported.rootNode.clone()
-        let center = SCNVector3((minBound.x + maxBound.x) / 2,
-                                (minBound.y + maxBound.y) / 2,
-                                (minBound.z + maxBound.z) / 2)
-        let count = isPreview ? 6 : 14
-        for index in 0..<count {
-            let fish = makeFish(from: template, center: center,
-                                bodyMinX: Float(minBound.x), bodyLength: bodyLength)
-            place(fish, spawningOffScreen: false,
-                  stratum: (Float(index) + 0.5) / Float(count))
-            // Spread the tail beats so a school of clones does not pulse in unison.
-            fish.phaseOffset = Float(index) / Float(count) * 2 * .pi
-            fishes.append(fish)
-            scene.rootNode.addChildNode(fish.node)
-        }
+        seabed.addChildNode(TankFloor.node(.sand))
+        let placements = ReefLayout.layout(
+            props: library.props,
+            count: isPreview ? AquariumScene.propCount.preview : AquariumScene.propCount.full,
+            anchors: isPreview ? AquariumScene.anchorCount.preview
+                               : AquariumScene.anchorCount.full,
+            distinct: isPreview ? AquariumScene.distinctProps.preview
+                                : AquariumScene.distinctProps.full,
+            aspect: aspect, rand: &rand)
+        seabed.addChildNode(Reef.node(placements: placements, cache: cache))
+        scene.rootNode.addChildNode(seabed)
+
+        let school = School(
+            library: library, cache: cache,
+            count: isPreview ? AquariumScene.fishCount.preview : AquariumScene.fishCount.full,
+            aspect: aspect, rand: &rand)
+        scene.rootNode.addChildNode(school.node)
+        self.school = school
+
+        seabed.position = SCNVector3(0, Tank.floorY(aspect: aspect), 0)
+    }
+
+    /// A different tank every launch, which is the whole point of drawing one — but tuning a
+    /// layout against a reef that reshuffles on every build is guesswork, so `AQUARIUM_SEED`
+    /// pins it. The environment is empty under `legacyScreenSaver`, so the override costs
+    /// nothing in the only place that matters.
+    private static func launchSeed() -> UInt64 {
+        if let pinned = ProcessInfo.processInfo.environment["AQUARIUM_SEED"],
+           let seed = UInt64(pinned) { return seed }
+        return UInt64(bitPattern: Int64(Date().timeIntervalSince1970 * 1000)) ^ 0x5EA_F15
     }
 
     // MARK: Per-frame update
@@ -202,175 +112,28 @@ final class AquariumScene {
     func update(_ frame: FrameContext) {
         // Mutating nodes here is only safe because `SceneKitHost` suppresses implicit
         // animation around this call — see the comment there.
-        let dt = Float(frame.deltaTime)
         adoptAspect(Tank.aspect(of: frame.drawableSize))
-
-        for fish in fishes {
-            fish.position += fish.velocity * dt
-            if hasLeftTank(fish) { place(fish, spawningOffScreen: true) }
-
-            let bob = sin(AquariumScene.wrappedPhase(frame.time, rate: fish.bobRate,
-                                                     offset: fish.bobPhase))
-                * fish.bobAmplitude
-            fish.node.position = SCNVector3(fish.position.x,
-                                            fish.position.y + bob,
-                                            fish.position.z)
-
-            let phase = AquariumScene.wrappedPhase(frame.time, rate: fish.beat * 2 * .pi,
-                                                   offset: fish.phaseOffset)
-            for material in fish.materials {
-                material.setValue(NSNumber(value: phase), forKey: "swimPhase")
-            }
-
-            // The wave displaces the body laterally, which for a fish swimming across the
-            // frame is almost straight into the camera and therefore nearly invisible. Real
-            // fish also yaw their heads in recoil against the tail; borrowing that here is
-            // what makes the deformation read from the front-on view of the tank.
-            let recoil = 0.10 * sin(phase)
-            fish.node.eulerAngles = SCNVector3(0, headingYaw(of: fish.velocity) + recoil, 0)
-        }
+        school?.update(time: frame.time, dt: Float(frame.deltaTime))
     }
 
-    /// Evaluates `time * rate + offset` in `Double` and reduces it into one period before it
-    /// is narrowed to the `Float` the sine and the material uniform carry.
+    /// Reshapes the tank when the drawable changes shape.
     ///
-    /// A screensaver on an unattended machine runs for days, and an ever-growing `Float` clock
-    /// loses timing resolution as it does: at 48 hours its ULP is already 1/64 s, so the
-    /// fastest tail beats start advancing in visibly uneven steps, and by a week barely a
-    /// quarter of the frames at 60 Hz land on a distinct value — the school stutters. Wrapping
-    /// after the conversion cannot recover precision the conversion already discarded, so the
-    /// reduction has to happen here, in `Double`. It is seamless because a phase is periodic:
-    /// every consumer of this value is a sine, for which 2π is an exact period.
+    /// The floor is stated as a depth rather than as a height precisely so that this is a
+    /// single translation: `Tank.floorY` is one half-height at a fixed depth, so it shrinks
+    /// with the frustum and the sand stays on the same line across the frame. The reef rides
+    /// along as its children.
     ///
-    /// Per fish rather than once for the whole school: the beats are unrelated reals, so there
-    /// is no shared time period that is a whole number of cycles for all of them.
-    private static func wrappedPhase(_ time: CFTimeInterval, rate: Float, offset: Float) -> Float {
-        let phase = time * Double(rate) + Double(offset)
-        return Float(phase.truncatingRemainder(dividingBy: 2 * .pi))
-    }
-
-    // MARK: Fish construction and motion
-
-    private func makeFish(from template: SCNNode, center: SCNVector3,
-                          bodyMinX: Float, bodyLength: Float) -> Fish {
-        let model = template.clone()
-
-        // `clone()` shares geometry *and* materials with the original. Each fish needs its
-        // own materials because the swim phase is a material uniform — sharing them would
-        // make the whole school beat as one animal. Copying the geometry is cheap: the
-        // vertex buffers stay shared, only the material list is duplicated.
-        var materials: [SCNMaterial] = []
-        model.enumerateHierarchy { node, _ in
-            guard let geometry = node.geometry,
-                  let copy = geometry.copy() as? SCNGeometry else { return }
-            copy.materials = geometry.materials.compactMap { $0.copy() as? SCNMaterial }
-            for material in copy.materials {
-                material.shaderModifiers = [.geometry: swimModifier]
-                material.setValue(NSNumber(value: 0.0), forKey: "swimPhase")
-                // Amplitude is in the model's own object space, so it scales with the source
-                // mesh, not with the fish's world size.
-                material.setValue(NSNumber(value: bodyLength * 0.11), forKey: "swimAmplitude")
-                material.setValue(NSNumber(value: 1.15), forKey: "swimWaves")
-                material.setValue(NSNumber(value: bodyMinX), forKey: "bodyMinX")
-                material.setValue(NSNumber(value: bodyLength), forKey: "bodyLength")
-            }
-            node.geometry = copy
-            materials.append(contentsOf: copy.materials)
-        }
-
-        // Blender exports Z-up with the nose at +X; the tank is Y-up. The pivot carries that
-        // correction plus the scale, and the model is offset inside it so the fish turns
-        // about its own centre rather than about the origin of the export.
-        let pivot = SCNNode()
-        pivot.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
-        let scale = Tank.fishLength / bodyLength
-        pivot.scale = SCNVector3(scale, scale, scale)
-        model.position = SCNVector3(-center.x, -center.y, -center.z)
-        pivot.addChildNode(model)
-
-        let node = SCNNode()
-        node.addChildNode(pivot)
-        return Fish(node: node, materials: materials)
-    }
-
-    /// Positions a fish on a straight crossing of the tank.
-    ///
-    /// The heading is deliberately never parallel to the frame: a fish angled 13–30° in depth
-    /// changes size and fog as it crosses, which is what sells the depth lanes, and it keeps
-    /// the tail sweep off the view axis. The depth component always aims at the far side of
-    /// the tank from where the fish starts, so every crossing is a long one — a fish that
-    /// spawned near the camera heading further forward would vanish again immediately.
-    ///
-    /// `stratum` is set only for the opening layout, where it spreads the school evenly across
-    /// depth and width. Left to chance, fourteen draws routinely clump into one corner and leave
-    /// half the tank empty — and the first seconds after the screen blanks are the ones that
-    /// get looked at. Respawns are unconstrained; by then the school has mixed.
-    private func place(_ fish: Fish, spawningOffScreen: Bool, stratum: Float? = nil) {
-        let depth = stratum.map { Tank.nearDepth + ($0 + rand.inRange(-0.4, 0.4) / 14)
-                                    * (Tank.farDepth - Tank.nearDepth) }
-            ?? rand.inRange(Tank.nearDepth, Tank.farDepth)
-        let speed = depth * Tank.speedPerDepth * rand.inRange(0.75, 1.3)
-        let tilt = rand.inRange(0.22, 0.52)
-        let towardFar: Float = depth < (Tank.nearDepth + Tank.farDepth) / 2 ? -1 : 1
-        let horizontal = rand.sign()
-
-        fish.velocity = SIMD3<Float>(horizontal * speed * cos(tilt), 0,
-                                     towardFar * speed * sin(tilt))
-
-        let margin = Tank.fishLength * 1.05
-        let edge = Tank.halfWidth(atDepth: depth) + margin
-        // Golden-ratio stride: consecutive fish land far apart horizontally even though their
-        // depths are adjacent, so the opening frame reads as a spread school.
-        let spread = stratum.map { ((($0 * 0.618_034 + 0.31).truncatingRemainder(dividingBy: 1))
-                                    * 2 - 1) * edge }
-        let x = spawningOffScreen ? -horizontal * edge : (spread ?? rand.inRange(-edge, edge))
-        let halfHeight = Tank.halfHeight(atDepth: depth, aspect: aspect)
-        fish.position = SIMD3<Float>(x,
-                                     rand.inRange(-1, 1) * halfHeight * Tank.verticalFill,
-                                     -depth)
-
-        fish.beat = rand.inRange(1.15, 1.75)
-        fish.bobRate = rand.inRange(0.18, 0.42)
-        fish.bobPhase = rand.inRange(0, 2 * .pi)
-        fish.bobAmplitude = halfHeight * 0.07
-    }
-
-    /// Rescales the school when the drawable changes shape.
-    ///
-    /// Half-height is inversely proportional to the aspect ratio at every depth, so scaling
-    /// each fish by the ratio of the two aspects leaves it exactly where it was in the frame.
-    /// Clamping instead would pile the school onto the new edges; leaving them alone would
-    /// strand the outermost ones outside a frame they never leave, because a crossing only
-    /// ends horizontally.
+    /// The reef keeps the *layout* it was born with, though, and only its height follows. A
+    /// prop is fixed in metres, so a reef laid out for 16:9 has near props taller than a 32:9
+    /// frame — see `Tank.reefNearDepth(aspect:)`, which is applied when the layout is drawn.
+    /// Redrawing it here would mean re-importing models mid-run and popping the whole tank; a
+    /// display that changes shape gets a reef that is merely a little large until the next
+    /// launch, which is the cheaper of the two failures by a distance.
     private func adoptAspect(_ newAspect: Float) {
         guard newAspect != aspect, newAspect > 0 else { return }
-        let scale = aspect / newAspect
         aspect = newAspect
-        for fish in fishes {
-            fish.position.y *= scale
-            fish.bobAmplitude *= scale
-        }
-    }
-
-    private func hasLeftTank(_ fish: Fish) -> Bool {
-        let depth = -fish.position.z
-        if depth < Tank.depthCullNear || depth > Tank.depthCullFar { return true }
-        // Vertical as well as horizontal. A fish holds its world height while its depth
-        // changes, so one that started high in the far, tall part of the frustum can end up
-        // above the near, short part of it — and a crossing only ever *ends* horizontally, so
-        // without this it would stay invisible for the rest of a crossing and the school would
-        // silently look thinner. The margin is well outside anything `place` produces, so this
-        // fires only once a fish is genuinely out of frame, and the respawn is off-screen.
-        if abs(fish.position.y) > Tank.halfHeight(atDepth: depth, aspect: aspect)
-            + Tank.fishLength { return true }
-        let edge = Tank.halfWidth(atDepth: depth) + Tank.fishLength * 1.25
-        return abs(fish.position.x) > edge && fish.position.x * fish.velocity.x > 0
-    }
-
-    /// Yaw that points the model's +X nose along `velocity`. A node rotated by `yaw` about
-    /// +Y sends local +X to `(cos yaw, 0, -sin yaw)`, hence the negated z.
-    private func headingYaw(of velocity: SIMD3<Float>) -> Float {
-        atan2(-velocity.z, velocity.x)
+        seabed.position = SCNVector3(0, Tank.floorY(aspect: aspect), 0)
+        school?.adoptAspect(newAspect)
     }
 
     // MARK: Environment
@@ -382,10 +145,11 @@ final class AquariumScene {
         scene.background.contents = Tank.waterColor
 
         // Fog colour matches the background exactly so the deepest fish dissolve into the
-        // backdrop instead of into a visible wall of a slightly different colour.
+        // backdrop instead of into a visible wall of a slightly different colour. The floor
+        // runs past `fogEnd` for the same reason: sand that simply stopped would be a rim.
         scene.fogColor = Tank.waterColor
-        scene.fogStartDistance = CGFloat(Tank.nearDepth) * 0.8
-        scene.fogEndDistance = CGFloat(Tank.farDepth) * 1.05
+        scene.fogStartDistance = CGFloat(Tank.fogStart)
+        scene.fogEndDistance = CGFloat(Tank.fogEnd)
         scene.fogDensityExponent = 1.25
 
         // The rig from the fish spike, re-aimed for a Y-up tank: a cool ambient fill for the
@@ -497,38 +261,5 @@ final class AquariumScene {
         let node = SCNNode()
         node.light = light
         return node
-    }
-
-    // MARK: Bounds
-
-    /// Union of every geometry node's box, expressed in the root's space.
-    ///
-    /// `SCNNode.boundingBox` on the root reports only that node's own geometry in some import
-    /// layouts, which yields a zero extent for a hierarchy whose meshes all live in children —
-    /// and a zero extent would make the swim envelope divide by zero.
-    private static func worldBounds(of root: SCNNode) -> (SCNVector3, SCNVector3)? {
-        var lo = SCNVector3(Float.greatestFiniteMagnitude,
-                            Float.greatestFiniteMagnitude,
-                            Float.greatestFiniteMagnitude)
-        var hi = SCNVector3(-Float.greatestFiniteMagnitude,
-                            -Float.greatestFiniteMagnitude,
-                            -Float.greatestFiniteMagnitude)
-        var found = false
-
-        root.enumerateHierarchy { node, _ in
-            guard node.geometry != nil else { return }
-            let (a, b) = node.boundingBox
-            for x in [a.x, b.x] {
-                for y in [a.y, b.y] {
-                    for z in [a.z, b.z] {
-                        let p = root.convertPosition(SCNVector3(x, y, z), from: node)
-                        lo = SCNVector3(min(lo.x, p.x), min(lo.y, p.y), min(lo.z, p.z))
-                        hi = SCNVector3(max(hi.x, p.x), max(hi.y, p.y), max(hi.z, p.z))
-                        found = true
-                    }
-                }
-            }
-        }
-        return found ? (lo, hi) : nil
     }
 }

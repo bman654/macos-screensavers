@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 FLAME_ANGELFISH = Species(
     name="flame_angelfish",
+    body_length_m=0.10,
+    school=(1, 3),
+    depth_band=(0.45, 0.85),
+    weight=0.8,
     length=0.076,
     top=[(0.00, 0.0052), (0.07, 0.0155), (0.18, 0.0210), (0.34, 0.0225),
          (0.53, 0.0215), (0.72, 0.0175), (0.88, 0.0105), (1.00, 0.0052)],

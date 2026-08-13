@@ -182,6 +182,37 @@ def scene_bounds(objects=None):
     return lo, hi
 
 
+def world_mesh_bounds(objects=None):
+    """Exact world-space bounds, measured from evaluated vertices.
+
+    `scene_bounds` transforms each object's local bounding-box corners, so for a rotated
+    object it returns the axis-aligned box of an already-rotated box — always a superset.
+    That is the right trade for framing a camera, which is what it exists for, and wrong
+    anywhere the number becomes a contract: a wreck listing on the seabed over-reported its
+    own underside by 0.65 m and was exported hanging that far above the floor.
+
+    Evaluated rather than base meshes, because a modifier that thickens or displaces a
+    surface moves the real silhouette and the tank sees the evaluated result.
+    """
+    bpy.context.view_layer.update()
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    objects = objects or [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    lo = Vector((float("inf"),) * 3)
+    hi = Vector((float("-inf"),) * 3)
+    for obj in objects:
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        if mesh is None:
+            continue
+        matrix = evaluated.matrix_world
+        for vertex in mesh.vertices:
+            p = matrix @ vertex.co
+            lo = Vector((min(lo[i], p[i]) for i in range(3)))
+            hi = Vector((max(hi[i], p[i]) for i in range(3)))
+        evaluated.to_mesh_clear()
+    return lo, hi
+
+
 def make_camera(lens=85.0):
     data = bpy.data.cameras.new("Camera")
     data.lens = lens

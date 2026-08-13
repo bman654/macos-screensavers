@@ -86,7 +86,21 @@ class Species:
         caudal_style=None,
         eye=(0.13, 0.55, 0.055),
         eye_ring=None,
+        body_length_m=0.15,
+        school=(1, 3),
+        depth_band=(0.0, 1.0),
+        weight=1.0,
     ):
+        if body_length_m <= 0.0:
+            raise ValueError("body_length_m must be positive")
+        if (len(school) != 2 or not all(isinstance(value, int) for value in school)
+                or school[0] < 1 or school[1] < school[0]):
+            raise ValueError("school must be two integers with 1 <= min <= max")
+        if (len(depth_band) != 2 or not 0.0 <= depth_band[0] <= depth_band[1] <= 1.0):
+            raise ValueError("depth_band must satisfy 0 <= near <= far <= 1")
+        if weight <= 0.0:
+            raise ValueError("weight must be positive")
+
         self.name = name
         self.length = length
         self.width = width
@@ -139,3 +153,22 @@ class Species:
         # `softness`. Its position and size come from `eye` — a species never restates
         # them. Off unless asked for.
         self.eye_ring = eye_ring
+        # Nominal adult size for population art direction, not model-space geometry.
+        self.body_length_m = body_length_m
+        self.school = tuple(school)             # inclusive individuals per populated group
+        self.depth_band = tuple(depth_band)     # near/far fractions of the tank depth
+        self.weight = weight                    # bias in the random species draw
+
+    def manifest(self, asset):
+        """The JSON the runtime reads for sizing and population."""
+        return {
+            "name": self.name,
+            "asset": asset,
+            "category": "fish",
+            "fish": {
+                "bodyLength": self.body_length_m,
+                "school": list(self.school),
+                "depthBand": list(self.depth_band),
+                "weight": self.weight,
+            },
+        }

@@ -7,9 +7,11 @@ Run through `tools/blender/run.sh`, which puts `saverlib` on the path:
 """
 
 import argparse
+import json
 import math
 import os
 import sys
+import time
 
 import bpy
 from mathutils import Vector
@@ -22,7 +24,23 @@ from saverlib import (  # noqa: E402
     Body, BodySpec, assign, build_fin, caudal_root, dorsal_root, eye_material,
     fin_material, fish_material, flank_root, studio, ventral_root,
 )
+from saverlib.bake import (  # noqa: E402
+    DEFAULT_MARGIN,
+    DEFAULT_RESOLUTION,
+    DEFAULT_UV_MARGIN,
+    bake_atlas,
+)
 from species import CATALOG  # noqa: E402
+
+
+# Surface relief ships in the normal atlas. At tank scale these meshes need enough geometry
+# for a clean silhouette, not enough to reproduce details that the texture already carries.
+_BODY_RINGS = 40
+_BODY_SEGMENTS = 16
+_BODY_SUBSURF = 1
+_FIN_SUBSURF = 0
+_EYE_SEGMENTS = 20
+_EYE_RINGS = 12
 
 
 def build(spec):
@@ -34,12 +52,12 @@ def build(spec):
         spine=spec.spine,
         exponent=spec.exponent,
     )
-    body = Body(body_spec, rings=88, segments=32)
+    body = Body(body_spec, rings=_BODY_RINGS, segments=_BODY_SEGMENTS)
 
     root = bpy.data.objects.new(f"Fish_{spec.name}", None)
     bpy.context.collection.objects.link(root)
 
-    body_obj = body.build(f"{spec.name}_body", subsurf=2)
+    body_obj = body.build(f"{spec.name}_body", subsurf=_BODY_SUBSURF)
     body_obj.parent = root
 
     belly, mid, back = spec.colors
@@ -156,8 +174,8 @@ def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
 
 def _build_fins(spec, body):
     """Return (object, kind, Fin) triples, `kind` being the species field the fin came
-    from. Fins get one subdivision level and a very thin solidify: at two levels the
-    modifier stack inflates a flat membrane into a pillow.
+    from. The authored grid is already dense enough for a smooth tank-scale silhouette,
+    so fins get only a very thin solidify; subdivision adds geometry without visible benefit.
 
     The kind travels with the object because it is what picks the fin's material: the
     caudal falls back to the species' tail colours and everything else to its fin
@@ -166,7 +184,7 @@ def _build_fins(spec, body):
     fins = []
     up = Vector((0.0, 0.0, 1.0))
     down = Vector((0.0, 0.0, -1.0))
-    common = dict(thickness=0.0012, subsurf=1)
+    common = dict(thickness=0.0012, subsurf=_FIN_SUBSURF)
 
     if spec.dorsal:
         f = spec.dorsal
@@ -286,7 +304,9 @@ def _build_eyes(spec, body):
 
     eyes = []
     for side in (1.0, -1.0):
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, segments=28, ring_count=18)
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            radius=radius, segments=_EYE_SEGMENTS, ring_count=_EYE_RINGS
+        )
         eye = bpy.context.active_object
         eye.name = f"{spec.name}_eye_{'L' if side > 0 else 'R'}"
         # Seat the eye into the socket so a sliver of sphere sits proud of the skin;
@@ -301,8 +321,12 @@ def _build_eyes(spec, body):
 
 def _join(fish, spec):
     joined = join_parts(fish, f"fish_{spec.name}")
+    if joined is None:
+        raise RuntimeError(f"building '{spec.name}' produced no mesh")
+    joined.data.calc_loop_triangles()
     print(f"[build_fish] joined into '{joined.name}': "
           f"{len(joined.data.vertices)} verts, "
+          f"{len(joined.data.loop_triangles)} triangles, "
           f"{len(joined.data.materials)} material slots, "
           f"uv layers {[layer.name for layer in joined.data.uv_layers]}")
     return joined
@@ -315,6 +339,15 @@ def main():
     parser.add_argument("--render", action="store_true", help="studio turntable")
     parser.add_argument("--preview", action="store_true", help="underwater lighting")
     parser.add_argument("--export", default=None, help="write a .usdz to this path")
+    parser.add_argument("--bake", action="store_true",
+                        help="bake procedural materials before export")
+    parser.add_argument("--textures", default=None,
+                        help="directory for baked atlas PNGs; defaults beside the export")
+    parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
+    parser.add_argument("--margin", type=int, default=DEFAULT_MARGIN)
+    parser.add_argument("--uv-margin", type=float, default=DEFAULT_UV_MARGIN)
+    parser.add_argument("--device", default=None,
+                        help="exact Cycles device name; any Metal GPU by default")
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--save-blend", default=None)
     parser.add_argument("--no-join", action="store_true",
@@ -324,6 +357,10 @@ def main():
                              "the materials still read once the parts are one mesh")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = parser.parse_args(argv)
+    if args.bake and not args.export:
+        parser.error("--bake requires --export")
+    if args.bake and args.no_join:
+        parser.error("--bake requires the production joined mesh; remove --no-join")
 
     spec = CATALOG[args.species]
 
@@ -334,7 +371,34 @@ def main():
     out_dir = os.path.join(args.out, spec.name)
     os.makedirs(out_dir, exist_ok=True)
 
-    joined = _join(fish, spec) if args.join else None
+    joined = _join(fish, spec) if args.join or args.bake else None
+
+    if args.bake:
+        export_path = os.path.abspath(args.export)
+        stem = os.path.splitext(os.path.basename(export_path))[0]
+        texture_dir = os.path.abspath(
+            args.textures
+            or os.path.join(os.path.dirname(export_path), f"{stem}_textures")
+        )
+        started = time.monotonic()
+        paths = bake_atlas(
+            joined,
+            texture_dir,
+            atlas_name=spec.name,
+            resolution=args.resolution,
+            margin=args.margin,
+            uv_margin=args.uv_margin,
+            device_name=args.device,
+        )
+        for kind, path in paths.items():
+            print(f"[build_fish] {kind}: {path}")
+        print(
+            f"[build_fish] baked {args.resolution}x{args.resolution}, "
+            f"margin {args.margin}px in {time.monotonic() - started:.1f}s"
+        )
+        # Baking deliberately uses one sample; a same-run visual verification should still
+        # render at the requested quality rather than inheriting the bake setting.
+        bpy.context.scene.cycles.samples = args.samples
 
     if args.render or not (args.preview or args.export):
         studio.studio_lights(radius=spec.length * 3.0)
@@ -354,15 +418,22 @@ def main():
     if args.export:
         if not args.no_join and joined is None:
             joined = _join(fish, spec)
-        os.makedirs(os.path.dirname(os.path.abspath(args.export)), exist_ok=True)
+        export_path = os.path.abspath(args.export)
+        os.makedirs(os.path.dirname(export_path), exist_ok=True)
         bpy.ops.wm.usd_export(
-            filepath=os.path.abspath(args.export),
+            filepath=export_path,
             export_materials=True,
-            export_textures=False,
+            export_textures_mode="NEW",
+            overwrite_textures=True,
             evaluation_mode="RENDER",
             generate_preview_surface=True,
         )
-        print(f"[build_fish] exported: {args.export}")
+        manifest_path = os.path.splitext(export_path)[0] + ".json"
+        with open(manifest_path, "w") as handle:
+            json.dump(spec.manifest(os.path.basename(export_path)), handle, indent=2)
+            handle.write("\n")
+        print(f"[build_fish] exported: {export_path}")
+        print(f"[build_fish] manifest: {manifest_path}")
 
     if args.save_blend:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.save_blend))

@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 YELLOW_TANG = Species(
     name="yellow_tang",
+    body_length_m=0.15,
+    school=(1, 2),
+    depth_band=(0.30, 0.75),
+    weight=1.0,
     length=0.120,
     # A forward-carried disc with a low, projecting point beneath the steep forehead.
     top=[(0.00, 0.0020), (0.06, 0.0090), (0.12, 0.0260), (0.20, 0.0370),

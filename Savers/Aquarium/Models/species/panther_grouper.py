@@ -6,6 +6,10 @@ _INK = (0.020, 0.020, 0.028)
 
 PANTHER_GROUPER = Species(
     name="panther_grouper",
+    body_length_m=0.35,
+    school=(1, 1),
+    depth_band=(0.50, 0.90),
+    weight=0.3,
     length=0.160,
     # The silhouette is the species, and `spine` is what produces it. The axis plunges
     # under the head to its lowest point at t=0.11, then climbs 0.019 m to the hump —

@@ -4,6 +4,10 @@ from ._spec import Fin, Species
 
 YELLOWTAIL_DAMSELFISH = Species(
     name="yellowtail_damselfish",
+    body_length_m=0.07,
+    school=(5, 12),
+    depth_band=(0.35, 0.80),
+    weight=1.3,
     length=0.058,
     # Compact, mildly compressed oval with a blunt snout and an even dorsal curve.
     top=[(0.00, 0.0035), (0.07, 0.0090), (0.20, 0.0125), (0.38, 0.0134),
