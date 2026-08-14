@@ -34,6 +34,20 @@ Use `run-saver` for iteration. Driving development through System Settings is mi
 and because a loaded `.saver` is `mmap`ed you can never quite trust that what you are
 looking at is what you just built. A short-lived process per run sidesteps both.
 
+### Measuring frames
+
+```bash
+SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
+    --screenshot /tmp/shot.png       # reports every 5 seconds, on stderr
+```
+
+**Read the GPU milliseconds, not the frame rate.** The interval between display-link
+callbacks depends on whether the window is visible, and a capture run deliberately parks its
+window behind everything — so a low rate there proves nothing. GPU time per frame does not
+care who is in front: under 8.3 ms holds 120 Hz, under 16.7 ms holds 60. Give the run a few
+seconds before believing the first window; the opening frame carries shader compilation and
+asset upload and lands around 60 ms.
+
 ### Which host
 
 `RenderHost` is the whole interface between `SaverView` and whatever draws. Both hosts
@@ -71,6 +85,8 @@ not have to know about it.
 | The framework timer must still exist (`SSENeedsAnimationTimer`), but should not drive frames | `animationTimeInterval = 1.0`, `animateOneFrame` a no-op |
 | A display link in `.default` mode stops during event tracking — i.e. while the preview is being used | added in `.common` |
 | `Bundle.main` is `legacyScreenSaver.appex`, not the saver | `HostContext.bundle` |
+| A post-process radius is in target *pixels*, so a look tuned at 1x arrives at half its apparent size on Retina | `RenderTargets.backingScale`, which the host multiplies in |
+| A host is created on the first layout, which routinely happens *before* the view is in a window — so the layer's scale is still 1 then, whatever display it is about to land on | scale is delivered with `RenderTargets`, never in `HostContext` |
 | A crash is an unrecoverable black screen | every failure path degrades instead of trapping |
 
 Two more that are not SaverKit's to fix, but will bite:
@@ -105,12 +121,24 @@ Verified on macOS 26.5.1 / Apple Silicon / Swift 6.3.2, Command Line Tools only:
 - **Runtime Metal shader compilation works inside the sandbox**, which is what makes the
   shader-based savers buildable without Xcode. See `spikes/002-saver-shell/README.md`.
 - SceneKit into the drawable keeps depth, fog, particles, actions, bloom and 4x MSAA.
+- **Retina 2x**, on a 2056x1329-point built-in display. The drawable is sized in pixels
+  (4112x2658), the capture comes back at pixel size, the composition is identical to 1x, a
+  live reshape follows, and the aquarium holds a locked 120 fps at 5.4 ms of GPU time per
+  frame. Preview-ness is decided in points, so a 300-point thumbnail is still a thumbnail at
+  either scale.
+- **A backing-scale change under a live view.** Mirroring a 1x display onto a 2x one mid-run
+  moved a running saver from 4112x2658 to 2056x1329 without a stumble: one 1.3-second stall
+  for the display reconfiguration itself, then a locked rate again. `RenderTargets` carries
+  the new scale, so a pixel-space radius follows it.
+- **Ten minutes of continuous rendering**, 62,254 frames across that reconfiguration, with
+  GPU time flat at 4.0-5.5 ms throughout and no drift.
 
 Not verified, and worth knowing before trusting:
 
-- **Multi-display**, and a Retina 2x display. This machine has one 1x display. The scale
-  arithmetic was exercised by forcing `contentsScale`, but real backing-property changes
-  across displays are untested.
+- **Multi-display.** This machine presents one logical display at a time — it mirrors rather
+  than extends. macOS instantiates a saver per screen, so what is untested is two live views
+  at once and the memory that costs: one full set of MSAA attachments per screen, about
+  350 MB at 4112x2658.
 - The `default.metallib` path in `ShaderLibrary` and `build-saver.sh`, which cannot run
   here at all — no Metal toolchain.
 - Long-run behaviour. Nothing has yet run for hours.

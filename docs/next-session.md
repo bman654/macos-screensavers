@@ -1,13 +1,23 @@
 # Where to pick up
 
 Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
-its three looks.
+its three looks; extended the same day by the session that ran it on a Retina display.
 
 ## State
 
 **The aquarium renders as a tank.** A random assortment of fish and decorations is drawn per
 launch, placed on a substrate, lit by one of three art-directed looks, and every model is
 textured. Nothing is blocked.
+
+**It runs on Retina.** Full screen at 4112x2658 — a 2056x1329-point built-in display at 2x —
+all three styles render at 5.4 ms of GPU time per frame, and ten minutes of continuous running
+covered 62,254 frames with no drift. The composition, the preview threshold, a live reshape and
+a live *scale* change are all correct at 2x. It could hold 120 fps and is deliberately capped
+at 60: half the energy, and nothing in a tank of drifting fish reads differently.
+
+Two things came out of that testing. `SAVERKIT_STATS` now reports frame and GPU timing from any
+run. And the bloom radius was in pixels, so every look lost half its glow width on a Retina
+display — fixed, though see the trap below for why you cannot yet see it.
 
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
@@ -31,6 +41,8 @@ AQUARIUM_STYLE=aquarium AQUARIUM_SEED=42 tools/run-saver.swift Aquarium \
     --size 1600x900 --seconds 4 --screenshot /tmp/tank.png
 tools/water-luminance.py /tmp/tank.png                     # floor-vs-water coherence
 tools/gallery.py --out /tmp/sheet.png --columns 4 'build/props/*/water_00_side.png'
+SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
+    --screenshot /tmp/tank.png                             # frame and GPU timing
 ```
 
 `AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`. `AQUARIUM_SEED`
@@ -113,6 +125,25 @@ inside a rock and a white seam on the clam by looking at renders.
   "fix" it — the asymmetry is what makes a small tank read as a tank.
 - **A texture tuned for one floor depth is wrong at another.** Gravel tiled for a floor
   entering at 6.2 m read as boulders at 2.25 m.
+- **`SCNCamera.bloomBlurRadius` is documented in points and applied in render-target pixels.**
+  One emissive quad of fixed frame fraction, rendered at 512, 1024 and 2048 px, glowed the
+  same 24 px at all three — so a look tuned on a 1x display loses half its glow width on a
+  Retina one. `adopt(backingScale:)` multiplies it. Assume the same of any other radius
+  SceneKit exposes, and of a hand-written post-process kernel.
+  **The correction is currently invisible, and that is a fact about the tank, not the fix.**
+  Doubling the radius moved the frame no more than two runs of the *same* build differ by:
+  under 0.1% of a tank is above the 0.88-0.95 bloom threshold, so there is almost nothing to
+  glow. It will start to matter with the god rays. The radius itself is verified directly —
+  24 px at 2x against an authored 12 — because measuring it from the image cannot work.
+- **A saver's own motion swamps an image diff.** Two captures of the same build at the same
+  elapsed time differ by 62/255 in the brightest luminance band, because that band *is* the
+  fish. An A/B of a subtle effect therefore needs the same-build noise floor beside it, or it
+  will confirm whatever it was pointed at. This cost one wrong conclusion today.
+- **A host is built before the view is in a window**, so `CAMetalLayer.contentsScale` is still
+  1 at that moment even on a Retina display: host creation was observed at scale 1 and 900x600
+  points, corrected to scale 2 and 1800x1200 in the same millisecond. Anything scale-dependent
+  must come from `RenderTargets`, which is why `HostContext` deliberately does not carry a
+  scale. A value read at creation is wrong precisely where it matters.
 - **The capture harness must never surface.** `run-saver.swift` parks its window at desktop
   level during a screenshot: not activating is insufficient, because macOS gives the top window
   focus and this tool runs several times a minute across concurrent agents.
@@ -143,9 +174,11 @@ inside a rock and a white seam on the clam by looking at renders.
 
 - **Audio from inside a sandboxed `legacyScreenSaver`.** Output needs no entitlement so it
   ought to work, but `WKWebView` also looked fine here and blanked after three seconds.
-- **Retina 2x and multi-display.** Still never executed; this machine has one 1x display.
-  Multi-display matters more now: macOS instantiates a saver per screen, which is also what
-  would make audio play three times at once.
-- **Long-run stability.** Proven numerically to a week, but nothing has run for more than
-  seconds.
+- **Multi-display.** macOS instantiates a saver per screen, which is also what would make
+  audio play three times at once, and each screen gets its own MSAA attachments — about
+  350 MB at 4112x2658. This machine *mirrors* rather than extends, so it presents one logical
+  display; testing this means turning mirroring off first.
+- **The real `legacyScreenSaver` host at 2x.** Everything above was measured through
+  `run-saver`, which is the same view in an ordinary window. Installing and running it for
+  real is a minute's work and has not been done since the tank was populated.
 - **The `default.metallib` path**, for lack of a Metal toolchain on this machine.
