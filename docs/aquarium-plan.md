@@ -78,15 +78,28 @@ fringing underwater.
 - **Water look.** Caustics as an animated gobo on a spotlight; god rays as additive
   drifting planes; marine snow as an `SCNParticleSystem`; exponential depth fog. The fog
   is what sells the 2.5D depth more than anything else.
-- **Depth lanes and fish AI.** 5–7 discrete z-lanes, fish swim within a lane and
-  occasionally change lanes; boids-ish separation within a school. Real 3D depth gives
-  clean occlusion behind plants and rocks for free.
-  - **Clownfish should be tied to an anemone.** They are site-attached in the wild rather
-    than free-roaming, so a clownfish that patrols the whole tank like a tang is wrong.
-    Give them a host anemone from the placed props and have them stay within about a body
-    length or two of it, retreating into it rather than crossing open water. This is the
-    one species-specific behaviour worth the exception; everything else can share one
-    swimming model. If no anemone was drawn, fall back to ordinary crossings.
+- **Depth lanes and fish AI — done.** Six lanes; a fish holds one and eases between them, which
+  is what a lane change is. `FishBehavior` (the limits), `FishDecision` (the taste) and `School`
+  (the loop). The clownfish's anemone affinity landed with it, and falls back to ordinary
+  swimming on a launch that drew no anemone.
+
+  Boids-ish separation was **not** built and is not obviously wanted. The reason is the lanes:
+  a school layered into six discrete depths already reads as spaced, and separation forces
+  between ten fish spread over that volume would almost never fire. Revisit it if a species is
+  ever given a large enough school to crowd its own lane.
+
+  The one structural thing to know before touching any of it: a fish has *state* now. The old
+  model handed out a launch vector and nothing could turn, so "change lane", "change height",
+  "pause" and "change speed" were not features that could be added to it — they are all one
+  missing thing, which is steering. Anything else the school should do belongs in the weighted
+  draw in `FishDecision`, not in a new special case.
+
+- **The aquarium's walls — done, and they are the frustum.** A fish cannot leave the frame in a
+  glass tank. `Tank.isEnclosed` is the switch and it is the same fact as `substrateBand`: the
+  look seen through a pane is the look that has walls. Open sea keeps crossings and respawn,
+  because a fish there is passing through rather than living there. See `Tank.wallX` for why the
+  box is a trapezoid rather than a rectangle, and `docs/next-session.md` for why its ceiling is
+  not a waterline.
 - **Camera.** Narrow FOV (~22°) for a near-orthographic 2.5D read with a little parallax.
 - **Population.** Each launch draws a random assortment from the library, weighted and
   spaced by each model's manifest, so the tank is a different tank every time.

@@ -163,7 +163,17 @@ tools/gallery.py --out /tmp/sheet.png --columns 4 'build/props/*/water_00_side.p
 SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
     --screenshot /tmp/tank.png                             # frame and GPU timing
 tools/run-saver.swift Aquarium --configure --seconds 3 --screenshot /tmp/sheet.png
+AQUARIUM_SCHOOL_STATS=10 tools/run-saver.swift Aquarium --seconds 120 --screenshot /tmp/t.png
+AQUARIUM_BUBBLER_RUSH=1 AQUARIUM_SEED=1 tools/run-saver.swift Aquarium --seconds 9 \
+    --screenshot /tmp/bubbles.png                          # collapses the 11-26 s idle
 ```
+
+`AQUARIUM_SCHOOL_STATS=<seconds>` prints what the school is doing at that interval: how many fish
+are in each behaviour, how many are meaningfully pitched, **how many are outside the frame — which
+in a closed tank must always be zero** — and a cumulative count of how many times each behaviour has
+been *entered*. `AQUARIUM_BUBBLER_RUSH=1` shortens only the idle phases of a prop's cycle, so a
+short capture exercises several complete cycles without judging a motion at a speed the saver never
+plays it at.
 
 **The Python tools need an interpreter this repo does not track.** `water-luminance.py`,
 `crop.py` and `build-library.py` want numpy, scipy and Pillow, and the machine's `python3` has
@@ -195,15 +205,179 @@ inside a rock and a white seam on the clam by looking at renders.
 **Never pipe a build through `tail`.** A run dying with a `NameError` still exits past a
 `| tail -2`, and the PNGs you then open are the previous run's. Grep for `Error|Traceback`.
 
+## The fish think now, and the decorations move
+
+**Fish steer instead of flying straight.** The school used to have no state at all: `place` handed
+a fish a constant velocity and it crossed the frame in a dead line at a fixed height. Changing
+lane, changing height, turning, pausing and changing speed are not five features on top of that —
+they are five symptoms of the one thing missing, which is a fish that can steer. `FishBehavior`
+holds the limits (turn rate and acceleration derived from body length, since that is the only
+manoeuvrability the manifest states), `FishDecision` holds the taste (which behaviour, how often,
+and what makes one unavailable), and `School` turns an intent into a transform.
+
+Six behaviours: cruise, wander (which is what changes direction, height *and* lane — they are one
+act), hover, forage, dart, and host. Three things came with it that are not garnish:
+
+- **Pitch, from the whole heading.** A fish changing height while facing dead level reads as a
+  model sliding along a wire. Orientation is now a quaternion composition — yaw about world up,
+  pitch about the body's lateral axis, roll about the nose — because `eulerAngles` fixes an order
+  this does not want and gets silently reinterpreted the moment a second axis is non-zero.
+- **Foraging tips the nose *beyond* the path.** Descending toward the gravel and looking at it are
+  different poses, so `inspect` is carried apart from pitch and eased in and out. What is under a
+  fish comes from `SurfaceField`, which reduces the reef to domes — a flat-topped cylinder gives a
+  fish a cliff to fall off at a boulder's rim.
+- **The tail follows effort.** A stopped fish still beating at 1.5 Hz is the clearest possible
+  statement that the animation and the motion are unrelated systems.
+
+**The aquarium is a closed box, and the box is the frustum.** Its side walls and ceiling are the
+edges of the picture — a trapezoid in plan and another in elevation — closed off by the front pane,
+the back wall and the floor. A parallel-walled box cannot both stay in frame and use it: sized to
+the frustum at the pane it is 47% of the visible width at the back, and sized at the back wall a
+fish near the pane is off-screen. The floor is the one exception and stays a true horizontal plane,
+because it is the only wall that is actually drawn.
+
+This surfaced a real bug. The aquarium's water starts at `nearDepth` 2.0 m and its glass stands at
+2.89 m, and the school was being placed across the whole range — so most of a metre of it was on the
+*viewer's* side of the window, over the cross-section band. `Tank.swimNearDepth` is the pane now.
+
+**The animated props are wired.** `parts`, `emitters` and `cycle` were authored in the manifests and
+read by nothing; `Bubbler` plays them. A stream's source is the named empty inside the model, which
+rides whatever part carries it, and its anchor is an unrotated child of the reef — that separation
+is what keeps "up" aligned with the tank after yaw, tilt, Blender's axis correction and instance
+scale have all had their say.
+
+Measured on the installed build at 1600x900 and at the Retina invocation: 60.0 fps held, GPU mean
+3.5–3.9 ms. Not comparable to the 5.5 ms on record above, which was a look with god rays; the
+aquarium has none.
+
+**The Settings button dying was a SaverKit leak, not a settings bug.** User-reported and initially
+mysterious — it worked, then later did not, with no crash and nothing in the unified log. The host
+process had reached a 5.7 GB footprint. See the trap below; the fix is in `Shared/SaverKit`, it
+affects every saver, and the settings sheet itself was never at fault.
+
+**The first pass at the motion was judged on the installed build and had four faults.** All are
+fixed and the reasoning is worth keeping, because three of the four were the same mistake:
+
+- **Turn rate ran away at the small end.** `2.2 / (0.35 + length)` gives an 8 cm clownfish 293° per
+  second, so it completed a right angle in a third of a second and read as being re-pointed between
+  frames rather than turning. Capped, and — the real fix — **turn authority now scales with speed**,
+  because a fish turns by pushing water with its body and one that has slowed to a hover cannot whip
+  round. That single change fixes the jerk at every size.
+- **The intent and the wall formed a limit cycle.** The avoidance push is recomputed every frame
+  while the intent went on pointing at the glass for the whole of a behaviour, so a fish was pushed
+  off the wall, came back under its own unchanged intent, and alternated about twice a second. It
+  reads as an animal changing its mind constantly, and it is — the mind just is not the one making
+  the decisions. A deflected fish now **adopts the heading the wall gave it**.
+- **Nothing enforced a minimum commitment**, and the wall-proximity interrupt fired unconditionally.
+  In a tank this small a fish is within range of some wall nearly always, so it re-decided about
+  once a second for its whole life. The interrupt now fires only when the push genuinely *opposes*
+  the intent, and no behaviour but a dart may commit for less than 1.6 s.
+- **A host orbit was redrawn rather than advanced.** Picking a uniformly random point around the
+  anemone every few seconds is not an orbit, it is a sequence of unrelated destinations — and the
+  clownfish had the turning authority to snap onto each one, which is why it was the worst offender.
+
+One emergent behaviour is **wanted, not a bug**: a fish occasionally turns through a full circle,
+which the user described as a tang chasing its tail. It comes from a run of same-sign turn choices,
+and `FishBrain.turnSign` now biases a new heading toward continuing the turn already in progress —
+so arcs are the common case and the loop survives as the rare one. Do not "fix" it.
+
+**What a 150-second census says** (`AQUARIUM_SCHOOL_STATS`, below): ten fish, `outside 0` at every
+sample — nothing ever leaves a closed tank — and every behaviour entered: wander 168, cruise 145,
+hover 52, forage 29, dart 4. Foraging is picked on 7% of decisions against 23% of its weight, which
+is right: a fish high in the column is not eligible for it.
+
+## Fish route through the arch and the wreck now
+
+`SwimPassage` reads the `swim_` waypoints out of the placed reef, and a `transit` behaviour walks
+them. Verified: 4 transits per 120 s in a glass tank, 7 in open water, none stuck. Four things in
+it exist because of specific failure modes, and none is decoration:
+
+- **Fit is decided by girth, never by length**, measured from the mesh cross-section —
+  `ModelCache.LoadedModel.girth`. The moray is 1.5 m end to end and *thinner through the body*
+  than a blue tang a sixth its length (0.1015 against 0.0750), so a test on length refuses exactly
+  the animal the feature exists for. Measuring it from the bounds rather than declaring it also
+  means a species added later is judged correctly with no manifest change.
+- **A transit cannot be abandoned partway.** The wall interrupt and the minimum-commitment floor
+  both skip it explicitly. A fish halfway inside a hull that changes its mind is a fish embedded
+  in the hull.
+- **Prop avoidance is suppressed during a transit**, and this one would have been silent: the
+  wreck is a prop, so the term that stops fish swimming into hulls is the same term that shoves
+  one out of the hole it is aiming at. The route's declared clearance is what keeps it off the
+  geometry instead, which is what the declaration is for.
+- **A timeout as well as an arrival test**, so a fish that cannot make progress gives up and takes
+  the cooldown rather than pressing against geometry for the rest of the launch.
+
+Cooldowns are 35–80 s ordinarily and 7–18 s for a lurker; the eel also gets 2.6x the attraction
+range, a 5.0 weight against 1.2, and keeps to the bottom 30% of the column. An eel that wanders
+the whole tank is a very long tang, and an aquarium with a wreck in it always has something living
+inside the wreck.
+
+**The declared radii were already right and the geometry did not need touching.** Worth recording,
+because a session was nearly spent proving otherwise. `Tank.propScale` shrinks a prop to hold its
+angular size while fish keep their real metres, so the wreck's 0.13 m hold is a 4.3 cm hole in a
+glass tank — which sounds fatal and is not. Measured against every species' true girth:
+
+```
+sunken_ship    radius 0.13   aquarium  7/14 = 50%   ocean 14/14 = 100%
+rock_pillars   radius 0.15   aquarium  7/14 = 50%   ocean 14/14 = 100%
+rock_arch      radius 0.21   aquarium  8/14 = 57%   ocean 14/14 = 100%
+```
+
+The eel fits all three in a glass tank, because the length cap shrinks it and girth scales with it.
+
+## OPEN — start here. Two behaviours are judged wrong on the installed build
+
+Both were reported by the user against the build installed at the end of this session, and neither
+is explained. **The instrumentation and the eye disagree, and the instrumentation has not earned
+the benefit of the doubt** — three separate metrics already lied in this repo's god-rays session,
+and one lied again in this one (see the census trap below).
+
+### 1. No transit is ever *seen*, though the census says they happen
+
+The user watched for a long time across many launches and never saw a fish swim through the arch
+or the wreck. The census disagrees: 4–8 `transit` entries per 90–120 s, and fish caught *in*
+transit at sample instants (`transit 1`, `transit 2`, `transit 3`). Both observations are real and
+they have not been reconciled. Candidates, roughly in order of suspicion:
+
+- **A `transit` entry is not a swim-through.** It only means the behaviour was chosen. `School`
+  gives a transit 15 s (26 for a lurker) to finish, and a fish that never reaches its first
+  waypoint simply times out — which looks like nothing at all. **Instrument what actually
+  happens**: count waypoints *reached*, not transits started. That is the same mistake as counting
+  dart occupancy, one level up, and it is the single most likely explanation.
+- **The route may be geometrically wrong.** `SwimPassage.passages` converts each `swim_` node with
+  `convertPosition(_:to: reefNode)`. That is believed correct but has never been checked against a
+  render — nobody has drawn a marker at the computed waypoint positions and looked. Do that first
+  if the counter above says fish are reaching waypoints.
+- **The prop may not be drawn.** Arch, pillars and wreck are three models among many, with
+  `maxPerScene` caps, so a given launch may place none of them. Log which passable props were
+  actually placed.
+- **It may be happening and reading as nothing.** In a glass tank only the six smallest species
+  fit, and a 7 cm damselfish threading a 4 cm hole at the back of the tank is a very quiet event.
+  If this is the answer, the feature needs the *eel* to sell it, which is issue 2.
+
+### 2. The eel still does not behave
+
+Improved this session and still wrong. It was structurally pinned at mid-height — see the girth
+trap below — and now ranges 0.34–0.53 of the water column against a target of about 0.18, on
+`AQUARIUM_SEED=4`. It does not settle into the wreck, which is the entire point of `isLurker`.
+
+Known and unresolved:
+
+- Its *target* is low but it does not get there. A long body with a low pitch rate takes a long
+  time to descend, and `SwimLimits.authority` cuts its turning further at the low speeds it
+  prefers. It may simply never arrive.
+- `transit` is deliberately exempt from the low-bias, because a route through a wreck goes where
+  the hold is. If the eel spends much of its time transiting, the exemption is fighting the
+  preference.
+- `FishBrain.lurkerCeiling` (0.32) is the blunt knob and has not been swept.
+- **The eel is rare.** Manifest weight 0.2; of seeds 1–26 only **seed 4** draws one in the
+  aquarium. Pin `AQUARIUM_SEED=4` or nothing will be reproducible.
+- `AQUARIUM_SCHOOL_STATS` prints `lurker@<fraction of column>` for every lurker, which is how the
+  numbers above were taken.
+
 ## Next, in order
 
-1. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
-   `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
-   the tank a second kind of motion. This is now unambiguously the top of the list: the caustics
-   and both looks' god rays are accepted on the installed build, and the one open note carried
-   into that phase — the dull gravel — was the lamp's fault and is fixed.
-
-2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+1. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
@@ -223,6 +397,30 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Known gaps, deliberately left
 
+- **The pectoral fins never move.** User-reported, and deliberately deferred. It did not matter
+  while every fish did nothing but cruise; now that fish slow, stop, hover and forage it is very
+  noticeable, because holding station is exactly what a real fish does *with* its pectorals. The
+  swim shader is one travelling lateral wave down the body with a `tailward²` envelope and has no
+  term for a fin beating out of phase with it — see `swimModifier` in `School.swift`. Note the
+  connection to `SwimLimits.pivotFloor`: a hovering fish is allowed to keep 18% of its turning
+  authority precisely because a real one reorients on its pectorals, so the number is standing in
+  for the animation that is missing.
+- **The aquarium's ceiling is not a waterline.** It follows the frustum like the side walls, so it
+  rises toward the back of the tank, which no real water surface does. The alternative costs more
+  than it buys: a flat waterline can only sit as high as the frustum allows at the *nearest* depth
+  a fish can reach, which is the pane, and that fences off 53% of the usable height at the back
+  wall. The eye reads "no fish ever goes above this line" as an organising edge even with nothing
+  drawn there, so the flat version trades an untruth nobody can see for an artifact people can. The
+  framing is that the surface is not in shot, which is true of most head-on aquarium photography.
+  **If a waterline is ever drawn, the ceiling must go flat and the empty upper-back comes with it** —
+  and the cheap way to draw one is a band in the aquarium look's existing `surface` background ramp,
+  not a rendered water surface. The two changes are one change.
+- **Site attachment is a hard-coded species name**, `ModelManifest.isSiteAttached`, exactly like
+  `isManmade` and with the same debt: it is authoring data and `docs/decorations.md` is the contract
+  for it. A manifest field added for one species before a second needs it costs a pass over the
+  whole library to earn nothing.
+- **A clownfish whose anemone stands near the frame edge lives near the frame edge.** Host selection
+  does not prefer a central anemone. Low risk, since `ReefLayout` places props inside the frame.
 - **The gravel palette is not in the settings sheet.** It is drawn per launch and pinnable from
   the environment, which is what the tank needed; letting a user *choose* their gravel is a
   different feature and a fourth control on a sheet that currently asks one question. If it is
@@ -265,6 +463,78 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Traps that cost real time. Each is commented where it happens; this is the index
 
+- **A prop's silhouette is a constraint, and it fails at tank scale rather than in the studio.**
+  Widening the wreck's hold to admit medium fish hit its clearance target exactly — 0.286 m
+  measured against a 0.23 m declaration — by removing the garboard, the starboard sheer strake,
+  the frames and the deck across the full beam. The studio render looked like a damaged ship. At
+  tank scale it read as **two boat fragments with a gap between them**, and the wreck is one of the
+  best-looking props in the library. Reverted, and it turned out no cut was needed at all. Judge a
+  prop where it will be seen; a clearance number cannot tell you the hull came apart.
+- **Vertical clearance is a girth question too, and getting it wrong pins a fish in mid-water.**
+  `Tank.fishFloorClearance` was 1.6 *body lengths*, which is four to five girths for every fish
+  whose proportions are ordinary and therefore looked correct for years. A moray is twenty girths
+  long, so the same rule demanded 0.78 m of water under an animal 0.49 m long; that collided with
+  the "at most half the column" clamp and left the eel unable to descend at all, at any point in
+  its life, through any behaviour. Every floor clearance in the school is stated in girths now —
+  five for spawning, three for the height a behaviour may aim at, 1.5 for the hard clamp — which
+  reproduces the old numbers for normal fish and only moves the ones where length and girth do not
+  track each other.
+- **A repulsion added for one prop can silently disable a feature on another.** Giving props a
+  sideways shove (so fish go *round* kelp rather than being catapulted over it) also gave the rock
+  arch a shove of 1.09, comparable to a pane of glass — so fish visibly approached the one prop
+  built to be swum through and turned away. A prop that declares a passage is mostly hole, and a
+  dome is the wrong model for it: `SurfaceField.passableSideShare` keeps 15% of the repulsion, and
+  transits per 90 s roughly doubled the moment it was applied.
+- **A fish's fit through a hole is its girth, and girth is not a function of length.** The library
+  spans 0.0179 m to 0.1276 m of girth over lengths from 0.07 m to 1.5 m, and the ordering is not
+  the same in both: the longest animal is the third *thinnest*. Any sphere test on `bodyLength`
+  gets the eel exactly backwards.
+- **An animating `SaverView` is immortal, and a leaked one goes on rendering forever.** This is the
+  worst bug found in this repo so far and it was invisible for months. `CADisplayLink` retains its
+  target and the run loop retains the link; `ScreenSaverView`'s inherited animation timer does the
+  same. The only code invalidating the link lived in `deinit`, which therefore could never run. Any
+  host that discards a saver view without calling `stopAnimation()` leaked the whole graph — view,
+  scene, `ModelCache`, `SCNRenderer`, MSAA and depth attachments, drawables — **and the orphan kept
+  drawing at 60 fps into a window nobody could see**, allocating fresh IOSurfaces for as long as the
+  process lived. Measured at **161 MB per discarded view** at 2056x1329, which is ~570 MB at
+  4112x2658. A dozen Previews in System Settings took the host to a 5.7 GB footprint, at which point
+  the settings sheet could no longer allocate its preview tank and the Settings button silently did
+  nothing — no crash, nothing in the log. Frames are now tied to *being in a window* rather than to
+  `startAnimation()` alone. `SAVERKIT_LIFECYCLE=1` logs every view created and destroyed; counting
+  the two lines is the whole regression test.
+- **A memory harness that pumps the run loop by hand measures its own autorelease pool.** Objects
+  autoreleased outside a run-loop callout land in a top-level pool that never drains, and the
+  resulting graph is completely convincing: the first probe reported a steady 445 MB per cycle
+  leaking from the settings sheet, which does not leak at all. Call `app.run()`. `leaks <pid>
+  --traceTree=<addr>` is what exposed it — the roots were `@autoreleasepool content`.
+- **A screenshot tool proves nothing about deallocation.** `run-saver` renders and then exits, and
+  process exit does not run `deinit`, so a create/destroy count taken from it is zero-destroyed
+  whether or not anything leaks. Lifecycle has to be measured across repeated create-and-discard
+  cycles inside one long-lived process.
+- **An instantaneous census cannot tell "never happens" from "happens and is brief", and it fails
+  toward the first.** Sampling which behaviour each fish was in, once a second for seventy seconds,
+  found *zero* darts and read exactly like a dead code path. Nothing was wrong: a state lasting half
+  a second and chosen on 1.6% of decisions occupies about two tenths of one percent of the school's
+  time, so zero was the expected observation whether or not it worked. Counting **entries** found
+  four in 150 s. Anything rare and short has to be counted as it is entered, or the measurement
+  sends you tuning a weight that was fine.
+- **A fish keeps its real metres while the tank shrinks around it, so a spawn range floored at a
+  body length can be wider than the tank.** A long fish was handed a lateral range exceeding the
+  glass and started outside it, to be dragged back by the clamp on the first frame. Floor a spawn
+  range at a *fraction of the wall*, never at a length.
+- **`abs(y)` against the frame half-height is the wrong out-of-frame test once fish can go low.**
+  At any depth nearer than `floorEntryDepth` the frustum is shorter than the floor is deep, so a
+  fish resting just above the sand there satisfies it. Nothing used to put a fish there; foraging
+  does, and it vanished and respawned while sitting on the gravel in shot. Test the top edge and
+  the floor separately.
+- **`SCNNode.flattenedClone()` would destroy an articulated prop**, merging the hierarchy into one
+  node and taking `part_lid` with it. Plain `clone()` is already what is wanted: it copies the node
+  *tree* while sharing geometry, so two chests in one tank hinge independently.
+- **A state machine integrated against the frame's delta is not reproducible from a seed.** Every
+  A/B render in `docs/water-looks.md` depends on `AQUARIUM_SEED=42` naming one exact tank, and a
+  variable timestep makes the school reproducible only to within whatever the frame rate did.
+  Deriving the step count from absolute time — after t seconds exactly `floor(t / step)` steps have
+  run — costs nothing and keeps the workflow.
 - **`SCNLight.gobo` works on a *directional* light**, though Apple documents it as applying to
   spot lights. Worth knowing before anyone converts a key to a spot to get caustics and inherits
   an attenuation they did not want. Measured: a flat lit plane went from sd 0.0000 to 0.1669.

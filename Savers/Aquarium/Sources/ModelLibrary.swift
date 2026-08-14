@@ -111,16 +111,45 @@ struct FishSpec: Decodable {
 
 /// One model, as the tank sees it.
 ///
-/// `parts`, `emitters`, `passages` and `cycle` are part of the manifest contract and are
-/// deliberately *not* decoded here: nothing yet hinges a lid, bubbles or swims a wreck, and an
-/// unread field is dead code. Unknown keys are ignored by `Decodable`, so the pass that adds
-/// them is purely additive and no manifest has to change.
+/// `passages` is decoded and not yet read by anything: fish can turn now but do not route
+/// through a wreck. It is here because `PassageSpec` is the same eight lines whether or not it
+/// is consumed, and leaving it out would make the pass that adds routing touch this file again.
 struct ModelManifest: Decodable {
     let name: String
     let asset: String
     let category: ModelCategory
     let placement: PlacementSpec?
     let fish: FishSpec?
+    /// Empty for all but the four animated props. See `PropAnimationSpec.swift`.
+    let parts: [PartSpec]
+    let emitters: [EmitterSpec]
+    let cycle: [CyclePhase]
+    let passages: [PassageSpec]
+
+    /// Whether this prop has anything to do once it is standing. A vent has an emitter and no
+    /// cycle; a chest has both; a boulder has neither.
+    var isAnimated: Bool { !emitters.isEmpty || !cycle.isEmpty }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, asset, category, placement, fish, parts, emitters, cycle, passages
+    }
+
+    /// Written out rather than synthesized because Swift's synthesized `Decodable` has no notion
+    /// of a default for a missing key — every one of the four collections is absent from most
+    /// manifests in the library, and an optional array that every reader has to unwrap would
+    /// push that fact onto every call site instead of holding it here once.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        asset = try container.decode(String.self, forKey: .asset)
+        category = try container.decode(ModelCategory.self, forKey: .category)
+        placement = try container.decodeIfPresent(PlacementSpec.self, forKey: .placement)
+        fish = try container.decodeIfPresent(FishSpec.self, forKey: .fish)
+        parts = try container.decodeIfPresent([PartSpec].self, forKey: .parts) ?? []
+        emitters = try container.decodeIfPresent([EmitterSpec].self, forKey: .emitters) ?? []
+        cycle = try container.decodeIfPresent([CyclePhase].self, forKey: .cycle) ?? []
+        passages = try container.decodeIfPresent([PassageSpec].self, forKey: .passages) ?? []
+    }
 
     /// Whether the eye reads this prop as *made* rather than grown, which is what decides how
     /// closely `ReefLayout` lets it stand to its neighbours.
@@ -207,6 +236,20 @@ final class ModelCache {
         /// the standing height of a prop, both before the -π/2 correction.
         var length: Float { maxBound.x - minBound.x }
         var center: SIMD3<Float> { (minBound + maxBound) / 2 }
+
+        /// The radius of the smallest circle the *cross-section* fits through, in model units.
+        ///
+        /// Measured from the mesh rather than declared, and it is the only honest way to ask
+        /// whether a fish fits through a hole. Length says almost nothing about it: a moray is
+        /// twenty times its own girth end to end and slips through a gap that a blue tang half
+        /// its length cannot, because a tang is a disc. Taking it from the bounds also means a
+        /// species added later is measured correctly without anyone remembering to declare it.
+        ///
+        /// X is the long axis, so the cross-section is Y by Z, and the *larger* of the two is
+        /// what binds — a fish is assumed to stay upright rather than to turn on its side.
+        var girth: Float {
+            max(maxBound.y - minBound.y, maxBound.z - minBound.z) / 2
+        }
     }
 
     init(directory: URL) { self.directory = directory }

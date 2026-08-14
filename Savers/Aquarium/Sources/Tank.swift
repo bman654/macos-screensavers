@@ -128,10 +128,19 @@ struct Tank {
     /// Used only for a degenerate drawable size, which `SaverView` should never hand over.
     static let fallbackAspect: Float = 16.0 / 9.0
 
-    /// How far above the sand a fish may be placed, as a multiple of its own length. Fish hold
-    /// their world height for a whole crossing, so this is a spawn constraint rather than a
-    /// collision response — it only has to be big enough that the bob never dips into sand.
-    static let fishFloorClearance: Float = 1.6
+    /// How far above the sand a fish may be placed, as a multiple of its own **girth**.
+    ///
+    /// Girth rather than length, and the difference is not academic. Stated in body lengths this
+    /// was 1.6, which for the ordinary fish in the library works out at four to five girths and is
+    /// exactly right — but a moray is twenty times its own girth end to end, so the same rule
+    /// demanded three quarters of a metre of water beneath an animal 0.49 m long. That collided
+    /// with the "at most half the column" clamp below it and pinned the eel at mid-height, where
+    /// it could not descend and no behaviour could bring it down.
+    ///
+    /// The clearance a fish needs under it is set by how deep through the body it is, which is
+    /// what this now says. Five girths reproduces the old numbers for every species whose length
+    /// and girth track each other, and only changes the ones where they do not.
+    static let fishFloorClearance: Float = 5.0
 
     // MARK: Prop scale — the invariance
 
@@ -228,6 +237,79 @@ struct Tank {
         max(floorNearDepth,
             max(floorEntryDepth * 0.887, 0.45 * propScale * aspect / halfFOVTangent))
     }
+
+    // MARK: The walls
+
+    /// Whether this water is a closed glass box rather than open sea.
+    ///
+    /// It is the same fact as `substrateBand`, asked the other way round. A tank is seen from
+    /// outside through a pane — which is what puts the cut gravel across the bottom of the frame
+    /// — and a pane is a wall, so the look that has one is exactly the look a fish cannot leave.
+    /// The ocean has neither.
+    var isEnclosed: Bool { glassDepth != nil }
+
+    /// The nearest a fish may swim.
+    ///
+    /// In a glass tank this is the *pane*, not `nearDepth`, and the difference is a real one:
+    /// `nearDepth` is 2.0 m in the aquarium and the pane stands at 2.89 m, so the depth range
+    /// the school used to be placed through began almost a metre in front of the glass. A fish
+    /// there is on the viewer's side of the window, swimming over the cross-section band instead
+    /// of behind it, and the band was capped at 11% partly to keep that from being visible.
+    var swimNearDepth: Float { glassDepth ?? nearDepth }
+
+    /// The furthest a fish may swim. The back wall of a glass tank, and in the ocean simply the
+    /// far end of the depth range the school was always drawn through.
+    ///
+    /// It is `farDepth` in both cases, and for the tank that is a choice rather than a
+    /// coincidence: the fog reaches 1.05 × `farDepth`, so a fish against the back wall is very
+    /// nearly gone into the water colour. That is what the back of a real tank looks like, and
+    /// it is also why the wall needs no geometry to read.
+    var swimFarDepth: Float { farDepth }
+
+    /// How far to the side, and how far up, a fish may swim at a given depth.
+    ///
+    /// **The tank is the frustum.** Its side walls and its ceiling are the edges of the picture,
+    /// so in plan it is a trapezoid whose sides splay outward with depth, and in elevation
+    /// another one. That is not a glass box — a real one has parallel walls — and it is the
+    /// right answer anyway for one reason: no wall is drawn, so the only way to observe the
+    /// shape of one is by where fish turn round. The requirement is that a fish never leaves the
+    /// frame, and the frame is a frustum.
+    ///
+    /// A parallel-walled box cannot satisfy that requirement and also use the picture, and the
+    /// aquarium's 26° is wide enough to make the gap large. Sized to the frustum at the pane the
+    /// box is 0.67 m half-wide, which at the back wall is 47% of the visible width — a corridor
+    /// down the middle of the frame with dead water either side of it. Sized to the frustum at
+    /// the back wall it is 1.43 m half-wide, and a fish out at that x anywhere near the pane is
+    /// off the edge of the screen. Matching the frustum is the only shape that is both fully
+    /// used and fully visible, and the price is that a fish turns round sooner when it is near
+    /// the front — which reads as glass.
+    ///
+    /// The floor is the exception and stays a true horizontal plane, because the floor is the
+    /// one wall that is actually *drawn*. A substrate that flared with the frustum would be a
+    /// bowl, and `TankFloor` would have to be rebuilt to draw one.
+    func wallX(atDepth depth: Float) -> Float { halfWidth(atDepth: depth) }
+
+    /// The top of the water, as a height at a given depth.
+    ///
+    /// It follows the frustum for the same reason the side walls do, and applying the trapezoid
+    /// to only one axis was a real omission: the frame at the back wall is 2.8 times taller than
+    /// it is at the pane, so a waterline stated as one horizontal plane would have left the top
+    /// half of the back of the frame as water no fish is allowed into. Nothing draws a waterline,
+    /// so there is nothing to contradict.
+    ///
+    /// The two fills differ because the two looks want different things from the top of the
+    /// frame. A tank is bounded by the picture and wants to use it. Open sea has no surface in
+    /// shot at all — the shallow reef's is above the frame and the deep ocean's is twenty metres
+    /// up — so its ceiling is purely a composition limit, and a low one keeps the school off the
+    /// top edge instead of against it.
+    func ceilingY(atDepth depth: Float, aspect: Float) -> Float {
+        halfHeight(atDepth: depth, aspect: aspect)
+            * (isEnclosed ? Tank.tankCeilingFill : Tank.verticalFill)
+    }
+
+    /// Short of 1 by about a fish, so an animal holding the ceiling is inside the frame rather
+    /// than sliced by its top edge.
+    static let tankCeilingFill: Float = 0.88
 
     // MARK: Frustum
 

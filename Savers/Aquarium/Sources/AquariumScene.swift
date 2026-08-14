@@ -5,9 +5,6 @@
 // file owns only what is true of the whole tank: the scene, the camera, the light, the water,
 // and the per-frame update that drives them.
 //
-// Still missing from `docs/aquarium-plan.md` §2: caustics, god rays, fish AI and the animated
-// props — a chest's lid and a vent's bubbles are declared in the manifests and not yet read.
-//
 // Everything here is `internal`: SaverKit and the saver's sources compile into one module.
 
 import AppKit
@@ -35,6 +32,7 @@ final class AquariumScene {
     /// rather than a walk over the reef.
     private let seabed = SCNNode()
     private var school: School?
+    private var bubblers: [Bubbler] = []
     private var rand: Rand
 
     /// The key light's gobo, held so the caustic net can be drifted each frame, and nil for a
@@ -145,14 +143,30 @@ final class AquariumScene {
             anchors: isPreview ? 1 : style.anchorCount,
             distinct: budget,
             tank: style.tank, slack: style.spacingSlack, aspect: aspect, rand: &rand)
-        seabed.addChildNode(Reef.node(placements: placements, cache: cache))
+        let reef = Reef.build(placements: placements, cache: cache)
+        seabed.addChildNode(reef.node)
+
+        // The thumbnail still runs every hinge cycle: transforms are free enough to show what the
+        // decoration is, while particle systems add setup and simulation to a preview already
+        // measured at 234–354 ms to build. Full-size tanks get both pieces of the authored act.
+        // This stream is forked directly from the launch seed rather than consuming `rand`, so
+        // adding animation cannot silently rename every fish and prop drawn after the reef.
+        var bubblerRand = Rand(seed: seed ^ 0xB0_BB_1E_5A_71_0F)
+        for prop in reef.props where prop.manifest.isAnimated {
+            bubblers.append(Bubbler(prop: prop, reefNode: reef.node,
+                                    particlesEnabled: !isPreview, rand: &bubblerRand))
+        }
         scene.rootNode.addChildNode(seabed)
 
         let fish = isPreview ? AquariumScene.fishCount.preview : AquariumScene.fishCount.full
+        let surface = SurfaceField(props: reef.props)
+        let hosts = FishHost.hosts(in: reef.props)
+        let passages = SwimPassage.passages(in: reef.props, reefNode: reef.node)
         let school = School(
             library: library, cache: cache,
             count: style.tank.schoolCount(fish),
-            tank: style.tank, aspect: aspect, rand: &rand)
+            tank: style.tank, aspect: aspect, surface: surface, hosts: hosts,
+            passages: passages, rand: &rand)
         scene.rootNode.addChildNode(school.node)
         self.school = school
 
@@ -176,6 +190,7 @@ final class AquariumScene {
         // animation around this call — see the comment there.
         adoptAspect(Tank.aspect(of: frame.drawableSize))
         school?.update(time: frame.time, dt: Float(frame.deltaTime))
+        bubblers.forEach { $0.update(dt: Float(frame.deltaTime)) }
         driftCaustics(time: frame.time)
         swayGodRays(time: frame.time)
     }

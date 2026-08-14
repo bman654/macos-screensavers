@@ -3,7 +3,7 @@
 import math
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from saverlib import shade_smooth
 
@@ -14,6 +14,7 @@ _WIDTH = 0.30
 _DEPTH = 0.26
 _HINGE_Y = 0.13
 _HINGE_Z = 0.074
+_OPEN_DEGREES = -24.0
 _RIBS = 9
 
 
@@ -434,7 +435,14 @@ def build(seed=0):
     emitter.empty_display_type = "SPHERE"
     emitter.empty_display_size = 0.008
     emitter.parent = upper
-    emitter.location = (0.0, -0.120, 0.020)
+    # The gape belongs to neither valve, but emission happens only after the upper one opens;
+    # parenting here makes the source travel with that opening instead of staying nailed to the
+    # lower lip. Author the fully open contact point between the lips, then swing it back into
+    # the valve's rest space so bubbles cannot cross the upper shell on their way out.
+    open_contact = Vector((0.0, -0.120, 0.125))
+    emitter.location = Matrix.Rotation(
+        math.radians(-_OPEN_DEGREES), 4, "X"
+    ) @ (open_contact - hinge)
 
     return root
 
@@ -452,7 +460,7 @@ CLAMSHELL = Prop(
     weight=0.85,
     max_per_scene=1,
     min_spacing=0.42,
-    parts=(Part(node="part_upper_valve", axis=(1.0, 0.0, 0.0), open_degrees=-24.0),),
+    parts=(Part(node="part_upper_valve", axis=(1.0, 0.0, 0.0), open_degrees=_OPEN_DEGREES),),
     emitters=(Emitter(
         node="emit_bubbles",
         rate=7.0,
