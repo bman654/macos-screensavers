@@ -110,10 +110,17 @@ final class AquariumScene {
         buildEnvironment()
         buildCamera()
         if !isPreview && style.water.snowBirthRate > 0 { addMarineSnow() }
-        // Skipped in the preview for the same reason the snow is: the System Settings thumbnail
-        // is a couple of inches wide, and a shaft that reads as light at full screen reads as a
-        // smudge there.
-        if !isPreview, let rays = style.water.godRays {
+        // Drawn in the preview too, unlike the marine snow.
+        //
+        // They were skipped there at first, on the reasoning that a shaft reads as a smudge at
+        // thumbnail size. That is the wrong trade for this particular feature: the settings
+        // sheet's preview exists to show what a look actually is, and the shafts are the whole
+        // of what distinguishes the deep ocean now — so a preview without them offered a choice
+        // between three tanks while showing only two of them apart. The caustics were never
+        // skipped, because they ride the key light, and the inconsistency was visible: picking
+        // the reef or the aquarium showed a dappled floor and picking the deep ocean showed
+        // nothing new at all. Snow stays out because it is texture rather than identity.
+        if let rays = style.water.godRays {
             // A stream of its own, taken off the seed rather than off the launch stream. A draw
             // from `rand` here would reshuffle the reef and the school below it, so every seeded
             // render made before the shafts existed would name a different tank — and both tanks

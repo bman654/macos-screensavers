@@ -229,7 +229,7 @@ extension WaterLook {
         // a long scattering path and this is the only look whose backdrop is dark enough for a
         // shaft to read against it — the same darkness that makes it the wrong place for
         // caustics makes it the right place for these.
-        godRays: GodRays(count: 11, brightness: 0.50, width: 0.34, sway: 0.9, swayPeriod: 34),
+        godRays: GodRays(count: 9, brightness: 0.40, width: 0.62, sway: 0.9, swayPeriod: 34),
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.

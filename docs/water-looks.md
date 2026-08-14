@@ -633,6 +633,31 @@ exactly like a mis-tuned constant rather than like a property having no effect, 
 whole tuning pass spent cutting a number that was doing nothing. Colour and brightness are baked
 into the texture instead.
 
+**A shaft's cross-section wants a Gaussian, not a raised cosine, and the swell must only ever
+widen.** The first shafts read as "strips of plastic film" — the complaint that drove this rework
+— and there were three causes, none of which was brightness alone. A raised cosine has a flat
+shoulder and a corner where its slope changes, and the eye finds that corner and calls it an edge
+even where the value there is already tiny; a Gaussian has no corner anywhere, so the shaft has no
+edge to find. The colour was also weighted to the lamp, and additive pale blue-white pushes dark
+blue water toward *white* — a region that changes hue as well as brightness reads as a different
+substance laid over the sea rather than as more light within it, so the mix is now 0.72 to the
+water. And a beam of constant width and brightness running the frame's whole height is an object
+rather than a volume however softly it is drawn, so the section swells along its length.
+
+**The swell may only widen.** Letting it narrow symmetrically was the obvious choice and it is
+wrong in a way no still frame shows: a narrower Gaussian is a *steeper* one, so the thin part of
+every shaft carried the hardest edge in the frame. Measured, the symmetric version came out with
+sharper edges than the raised cosine it replaced while also being dimmer — which is precisely the
+combination that reads as film.
+
+**Beware the metric here.** A contrast reading taken across a row of open water is dominated by
+the *vignette*, and after that is detrended it still carries a noise floor of about 0.0112 from
+the marine snow. Both mislead in the same direction — they report a healthy number for a shaft
+that has vanished. Rendering at `brightness: 0` measures the floor directly and it is worth doing
+before trusting any reading: a sweep that appeared to show brightness having almost no effect was
+actually showing three settings that had all fallen below the floor. Against a floor-corrected
+amplitude, the shafts as first shipped measured 0.0145 and what replaced them measures 0.0076.
+
 Two more that only a render shows. **Width was wrong by about three times at first** — wide shafts
 do not read as light, they read as bands laid over the frame, because at that size the eye reads
 the edge and not the beam; many narrow ones read as one shaft broken up by the surface. And **a

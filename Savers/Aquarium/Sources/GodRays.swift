@@ -65,8 +65,8 @@ enum GodRayField {
 
         // Three images rather than one, so shafts differ in strength without needing a
         // per-shaft multiply — which is the property that turned out not to work here at all.
-        let images = [1.0, 0.82, 0.66].compactMap {
-            shaftImage(look: look, brightness: rays.brightness * $0)
+        let images = [(1.0, 0.0), (0.82, 2.1), (0.66, 4.3)].compactMap {
+            shaftImage(look: look, brightness: rays.brightness * $0.0, variant: $0.1)
         }
         guard !images.isEmpty else { return field }
         // Shafts live in the middle of the tank's depth: near enough that the fog has not eaten
@@ -134,26 +134,56 @@ enum GodRayField {
     ///
     /// The colour is the look's key seen through its own water — neither alone is right, because
     /// the light really is the key and it really has travelled through this water to get here.
-    private static func shaftImage(look: WaterLook, brightness: CGFloat,
+    private static func shaftImage(look: WaterLook, brightness: CGFloat, variant: Double,
                                    width: Int = 64, height: Int = 256) -> NSImage? {
-        let mix: CGFloat = 0.45
+        // Mostly the *water's* own colour rather than the lamp's. Additive light is added to
+        // whatever is behind it, so a shaft carrying a pale blue-white pushes dark blue water
+        // toward white — and a region that has changed hue as well as brightness reads as a
+        // different substance laid over the water instead of as more light within it. Weighted
+        // to the water, a shaft brightens the sea along the sea's own colour axis, which is what
+        // it physically is: the same water, lit harder.
+        let mix: CGFloat = 0.72
         let key = look.key, water = look.tint
         let tint = (r: Float((key.red * (1 - mix) + water.red * mix) * brightness),
                     g: Float((key.green * (1 - mix) + water.green * mix) * brightness),
                     b: Float((key.blue * (1 - mix) + water.blue * mix) * brightness))
 
         return LinearImage.make(width: width, height: height) { column, row in
-            // A high power on the cosine, because the edge is what gives a shaft away. At 1.6
-            // the sides were still crisp enough that the field read as diagonal bands ruled
-            // across the frame rather than as light in the water.
+            // A Gaussian, and one narrow enough to be spent well inside the quad it is drawn
+            // on. A raised cosine was tried first and reads as a *strip* — its shoulder is flat
+            // and its falloff has a corner where the slope changes, and the eye finds that
+            // corner and calls it an edge even when the value there is already tiny. A Gaussian
+            // has no corner anywhere, which is the whole reason for it: the shaft has no edge to
+            // find, it simply stops being there. The pedestal subtraction is what makes it reach
+            // exactly zero before the quad's own boundary, so the geometry never shows either.
             let across = (Double(column) + 0.5) / Double(width) * 2 - 1
-            let sideways = pow(max(0, cos(across * Double.pi / 2)), 2.6)
+            let down = (Double(row) + 0.5) / Double(height)
+
+            // The shaft swells and thins along its length instead of being a ruled strip. This
+            // is what finally stopped them reading as film: a Gaussian section removed the hard
+            // edge, but a beam of *constant* width and *constant* brightness running the whole
+            // height of the frame is still an object rather than a volume, and the eye had no
+            // trouble saying so. Two incommensurate terms, offset per variant, so no two shafts
+            // swell together and none of them repeats inside a frame.
+            // Swell only ever *widens*. Letting it narrow was the obvious symmetric choice and
+            // it is wrong in a way a still frame hides: a narrower Gaussian is a steeper one, so
+            // the thin part of every shaft had the hardest edge in the frame. Measured, the
+            // symmetric version made the edges sharper than the raised cosine it replaced even
+            // while it made the shafts dimmer — which is exactly the combination that reads as
+            // film rather than light.
+            let phase = down * 2 * Double.pi
+            let swell = 1 + 0.20 * (1 + sin(phase * 1.3 + variant))
+                          + 0.10 * (1 + sin(phase * 2.7 + variant * 1.7))
+            let sigma = 0.26 * swell
+            let bell = exp(-across * across / (2 * sigma * sigma))
+            let floor = exp(-1 / (2 * sigma * sigma))
+            let sideways = max(0, (bell - floor) / (1 - floor))
             // Row 0 is the top of a bitmap rep, and the shaft is brightest where it enters.
             // Steep, so it is spent well before it reaches the ground: a shaft that survives all
             // the way down reads as a hanging curtain rather than as light entering from above,
             // because the *fading* is the evidence that it is being scattered away.
-            let down = (Double(row) + 0.5) / Double(height)
             let along = pow(max(0, 1 - down), 3.2)
+                * (0.72 + 0.28 * sin(phase * 0.9 + variant * 2.3))
             let value = Float(sideways * along)
             return (tint.r * value, tint.g * value, tint.b * value)
         }
