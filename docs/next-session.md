@@ -58,57 +58,68 @@ all of it:
   The accent is its complement, low and warm, for the things standing up in the tank.
 - **Caustics**, as a gobo on the key, in the reef and the aquarium. Deep ocean gets none: at
   twenty metres the surface's focus has diffused away.
-- **God rays**, as additive shafts, in the deep ocean only. The complement of the caustics, not a
-  second helping — a caustic is the light still focused when it lands, a shaft is the light
-  scattered out on the way down, so they want opposite water.
+- **God rays**, as an additive curtain, strongest in the deep ocean and faint over the reef. The
+  complement of the caustics, not a second helping — a caustic is the light still focused when it
+  lands, a shaft is the light scattered out on the way down. The deep gets only shafts, the reef
+  gets a strong net and a faint shimmer, the aquarium gets only the net.
 
-Everything holds its measurements: reef 0.68, deep ocean 0.58, aquarium 0.78 on river. GPU is
-3.6 ms and 60 fps is unchanged.
+Everything holds its measurements: reef 0.68, deep ocean 0.72 (after the darkening the curtain
+brought — see below), aquarium 0.78 on river. GPU is 5.5 ms at 4112x2658 and 60 fps is unchanged.
 
-**The caustics are signed off and the god rays are not.** Judged on the installed build, at full
-screen, by the user:
+**The caustics and the god rays are both signed off now.** Judged on the installed build, at
+full screen, by the user:
 
 - **Caustics: keep.** Both looks, and the difference between them reads as intended — the
   aquarium's larger, sparser and slower, the reef's finer and denser. The thing singled out as
   best was not on the floor at all: the net playing across the decorations and over the backs of
   the fish, which is what riding the key light buys and would have cost per-object work any other
   way.
-- **God rays: still wrong after three passes.** They have gone from "awful" to "a little better",
-  which is not the same as good. See below before touching them.
+- **God rays: the curtain rewrite is accepted.** Judged on the installed build: "much closer
+  matched to the reference images and videos, the motion is nice — slow, mesmerizing, subtle but
+  visible." The user's own diagnosis of pass three drove the rewrite and is worth restating
+  because it named the structure, not a number: the quads were flat across their width with a
+  findable edge, and the real thing is *a curtain* — a continuous ripple of hills and valleys of
+  brightness fanning from an overhead point, folds exchanging and dying rather than travelling.
+- **The reef's curtain is accepted too.** Added at the user's request after the deep ocean
+  landed, and confirmed on the installed build. Tuned to about half the deep's relative
+  modulation (13% of local water at the top of the frame against 29%), riding over the caustics,
+  with the reef's `surface` ramp trimmed so the top-of-frame sum stays at the signed-off
+  brightness. Quads could never survive this backdrop — that verdict was real but it was about
+  objects, not about the look. Only the aquarium has no rays, and its reason stands: filtered
+  water has nothing for a shaft to light.
 
-## The god rays, and what has already been tried
+## The god rays: the curtain rewrite (pass four)
 
-Three passes, each fixing something real and none of them finishing the job. **Read this before
-changing a number, because two plausible-looking approaches have already been measured and
-rejected and the third was a wrong diagnosis that cost a whole pass.**
+`GodRays.swift` no longer draws N shaft quads. It draws **two frame-spanning additive quads** at
+different depths, each carrying a fragment shader modifier that evaluates one continuous
+brightness field: six sinusoids in fan-angle space, exp-sharpened so crests are narrower than
+valleys with no corner anywhere, an envelope easing toward the frame edges, and a vertical
+fall-off reaching exactly zero at the quad's bottom edge. Paired components at nearby fold counts
+run in opposite directions, so the folds pulse, exchange and die by interference — no per-shaft
+clocks, no fades, and nothing for additive overlap to stack because the field is its own sum.
+The full argument is in the file's header; `docs/water-looks.md` §"The shafts are one curtain"
+holds the history and the measurements.
 
-What is in the build now: a Gaussian cross-section, colour weighted 0.72 to the water rather than
-the lamp, swell along the length that may only widen, shafts fanned from a virtual source 7.5 m
-overhead, and each shaft fading in and out on its own period from a 9-26 s range. The deep look's
-`surface` ramp was strengthened at the same time and for the same reason.
+Matched against the reference photograph (a 4K stock frame of real god rays; the numbers are in
+water-looks.md): fold modulation ~29% of local water at the top of the frame against the
+photograph's ~25%, easing with height on the photograph's own taper; dominant fold width 11% of
+the frame against 11–12%; the water's vertical profile now tracks the photograph closely to the
+horizon. Motion, measured on seeded renders: recognisably the same pattern 4 s apart, turned over
+in place by 8 s (correlation ≈ 0 at a lateral shift of 0.3% of the frame), slow ~6% drift under
+the turnover by 16 s.
 
-Rejected, with the reason, so it is not re-tried:
+**The deep look was darkened at the same time, deliberately.** The user judged the bottom of the
+frame too bright — the answer to the "is the deep ocean still deep?" question this file used to
+carry. The tint (which is the fog and the whole lower half's brightness) went from (0.043, 0.128,
+0.205) to (0.030, 0.090, 0.144), all three lights followed it down (~×0.75), and the `surface`
+ramp was trimmed so ramp-plus-curtain at the top of the frame sums to the brightness that was
+already approved. The lower half now reaches ~11% of top-of-frame against the ~20% shelf it used
+to flatten at; `water-luminance` reads floor/backdrop 0.72, still inside the rule.
 
-- **Dimming them does not fix it.** Six settings from 0.20 down to 0.055 in one pass and 0.50 down
-  to 0.07 in another: the failure changes intensity and never character. That is the tell that
-  brightness was never the fault.
-- **Widening the quads made it worse**, not softer — wide beams overlap and additive light stacks,
-  so contrast went *up*.
-- **A symmetric swell made the edges sharper.** A narrower Gaussian is a steeper one, so the thin
-  part of every shaft carried the hardest edge in the frame. It may only widen.
-
-The last user feedback, still only partly addressed, and the most useful thing on this page:
-
-1. **Overlapping shafts stack and the overlap is where it looks worst.** Fewer are present at once
-   now, which dissolves some of it and does not solve it. Additive light genuinely does sum; if
-   this is still the complaint, the answer is probably fewer shafts rather than fainter ones, or
-   some form of soft-max rather than a sum.
-2. **Is the deep ocean still *deep*?** The `surface` ramp is much brighter than the one that look
-   was signed off with. It is the only place this work changed a look the user had already
-   approved, and it is a real change of character. Unanswered.
-3. **Is the fan too strong?** `GodRays.sourceHeight`, one number, lower fans harder. Unanswered.
-
-Both open questions want a *look at the installed build*, not a measurement.
+**Knobs, if the user wants adjustments:** `GodRays.brightness` (fold contrast — currently 1.35,
+tuned to the photograph), `sourceHeight` (fan hardness, lower fans harder), `drift` (how hard the
+curtain is shaken — scales every component speed at once), the `0.85` exp sharpening constant and
+the `3.5` fall-off exponent in `GodRayField.curtainShader`.
 
 **And a warning about measuring any of this.** Three separate metrics lied here in one session,
 each in the direction of saying a broken thing was fine:
@@ -121,10 +132,8 @@ each in the direction of saying a broken thing was fine:
   trusting a reading.
 - Comparing a *vertical* profile against a reference photograph has to be restricted to the water
   above the horizon, or this tank's lit seabed decides the number.
-
-The reference photograph the current values are matched against is worth having beside any further
-work: lateral amplitude ~36% of the local water at every height, and the water itself falling to
-0.20 of its top-of-frame brightness by the horizon.
+- Rows at and below mid-frame cross the rocks and the diver, so a "modulation" reading there is
+  mostly prop edges surviving the detrend. Trust the top-band rows.
 
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
@@ -188,20 +197,17 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Next, in order
 
-1. **Finish the god rays**, which are the only thing in the tank the user has looked at and not
-   accepted. See the section above for the three passes already spent, what was measured and
-   rejected, and the two questions that need an answer from a real display rather than a metric.
-2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
+1. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
-   the tank a second kind of motion. This is now the top of the list: caustics and god rays are
-   done, and the one open note carried into that phase — the dull gravel — was the lamp's fault
-   and is fixed.
+   the tank a second kind of motion. This is now unambiguously the top of the list: the caustics
+   and both looks' god rays are accepted on the installed build, and the one open note carried
+   into that phase — the dull gravel — was the lamp's fault and is fixed.
 
-3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
    last: the picture should be a frame of the finished tank, so shooting it before the
    caustics and the fish AI land means shooting it twice.
 

@@ -195,12 +195,9 @@ final class AquariumScene {
         gobo.contentsTransform = SCNMatrix4MakeTranslation(t, t * 0.61, 0)
     }
 
-    /// Advances each shaft's own fade and wander.
-    ///
-    /// The field used to be translated as a single node, which meant every shaft swayed in step —
-    /// and a set of parallel bands moving together reads as a curtain in a draught rather than as
-    /// light in water. Each shaft now carries its own clock; `GodRayField` owns that, and this is
-    /// only the tick.
+    /// Ticks the curtain's clock. All the motion lives in the field's own shader — folds pulse
+    /// and exchange by interference — so this passes the scene's time and nothing else, which is
+    /// what keeps a seeded render at a given second reproducible.
     private func swayGodRays(time: TimeInterval) {
         godRays?.update(time: time)
     }

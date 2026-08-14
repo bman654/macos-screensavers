@@ -565,8 +565,8 @@ water, and that — not taste — is what decides which look gets which.
 
 | | caustics | god rays | why |
 |---|---|---|---|
-| deep ocean | none | **strongest**, 0.50 | Twenty metres diffuses the surface's focus away long before it lands, and it is the only backdrop dark enough for a shaft to stand against. |
-| shallow reef | **strongest**, 2.6 m / 0.45 | none | A few metres of sunlit water is exactly what focuses a net onto sand. It is also the brightest and smoothest backdrop, which is what defeated its shafts — see below. |
+| deep ocean | none | **strongest**, 1.35 | Twenty metres diffuses the surface's focus away long before it lands, and it is the only backdrop dark enough for a shaft to stand hard against. |
+| shallow reef | **strongest**, 2.6 m / 0.45 | faint, 0.75 | A few metres of sunlit water is exactly what focuses a net onto sand — and what a snorkeller sees above that sand is a broad faint shimmer, both halves of one lamp split by where the light lands. The quad-era shafts failed here; only the curtain survives this backdrop — see below. |
 | aquarium | 2.8 m / 0.45 | none | A tank has a rippled surface and a bright lamp. It has no shafts because it has nothing for them to light: this is the look whose marine snow is nearly zero, because a maintained tank has a filter. |
 
 ### The caustics ride the key light
@@ -621,92 +621,80 @@ Two tuning results worth keeping:
   a near-vertical face taking about 21% of the near-vertical key and dominated by the accent
   instead, so the net lands on the receding bed and stops at the band on its own.
 
-### The shafts are additive quads, and the reef could not have them
+### The shafts are one curtain, not a set of quads
 
-Two properties of this saver make that cheap: **the camera never moves**, so a quad that faces it
-once faces it forever and no billboard constraint is needed; and the shafts are genuinely parallel
-in world space, so the perspective camera converges them without anything fanning them by hand.
+Two quad-based versions preceded this and both failed the same way whatever their cross-section,
+width, count or fade was tuned to: **a quad is an object, an object has a lateral extent, and an
+extent has an edge.** The flat water on either side states exactly where the shaft stops, and the
+eye finds that boundary however soft the falloff inside it is. The rejected passes are worth
+recording precisely because each was plausible: dimming (tried twice, six settings and then four)
+changed intensity and never character; widening the quads made the overlap stack additively and
+contrast went *up*; a symmetric swell made the thin part of every shaft the steepest Gaussian in
+the frame. Every one of these tuned the object. The object was the mistake.
 
-**`SCNMaterial.multiply` is silently ignored once `blendMode` is `.add`.** With the multiply
-colour scaled all the way to zero the shafts still drew at full strength — a failure that reads
-exactly like a mis-tuned constant rather than like a property having no effect, and it cost a
-whole tuning pass spent cutting a number that was doing nothing. Colour and brightness are baked
-into the texture instead.
+What the reference photograph actually contains is a **continuous modulation of the whole
+backdrop** — a ~25% ripple over the local water brightness at the top of the frame, easing to
+~16% by mid-frame, dominant fold about 12% of the frame wide, and no identifiable boundary
+anywhere. So the field is now literally that: one brightness function over the frame, evaluated
+per fragment in a shader modifier on two frame-spanning additive quads at different depths. The
+folds are a sum of six sinusoids in fan-angle space, sharpened by an `exp()` so crests are
+narrower than valleys without a corner appearing anywhere — a crest simply becomes the next
+valley, which is why there is no edge to find and why overlap cannot stack: the field *is* its
+own sum. `GodRays.swift` carries the full argument.
 
-**A shaft's cross-section wants a Gaussian, not a raised cosine, and the swell must only ever
-widen.** The first shafts read as "strips of plastic film" — the complaint that drove this rework
-— and there were three causes, none of which was brightness alone. A raised cosine has a flat
-shoulder and a corner where its slope changes, and the eye finds that corner and calls it an edge
-even where the value there is already tiny; a Gaussian has no corner anywhere, so the shaft has no
-edge to find. The colour was also weighted to the lamp, and additive pale blue-white pushes dark
-blue water toward *white* — a region that changes hue as well as brightness reads as a different
-substance laid over the sea rather than as more light within it, so the mix is now 0.72 to the
-water. And a beam of constant width and brightness running the frame's whole height is an object
-rather than a volume however softly it is drawn, so the section swells along its length.
+**The motion falls out of the same structure instead of being animated.** Pairs of components at
+nearby fold counts travelling in opposite directions interfere, and their beats are what a shaken
+curtain does: folds brighten, exchange places with neighbours and die over ten-odd seconds while
+drifting almost nowhere. Measured on the detrended top band of seeded renders: 4 s apart the
+pattern correlates at 0.64; 8 s apart it has turned over in place (correlation ≈ 0 at a lateral
+shift of 0.3% of the frame); 16 s apart there is a slow net drift of ~6% under the turnover.
+Nearby folds move loosely together and distant ones out of step, because a slow common sway is
+added whose phase varies gently with the fan angle — the hand on the curtain rod.
 
-**The swell may only widen.** Letting it narrow symmetrically was the obvious choice and it is
-wrong in a way no still frame shows: a narrower Gaussian is a *steeper* one, so the thin part of
-every shaft carried the hardest edge in the frame. Measured, the symmetric version came out with
-sharper edges than the raised cosine it replaced while also being dimmer — which is precisely the
-combination that reads as film.
+The fan itself survives from the second pass: folds converge on a virtual source a few metres
+overhead, knowingly false — real sunlight arrives parallel, but at this saver's 22° field of view
+a perspective camera converges it far too weakly to see, and parallel folds read as ruled lines.
+The colour also survives: mixed 0.72 to the *water*, because additive pale blue-white pushes dark
+blue water toward white, and a region that changes hue as well as brightness reads as a different
+substance laid over the sea rather than as more light within it.
 
-**Beware the metric here.** A contrast reading taken across a row of open water is dominated by
-the *vignette*, and after that is detrended it still carries a noise floor of about 0.0112 from
-the marine snow. Both mislead in the same direction — they report a healthy number for a shaft
-that has vanished. Rendering at `brightness: 0` measures the floor directly and it is worth doing
-before trusting any reading: a sweep that appeared to show brightness having almost no effect was
-actually showing three settings that had all fallen below the floor. Against a floor-corrected
-amplitude, the shafts as first shipped measured 0.0145 and what replaced them measures 0.0076.
+Facts that remain true and load-bearing from the quad era:
 
-Two more that only a render shows. **Width was wrong by about three times at first** — wide shafts
-do not read as light, they read as bands laid over the frame, because at that size the eye reads
-the edge and not the beam; many narrow ones read as one shaft broken up by the surface. And **a
-shaft must be spent before it reaches the ground**, or it reads as a hanging curtain: the fading
-is the evidence that it is being scattered away.
+- **`SCNMaterial.multiply` is silently ignored once `blendMode` is `.add`** — with the multiply
+  colour scaled to zero the old shafts still drew at full strength, and it cost a tuning pass.
+  Colour and brightness are baked into the shader as literals for the same reason.
+  **`SCNNode.opacity` does scale an additive material**, exactly and linearly, if a fade is ever
+  needed again.
+- **The camera never moves**, so view space is world space and the fan geometry is baked into the
+  shader as constants. A saver that ever flies its camera must revisit this together with
+  everything else so marked.
+- **Beware the metric.** A contrast reading across open water is dominated by the vignette, and
+  detrended it still carries a noise floor of about 0.0112 from the marine snow. Render at
+  `brightness: 0` to measure the floor before trusting a sweep.
 
-### The second pass, measured against a photograph
+**Most of the vertical gradient belongs to the water, not to the ray** — the second pass's one
+finding that mattered, and the curtain keeps it. The photograph's water falls to a fifth of its
+top-of-frame brightness by the horizon and keeps falling to 2% at the frame's foot; the shafts
+live inside the bright near-surface region and fade with it. The deep look's `surface` ramp
+supplies the emergence, and the curtain's own fall-off is matched to the photograph's amplitude
+taper and reaches exactly zero at its quad's bottom edge so the geometry never shows. The *tint*
+is now much darker than the look originally shipped with — it is the fog and the below-horizon
+backdrop, so it is the single number that sets the lower half's brightness, and the lower half is
+where depth is stated: the look used to flatten near 20% of its top-of-frame brightness and read
+as a lit shelf, and now reaches ~11%, with all three lights following the tint down so the floor
+stays inside the one budget.
 
-The shafts as first shipped read as "strips of plastic film held in front of the tank". Putting a
-photograph of the real thing beside a render and measuring both is what sorted out which of the
-obvious explanations were real, and two of them were not the ones being reached for.
-
-| | reference photo | first version |
-|---|---|---|
-| lateral amplitude, as % of the local water brightness | ~36% at every height | 45–60% |
-| water's own falloff, top of frame → horizon | to **0.20** | to **0.64** |
-
-**Most of the vertical gradient belongs to the water, not to the ray.** That is the surprise. In
-the photograph the whole column falls away steeply with depth, so the shafts live inside a bright
-near-surface region and fade with it; here the water was nearly flat top to bottom, so the shafts
-had nothing to emerge *from* and sat on it as bands. The deep look's `surface` ramp is now much
-stronger for this reason alone, reaching 0.25 against the photograph's 0.20 — and because it is
-the ramp doing it, the fog still meets the background exactly at the horizon and the floor
-measurement moves only 0.59 → 0.56.
-
-The lateral contrast, meanwhile, was only about 1.3x too high — far less than it looked.
-
-Three further changes, all of them about *structure* rather than intensity:
-
-- **The shafts fan** from a virtual source a few metres overhead rather than running parallel.
-  Real sunlight arrives parallel and a perspective camera converges it — but at this saver's 22°
-  field of view it converges far too weakly to see, so parallel shafts read as ruled lines. The
-  source height is knowingly false and it is the number to reach for if the field ever looks like
-  a fence again.
-- **Each shaft lives and dies on its own clock.** They used to sway together because the whole
-  field was one translated node, which reads as a curtain in a draught. Each now fades in, wanders,
-  and fades out on a period of its own, drawn from a range — the range is the point, since a single
-  shared period makes the field pulse in unison. The fade is a *rectified* sine, so a shaft is
-  absent for about half its cycle and the field turns over instead of breathing.
-- **`SCNNode.opacity` does scale an additively-blended material**, exactly and linearly, which is
-  what makes the per-shaft fade possible at all — worth knowing precisely because
-  `SCNMaterial.multiply` does not.
-
-**The shallow reef was meant to have both and has no shafts at all.** It was tried from 0.20 down
-to 0.055 and the failure never changed character, only intensity — which is the tell that
-brightness was never the problem. An additive band on a backdrop that is both the brightest of the
-three *and* the smoothest shows its own edge however softly that edge is drawn, so the shafts read
-as hard diagonal stripes ruled across the reef at every setting bright enough to see at all. Which
-is the same fact that gives that look the strongest caustics, read the other way round.
+**The shallow reef has the curtain too, faintly — the redemption of a look that could not have
+quads.** The quad-era shafts were tried there from 0.20 down to 0.055 and the failure never
+changed character, only intensity: an additive band on the brightest, smoothest backdrop of the
+three shows its own edge however softly it is drawn. That was a fact about *objects*, and the
+curtain has none, so the same backdrop takes it without complaint. It is tuned to about half the
+deep look's relative modulation — 13% of the local water at the top of the frame against 29% —
+and the reef's `surface` ramp is trimmed the same way the deep look's was, so ramp-plus-curtain
+sums to the top-of-frame brightness that was already signed off (0.189 against 0.190). The
+coherence ratio moved 0.68 → 0.65, inside the rule. Only the aquarium has no rays now, and its
+reason was never about rendering: a maintained tank's filtered water has nothing for a shaft to
+light.
 
 ### What both did to the measurements
 
@@ -716,6 +704,12 @@ is the same fact that gives that look the strongest caustics, read the other way
 | deep ocean | 0.78 | **0.59** | god rays |
 | aquarium, river | 0.81 | **0.78** | caustics |
 | aquarium, quartz | 0.96 | **0.92** | caustics |
+
+The deep ocean's ratio later moved again, 0.59 → **0.72**, when the look was darkened for the
+curtain: the tint fell further than the lights could follow without losing the fish entirely, so
+the floor sits closer under a darker backdrop. The rule still holds — the floor is dimmer than
+the water above it — and the change the darkening bought is in the vertical profile, where the
+lower half now reaches ~11% of the top of the frame against the ~20% shelf it used to flatten at.
 
 **Caustics lower the reported ratio without changing the light budget at all**, and the reason is
 worth knowing before anyone reads it as a regression: the compensation preserves the *mean*, and

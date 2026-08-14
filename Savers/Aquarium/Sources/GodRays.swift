@@ -6,95 +6,68 @@
 // backdrop far too bright and smooth for a shaft to sit on, and the aquarium is a clean box with
 // a filter and nothing for one to light.
 //
-// **This is the second version. The first read as strips of plastic film held in front of the
-// tank**, and what fixed it was four separate things, three of which came from measuring a
-// photograph of the real phenomenon beside a render of this one:
+// **This is the third version, and it abandons the idea the first two shared: that a field of
+// shafts is a set of objects.** Both earlier versions drew N separate quads, and both failed the
+// same way however the quads were shaped — a quad has a lateral extent, an extent has an edge,
+// and the eye finds the edge no matter how soft the falloff inside it is, because the flat water
+// on either side states exactly where the shaft stops. Measured against a reference photograph
+// the failure is unambiguous: the photograph's rays are a *smooth modulation of the whole
+// backdrop* — about a 25% ripple over the local water brightness at the top of the frame, with a
+// dominant fold about 12% of the frame wide and no identifiable boundary anywhere — while the
+// quads produced flat-topped bands of near-constant brightness that met the water in under a
+// fold's width.
 //
-//   1. **The shafts fan.** They were parallel, aimed along the key, and a field of parallel bands
-//      crossing the frame at one angle is a texture rather than a place. Real shafts converge on
-//      the patch of surface that made them, so these are aimed from a virtual source a few metres
-//      overhead — a cheat, since the sun is not a few metres up, and one the eye wants badly
-//      enough that it is the honest choice.
-//   2. **Each shaft lives and dies on its own clock.** They used to sway together, because the
-//      whole field was one translated node — a curtain moving in a draught, which is the thing it
-//      most needed not to look like. Each now fades in, wanders a little, and fades out on a
-//      period of its own, so some are always arriving while others leave.
-//   3. **A shaft dies with depth far faster than it did.** The photograph falls to about a fifth
-//      of its peak less than halfway down the frame.
-//   4. **The lateral contrast came down to about a third of the local water brightness**, which is
-//      what that photograph measures at every height in it — against 45–60% here before.
+// So the field is now what the photograph is: a **curtain**. One continuous brightness function
+// over the whole frame, evaluated per fragment, whose folds are a sum of a few sinusoids in
+// fan-angle space. A sum of smooth waves has no edge to find — a crest simply becomes the next
+// valley — and overlap cannot stack, because there are no parts to overlap: the field *is* its
+// own sum. The motion falls out of the same structure. Pairs of components at nearby fold counts
+// travelling in opposite directions interfere, so what the eye sees is what a shaken curtain
+// does: folds brighten, exchange places with their neighbours and die over ten-odd seconds while
+// drifting almost nowhere, nearby folds moving loosely together and distant ones out of step.
+// No per-shaft clocks, no fades — turnover is interference, not animation.
 //
-// Two properties of this saver make additive quads cheap here. **The camera never moves**, so a
-// quad that faces it once faces it forever and none of this needs a billboard constraint —
-// anything assuming a still camera is marked, and a saver that ever flies its camera must revisit
-// them together. And the shafts are real geometry at real depths, so the fog thins them with
-// distance and the depth buffer hides them behind rock without any help.
+// Two properties of this saver make the evaluation cheap. **The camera never moves**, so view
+// space is world space and the fan geometry can be baked into the shader as constants — anything
+// assuming a still camera is marked, and a saver that ever flies its camera must revisit them
+// together. And the curtain is real geometry at a real depth, so the depth buffer hides it
+// behind rock without any help.
 
 import AppKit
 import Foundation
 import SceneKit
 
-/// What a look wants of its shafts, or nil for a look with none.
+/// What a look wants of its curtain, or nil for a look with none.
 struct GodRays {
-    /// How many shafts exist — rather more than are visible at once, since each spends roughly
-    /// half its cycle faded out entirely.
-    let count: Int
-
-    /// Peak brightness of a shaft where it enters, as a fraction of white, before its own fade.
-    ///
-    /// It has to be baked into the texture, because **`SCNMaterial.multiply` is silently ignored
-    /// once `blendMode` is `.add`** — with the multiply colour scaled to zero the shafts still
-    /// drew at full strength. `SCNNode.opacity` *does* scale an additive material, exactly and
-    /// linearly, and that is what carries the per-shaft fade instead.
+    /// Overall strength of the additive field, tuned against the reference photograph's ~25%
+    /// ripple over the local water at the top of the frame. Dimming was measured (twice) never
+    /// to fix a shape problem — this number is only for holding that ratio.
     let brightness: CGFloat
 
-    /// Roughly how wide one shaft is, in metres, before a per-shaft jitter either side.
+    /// How far above the eye the folds converge, in metres.
     ///
-    /// Got wrong by about three times to begin with. Wide shafts do not read as light: they read
-    /// as bands laid over the frame, because at that size the eye reads the *edge* rather than the
-    /// beam. Many narrow ones read as one shaft broken up by the surface.
-    let width: Float
-
-    /// How far above the eye the shafts are aimed from, in metres.
-    ///
-    /// Pure art direction and knowingly false — the sun is not eight metres up, and real sunlight
-    /// arrives parallel. But this saver's field of view is narrow enough that a perspective camera
-    /// converges truly parallel shafts far too weakly to see, so they read as ruled lines, while
-    /// every photograph of the real thing shows a fan. Smaller values fan harder. **This is the
-    /// number to reach for if the field ever looks like a fence again.**
+    /// Pure art direction and knowingly false — the sun is not eight metres up, and real
+    /// sunlight arrives parallel. But this saver's field of view is narrow enough that a
+    /// perspective camera converges truly parallel shafts far too weakly to see, so they read
+    /// as ruled lines, while every photograph of the real thing shows a fan. Smaller values fan
+    /// harder.
     let sourceHeight: Float
 
-    /// How far a shaft wanders sideways over its life, in metres. Small: this is the surface above
-    /// it moving, not the shaft going anywhere.
-    let ripple: Float
-
-    /// The range of seconds a shaft takes to fade in, wander, and fade out.
-    ///
-    /// A *range*, and the width of it is the point. Give every shaft one period and the field
-    /// pulses in unison, which reads worse than not animating at all — the failure the first
-    /// version had, where a single node carried the whole field and every shaft swayed in step.
-    let period: ClosedRange<Double>
+    /// Scales every component's speed at once: how hard the curtain is being shaken.
+    let drift: Float
 }
 
-/// The shafts for one look, and their independent animation.
+/// The curtain for one look: two full-frame layers at different depths, each carrying the
+/// interference field as a fragment shader modifier.
 ///
-/// A class rather than a function returning a node, because each shaft carries state — its own
-/// clock, its own resting place — and that state is precisely what keeps the field from moving as
-/// one thing.
+/// Two layers rather than one because the fog is depth-aware and the folds are not: the far
+/// layer arrives dimmer and flatter through the fog, which is the one part of "nearer shafts
+/// read stronger" that a single sheet cannot fake. Their fold sets are drawn independently, so
+/// the two never beat in step.
 final class GodRayField {
     let node = SCNNode()
 
-    private struct Shaft {
-        let node: SCNNode
-        let restX: Float
-        let fadePeriod: Double
-        let fadePhase: Double
-        let ripplePeriod: Double
-        let ripplePhase: Double
-        let rippleSpan: Float
-    }
-
-    private var shafts: [Shaft] = []
+    private var materials: [SCNMaterial] = []
 
     init(_ rays: GodRays, look: WaterLook, tank: Tank, aspect: Float, rand: inout Rand) {
         // After everything opaque. An additive surface drawn before the rock behind it would
@@ -102,137 +75,137 @@ final class GodRayField {
         // light that is meant to be *in front of* it.
         node.renderingOrder = 100
 
-        // Three textures at different strengths and swell offsets, so shafts differ from each
-        // other without needing one texture apiece.
-        let images = [(1.0, 0.0), (0.84, 2.1), (0.68, 4.3)].compactMap {
-            GodRayField.shaftImage(look: look, brightness: rays.brightness * $0.0, variant: $0.1)
-        }
-        guard !images.isEmpty else { return }
+        let span = tank.farDepth - tank.nearDepth
+        for layer in [(depth: tank.nearDepth + 0.38 * span, share: 0.58),
+                      (depth: tank.nearDepth + 0.68 * span, share: 0.42)] {
+            let halfWidth = tank.halfWidth(atDepth: layer.depth)
+            let halfHeight = tank.halfHeight(atDepth: layer.depth, aspect: aspect)
 
-        // Shafts live in the middle of the tank's depth: near enough that the fog has not eaten
-        // them, far enough to read as part of the space rather than as something on the lens.
-        let nearest = tank.nearDepth + 0.30 * (tank.farDepth - tank.nearDepth)
-        let farthest = tank.nearDepth + 0.85 * (tank.farDepth - tank.nearDepth)
+            // Wider than the frustum so the quad's lateral edges are never in shot — the field
+            // itself has no edge, and the geometry must not introduce one. Vertically it runs
+            // from above the frame to past the horizon, and the fall-off below reaches exactly
+            // zero at the quad's bottom edge for the same reason.
+            let top = 1.12 * halfHeight
+            let bottom = -0.60 * halfHeight
+            let plane = SCNPlane(width: CGFloat(2.7 * halfWidth),
+                                 height: CGFloat(top - bottom))
+            let material = GodRayField.material(
+                shader: GodRayField.curtainShader(
+                    rays, look: look, rand: &rand,
+                    halfWidth: halfWidth, top: top, bottom: bottom,
+                    share: CGFloat(layer.share)))
+            plane.materials = [material]
+            materials.append(material)
 
-        for index in 0..<rays.count {
-            let depth = nearest + (farthest - nearest)
-                * (Float(index) + rand.inRange(0.15, 0.85)) / Float(max(1, rays.count))
-            let halfWidth = tank.halfWidth(atDepth: depth)
-            let halfHeight = tank.halfHeight(atDepth: depth, aspect: aspect)
-
-            // A jittered stride rather than random offsets, which clump often enough to look like
-            // a mistake. Spread wider than the frame, because a shaft aimed outward from overhead
-            // has to enter from beyond the edge to cross it.
-            let stride = 2.6 * halfWidth / Float(rays.count)
-            let restX = -1.3 * halfWidth + stride * (Float(index) + rand.inRange(0.2, 0.8))
-
-            let shaft = SCNPlane(width: CGFloat(rays.width * rand.inRange(0.75, 1.4)
-                                                * tank.propScale),
-                                 height: CGFloat(halfHeight * 4.2))
-            shaft.materials = [GodRayField.material(image: images[index % images.count])]
-
-            let shaftNode = SCNNode(geometry: shaft)
-            shaftNode.position = SCNVector3(restX, halfHeight * 0.45, -depth)
-            // Aimed away from the virtual source overhead. This one line is what turns a set of
-            // parallel bands into a fan.
-            shaftNode.eulerAngles = SCNVector3(0, 0, atan2(restX, rays.sourceHeight))
-            shaftNode.opacity = 0
-            node.addChildNode(shaftNode)
-
-            shafts.append(Shaft(
-                node: shaftNode,
-                restX: restX,
-                fadePeriod: Double(rand.inRange(Float(rays.period.lowerBound),
-                                                Float(rays.period.upperBound))),
-                fadePhase: Double(rand.inRange(0, 2 * Float.pi)),
-                // Unrelated to the fade period on purpose, so a shaft is not at the same point of
-                // its wander every time it appears.
-                ripplePeriod: Double(rand.inRange(5, 13)),
-                ripplePhase: Double(rand.inRange(0, 2 * Float.pi)),
-                rippleSpan: rays.ripple * rand.inRange(0.5, 1.3)))
+            let layerNode = SCNNode(geometry: plane)
+            layerNode.position = SCNVector3(0, (top + bottom) / 2, -layer.depth)
+            node.addChildNode(layerNode)
         }
     }
 
-    /// Fades and wanders each shaft on its own clock.
-    ///
-    /// The fade is a *rectified* sine raised to a power, and the rectification is what gives it
-    /// the shape the real thing has: a shaft is absent for about half its cycle, arrives
-    /// gradually, and leaves the same way. An ordinary sine offset to stay positive would leave
-    /// every shaft at least half present at all times, and the field would breathe in place
-    /// instead of turning over.
+    /// Advances the curtain's clock. The shader owns all the motion; this is only the tick,
+    /// and it uses the scene's own time so a seeded render at a given second is reproducible.
     func update(time: TimeInterval) {
-        for shaft in shafts {
-            let cycle = sin(time * 2 * .pi / shaft.fadePeriod + shaft.fadePhase)
-            shaft.node.opacity = CGFloat(pow(max(0, cycle), 1.4))
-            let wander = sin(time * 2 * .pi / shaft.ripplePeriod + shaft.ripplePhase)
-            shaft.node.position.x = CGFloat(shaft.restX + shaft.rippleSpan * Float(wander))
-        }
+        let now = NSNumber(value: Float(time))
+        for material in materials { material.setValue(now, forKey: "rayTime") }
     }
 
-    private static func material(image: NSImage) -> SCNMaterial {
+    private static func material(shader: String) -> SCNMaterial {
         let material = SCNMaterial()
-        material.diffuse.contents = image
         material.lightingModel = .constant
-        material.isDoubleSided = true
+        material.diffuse.contents = NSColor.black
         // Additive, because light is additive: a shaft brightens what is behind it and can never
-        // darken it. Alpha blending would let a shaft sit *over* a fish as a grey film.
+        // darken it. Alpha blending would let the curtain sit *over* a fish as a grey film.
         material.blendMode = .add
         material.writesToDepthBuffer = false
-        // But it still *reads* depth, so a rock in front of a shaft occludes it. Without this
-        // every shaft paints over the whole reef and the tank loses its depth entirely.
+        // But it still *reads* depth, so a rock in front of the curtain occludes it. Without
+        // this the field paints over the whole reef and the tank loses its depth entirely.
         material.readsFromDepthBuffer = true
+        material.shaderModifiers = [.fragment: shader]
         return material
     }
 
-    /// One shaft: brightest where it enters and gone well before the ground, with soft sides,
-    /// **already carrying its look's colour and its own brightness** — see `GodRays.brightness`
-    /// for why that cannot be a material property.
+    /// The interference field, as Metal source with this layer's fan geometry and fold set
+    /// baked in as literals. **`_surface.position` is view space, and view space is world space
+    /// here** because the camera sits at the origin unrotated — the one assumption of a still
+    /// camera this file makes.
     ///
-    /// The colour is mostly the *water's*, not the lamp's. Additive light is added to whatever is
-    /// behind it, so a shaft carrying a pale blue-white pushes dark blue water toward white, and a
-    /// region that has changed hue as well as brightness reads as a different substance laid over
-    /// the sea rather than as more light within it.
-    private static func shaftImage(look: WaterLook, brightness: CGFloat, variant: Double,
-                                   width: Int = 64, height: Int = 256) -> NSImage? {
+    /// The fold set is six sinusoids in `u`, the fan angle normalised so the visible frame spans
+    /// about [-1, 1]. The counts bracket the photograph's dominant fold (~8 across the frame),
+    /// and the two pairs at nearby counts moving in opposite directions are what make the field
+    /// *turn over* rather than travel: their interference beats on a 10–15 s period, so a fold
+    /// brightens, hands its light to a neighbour and dies, having drifted only a few percent of
+    /// the frame — which is what the real thing does, and what no amount of per-quad fading ever
+    /// produced. The exponential at the end sharpens crests and broadens valleys without ever
+    /// creating a corner: it is the smooth analogue of "the bright fold is narrower than the
+    /// dark water between folds", and its slope is gentle enough that no isoline of it reads as
+    /// a boundary.
+    private static func curtainShader(_ rays: GodRays, look: WaterLook, rand: inout Rand,
+                                      halfWidth: Float, top: Float, bottom: Float,
+                                      share: CGFloat) -> String {
+        // The colour is mostly the *water's*, not the lamp's. Additive light is added to
+        // whatever is behind it, so a curtain carrying a pale blue-white pushes dark blue water
+        // toward white, and a region that has changed hue as well as brightness reads as a
+        // different substance laid over the sea rather than as more light within it.
         let mix: CGFloat = 0.72
         let key = look.key, water = look.tint
-        let tint = (r: Float((key.red * (1 - mix) + water.red * mix) * brightness),
-                    g: Float((key.green * (1 - mix) + water.green * mix) * brightness),
-                    b: Float((key.blue * (1 - mix) + water.blue * mix) * brightness))
+        let strength = rays.brightness * share
+        let tint = (r: (key.red * (1 - mix) + water.red * mix) * strength,
+                    g: (key.green * (1 - mix) + water.green * mix) * strength,
+                    b: (key.blue * (1 - mix) + water.blue * mix) * strength)
 
-        return LinearImage.make(width: width, height: height) { column, row in
-            let across = (Double(column) + 0.5) / Double(width) * 2 - 1
-            let down = (Double(row) + 0.5) / Double(height)
+        // The fan: folds converge on a virtual source overhead, jittered off-centre so the two
+        // layers' fans never share an axis exactly.
+        let sourceX = rand.inRange(-0.8, 0.8) * halfWidth * 0.25
+        let sourceY = rays.sourceHeight
+        let psiHalf = atan(halfWidth / (sourceY - (top + bottom) / 2))
 
-            // The shaft swells and thins along its length rather than being a ruled strip. **It
-            // may only ever widen.** Letting it narrow symmetrically was the obvious choice and is
-            // wrong in a way no still frame shows: a narrower Gaussian is a *steeper* one, so the
-            // thin part of every shaft carried the hardest edge in the picture — measured, that
-            // version had sharper edges than the raised cosine it replaced while also being
-            // dimmer, which is exactly the combination that reads as film.
-            let phase = down * 2 * Double.pi
-            let swell = 1 + 0.20 * (1 + sin(phase * 1.3 + variant))
-                          + 0.10 * (1 + sin(phase * 2.7 + variant * 1.7))
-            // A Gaussian, spent well inside the quad it is drawn on. A raised cosine reads as a
-            // *strip*: its shoulder is flat and its falloff has a corner where the slope changes,
-            // and the eye finds that corner and calls it an edge even where the value there is
-            // already tiny. A Gaussian has no corner anywhere, so there is no edge to find — the
-            // shaft simply stops being there. The pedestal subtraction makes it reach exactly zero
-            // before the quad's own boundary, so the geometry never shows either.
-            let sigma = 0.26 * swell
-            let bell = exp(-across * across / (2 * sigma * sigma))
-            let floor = exp(-1 / (2 * sigma * sigma))
-            let sideways = max(0, (bell - floor) / (1 - floor))
-
-            // Row 0 is the top of a bitmap rep, and the shaft is brightest where it enters. The
-            // exponent is matched against a photograph rather than guessed: the real thing is down
-            // to about a fifth of its peak less than halfway down the frame, and a shaft that
-            // survives to the ground reads as a hanging curtain rather than as light entering from
-            // above — the *fading* is the evidence that it is being scattered away.
-            let along = pow(max(0, 1 - down), 4.6)
-                * (0.72 + 0.28 * sin(phase * 0.9 + variant * 2.3))
-            let value = Float(sideways * along)
-            return (tint.r * value, tint.g * value, tint.b * value)
+        let counts: [Float] = [3.0, 5.2, 8.1, 9.4, 14.7, 23.0]
+        let amps: [Float] = [0.42, 0.30, 0.50, 0.35, 0.25, 0.18]
+        let speeds: [Float] = [0.31, -0.23, 0.17, -0.28, 0.40, -0.52]
+        // One draw decides which way this layer's whole set leans, then each component keeps
+        // its own alternation — the rod is being shaken from one end, not the same end twice.
+        let lean: Float = rand.inRange(0, 1) < 0.5 ? -1 : 1
+        var terms: [String] = []
+        var ampSum: Float = 0
+        for i in counts.indices {
+            let count = counts[i] * rand.inRange(0.90, 1.10)
+            let omega = speeds[i] * lean * rays.drift * rand.inRange(0.8, 1.25)
+            let phase = rand.inRange(0, 2 * .pi)
+            ampSum += amps[i]
+            terms.append(String(format: "%.4f * sin(%.4f * u + %.4f * rayTime + %.4f)",
+                                amps[i], count * .pi, omega, phase))
         }
+        let wobblePhase = rand.inRange(0, 2 * .pi)
+
+        return """
+        uniform float rayTime;
+        #pragma body
+        float2 p = _surface.position.xy;
+        float psi = atan2(p.x - \(fmt(sourceX)), \(fmt(sourceY)) - p.y);
+        float u = psi / \(fmt(psiHalf));
+        // The hand on the curtain rod: a slow common sway whose phase varies gently with u, so
+        // nearby folds move together, distant ones with increasing error.
+        u += 0.012 * sin(0.23 * rayTime + 2.0 * u + \(fmt(wobblePhase)));
+        float s = \(terms.joined(separator: "\n                + "));
+        // exp() sharpens crests into folds and flattens valleys into open water, staying smooth
+        // everywhere; normalised so s at its ceiling maps to 1.
+        float crest = exp(0.85 * (s - \(fmt(ampSum))));
+        // The curtain is strongest under its source and eases toward the frame edges, as the
+        // photograph's does — never to zero, so the corners still ripple faintly.
+        float envelope = 0.35 + 0.65 * exp(-0.5 * (u / 0.75) * (u / 0.75));
+        // Depth kills a shaft fast: the photograph's water holds only a sixth of its surface
+        // brightness by mid-frame and the folds fade with it. Exactly zero at the quad's bottom
+        // edge, so the geometry never shows.
+        float down = clamp((\(fmt(top)) - p.y) / \(fmt(top - bottom)), 0.0, 1.0);
+        float fall = pow(1.0 - down, 3.5);
+        float3 shaft = float3(\(fmt(Float(tint.r))), \(fmt(Float(tint.g))), \(fmt(Float(tint.b))))
+            * (crest * envelope * fall);
+        _output.color = float4(shaft, 1.0);
+        """
+    }
+
+    private static func fmt(_ value: Float) -> String {
+        String(format: "%.5f", value)
     }
 }

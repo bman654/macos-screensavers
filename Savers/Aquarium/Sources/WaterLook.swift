@@ -207,23 +207,33 @@ extension WaterLook {
     /// that says "studio lamp" loudest. It is also at little more than half the intensity the
     /// tank shipped with, because that intensity is most of what over-lit the floor.
     static let deepOcean = WaterLook(
-        tint: (0.043, 0.128, 0.205),
-        // Much stronger than it was, and the reason is the shafts. Measured against a
+        // Darker than the look originally shipped with, because the *bottom* of the frame is
+        // where depth is stated: the tint is the fog and the below-horizon backdrop, so it is
+        // the single number that sets the lower half's brightness. The reference photograph's
+        // water keeps falling all the way down — 2% of its top brightness at the frame's foot —
+        // while this look used to flatten out near 20% and read as a lit shelf. The top of the
+        // frame was judged right and is held by `surface`; the tint dropping is what stretches
+        // the contrast between them.
+        tint: (0.030, 0.090, 0.144),
+        // Much stronger than the tint, and the reason is the shafts. Measured against a
         // photograph of real god rays, the water in that picture falls to a fifth of its
-        // top-of-frame brightness by the horizon while this look's fell only to two thirds — so
-        // the shafts had nothing to emerge *from* and sat on flat water as bands. The gradient
-        // the eye reads as belonging to the ray mostly belongs to the water. This reaches 0.25
-        // against the photograph's 0.20, and it is the ramp doing it, so the fog still meets the
-        // background exactly at the horizon and the floor measurement barely moves: 0.59 to 0.56.
-        surface: (0.130, 0.374, 0.592),
-        environment: (top: (0.105, 0.270, 0.420), bottom: (0.014, 0.038, 0.066),
+        // top-of-frame brightness by the horizon — the shafts need a bright surface to emerge
+        // *from*, and the gradient the eye reads as belonging to the ray mostly belongs to the
+        // water. The ramp does it, so the fog still meets the background exactly at the horizon.
+        // Trimmed a notch below where it was signed off, because the curtain's own mean light
+        // now sits on top of it and the *sum* at the top of the frame is what was approved.
+        surface: (0.114, 0.330, 0.522),
+        environment: (top: (0.105, 0.270, 0.420), bottom: (0.010, 0.027, 0.046),
                       intensity: 0.85),
         // The steepest of the three. Depth is sold by how fast things leave, not by how dark
         // the backdrop is.
         fogDensityExponent: 1.55,
-        ambient: Light(0.21, 0.40, 0.60, intensity: 285),
-        key: Light(0.70, 0.86, 1.0, intensity: 520, elevation: 74, azimuth: 20),
-        rim: Light(0.28, 0.56, 0.88, intensity: 240, elevation: -20, azimuth: 143),
+        // All three lights follow the tint down at the same ratio, because the floor and the
+        // water above it come from one budget: darker water over a floor lit as before would
+        // out-brighten the very thing it is seen through.
+        ambient: Light(0.21, 0.40, 0.60, intensity: 215),
+        key: Light(0.70, 0.86, 1.0, intensity: 390, elevation: 74, azimuth: 20),
+        rim: Light(0.28, 0.56, 0.88, intensity: 180, elevation: -20, azimuth: 143),
         // Warm nowhere, on purpose: twenty metres of water is what takes the red out, and a
         // warm accent here would say "studio lamp" as loudly as a warm key would.
         accent: nil,
@@ -236,8 +246,7 @@ extension WaterLook {
         // a long scattering path and this is the only look whose backdrop is dark enough for a
         // shaft to read against it — the same darkness that makes it the wrong place for
         // caustics makes it the right place for these.
-        godRays: GodRays(count: 16, brightness: 0.46, width: 0.62, sourceHeight: 7.5,
-                         ripple: 0.55, period: 9...26),
+        godRays: GodRays(brightness: 1.35, sourceHeight: 7.5, drift: 1.0),
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.
@@ -257,7 +266,9 @@ extension WaterLook {
     /// its own backdrop, because the water rose so much further.
     static let shallowReef = WaterLook(
         tint: (0.105, 0.385, 0.470),
-        surface: (0.225, 0.600, 0.665),
+        // Trimmed slightly below where it was signed off, because the curtain's mean light now
+        // sits on top of it and the *sum* at the top of the frame is what was approved.
+        surface: (0.207, 0.552, 0.612),
         environment: (top: (0.440, 0.870, 0.940), bottom: (0.045, 0.150, 0.185),
                       intensity: 1.0),
         fogDensityExponent: 1.05,
@@ -276,19 +287,17 @@ extension WaterLook {
         // thing this look was missing that a snorkeller would notice immediately. The largest
         // cells of the three, because the shallower the water the wider the net it throws.
         caustics: Caustics(tileMetres: 2.6, strength: 0.45, drift: 0.010),
-        // None, which was not the plan — this look was going to be the one with both, and it was
-        // tried at six brightnesses from 0.20 down to 0.055. A shaft is only visible by its
-        // contrast against the water beside it, and this backdrop is the brightest of the three
-        // *and* the smoothest: an additive band on a smooth bright gradient shows its own edge
-        // however soft that edge is drawn, so the shafts read as hard diagonal stripes ruled over
-        // the reef at every setting that made them visible at all. Turning them down did not fix
-        // that, it only made the stripes fainter, which is the tell that the problem was never
-        // the brightness.
-        //
-        // Which is the same fact that gives this look the strongest caustics, read the other way
-        // round: bright shallow water puts its light on the ground, not in the column. A diver
-        // sees dappled sand here and shafts in the gloom, and so does this tank.
-        godRays: nil,
+        // Faint — well under half the deep ocean's strength — and that it exists at all is the
+        // curtain rewrite's doing. The quad-era shafts were tried here at six brightnesses from
+        // 0.20 down to 0.055 and failed at every one: an additive band on the brightest,
+        // smoothest backdrop of the three shows its own edge however softly it is drawn, and
+        // turning it down only made the stripes fainter, which is the tell that brightness was
+        // never the problem. But that was a fact about *objects*, and the curtain has none — a
+        // continuous ripple gives the bright water no boundary to betray. What a snorkeller
+        // actually sees is both halves of the same lamp through the same surface, split by where
+        // the light lands: dappled sand below, and a broad faint shimmer in the column above —
+        // not the deep's theatrical fingers.
+        godRays: GodRays(brightness: 0.75, sourceHeight: 7.5, drift: 1.0),
         // Most bloom, least vignette: sunny and open.
         bloomIntensity: 0.45, bloomThreshold: 0.88, bloomBlurRadius: 12,
         vignettingIntensity: 0.32, vignettingPower: 1.2,
