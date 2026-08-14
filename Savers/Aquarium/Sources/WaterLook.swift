@@ -97,6 +97,21 @@ struct WaterLook {
     let key: Light
     let rim: Light
 
+    /// A second, warmer source at a low elevation — or nil for a look that does not want one.
+    ///
+    /// It exists because the key cannot do this job. The key sits near the vertical, so it lands
+    /// on the floor at almost its full strength and on a fish's flank or a helmet's side at
+    /// about a fifth of it: warming the key warms the *ground*. An accent at a low elevation is
+    /// the exact complement — it grazes everything standing up in the tank and barely touches
+    /// what it stands on — which is what a warm accent has to do to be worth having, because the
+    /// two things asking for one are a vertical brass helmet and a fish's flank.
+    ///
+    /// It is also the only warm light in a look whose water, ambient and environment are all
+    /// blue, and a metal's reflection is `baseColour x environment`: a red-orange alloy in a
+    /// blue tank has no red to return whatever its albedo. Nil for both ocean looks — the reef's
+    /// key is already warm and the deep look is warm nowhere on purpose.
+    let accent: Light?
+
     let bloomIntensity: CGFloat
     let bloomThreshold: CGFloat
     let bloomBlurRadius: CGFloat
@@ -187,6 +202,9 @@ extension WaterLook {
         ambient: Light(0.21, 0.40, 0.60, intensity: 285),
         key: Light(0.70, 0.86, 1.0, intensity: 520, elevation: 74, azimuth: 20),
         rim: Light(0.28, 0.56, 0.88, intensity: 240, elevation: -20, azimuth: 143),
+        // Warm nowhere, on purpose: twenty metres of water is what takes the red out, and a
+        // warm accent here would say "studio lamp" as loudly as a warm key would.
+        accent: nil,
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.
@@ -217,6 +235,9 @@ extension WaterLook {
         // nearly overhead, which is where the sun is when the surface is right above you.
         key: Light(1.0, 0.97, 0.86, intensity: 820, elevation: 82, azimuth: 12),
         rim: Light(0.46, 0.80, 0.94, intensity: 300, elevation: -20, azimuth: 143),
+        // The key is already warm at this depth, which is the whole difference between this
+        // look and the deep one. A second warm source would be warmth with nothing to fix.
+        accent: nil,
         // Most bloom, least vignette: sunny and open.
         bloomIntensity: 0.45, bloomThreshold: 0.88, bloomBlurRadius: 12,
         vignettingIntensity: 0.32, vignettingPower: 1.2,
@@ -244,8 +265,16 @@ extension WaterLook {
                       intensity: 1.25),
         fogDensityExponent: 1.35,
         ambient: Light(0.46, 0.68, 0.94, intensity: 620),
-        key: Light(0.86, 0.94, 1.0, intensity: 1350, elevation: 78, azimuth: 8),
+        // Warm rather than the cool white a hood lamp literally is, and the intensity is the
+        // cool white's divided by this colour's own luminance, so what changed between the two
+        // is the colour of the light and not how much of it there is. The floor is what moves:
+        // at elevation 78 the key lands on the bed at N·L 0.98 and on a fish's flank at 0.21,
+        // so warming it warms the gravel about five times as hard as it warms the fish — the
+        // near band went from blue-dominant (0.247, 0.302, 0.388) to red-dominant
+        // (0.333, 0.294, 0.282) while flank chroma held at 0.047 against 0.049.
+        key: Light(1.0, 0.95, 0.82, intensity: 1316, elevation: 78, azimuth: 8),
         rim: Light(0.42, 0.68, 1.0, intensity: 430, elevation: -20, azimuth: 143),
+        accent: Light(1.0, 0.72, 0.42, intensity: 260, elevation: 18, azimuth: -38),
         // Least vignette of the three — glass and a lamp, not a diver's mask.
         bloomIntensity: 0.40, bloomThreshold: 0.90, bloomBlurRadius: 12,
         vignettingIntensity: 0.30, vignettingPower: 1.2,

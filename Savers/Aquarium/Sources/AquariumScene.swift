@@ -224,6 +224,11 @@ final class AquariumScene {
 
         scene.rootNode.addChildNode(directional(water.key, castsShadow: false))
         scene.rootNode.addChildNode(directional(water.rim, castsShadow: false))
+        // Optional, and only the aquarium has one — a low warm source for the things standing
+        // up in a tank whose every other light is blue. See `WaterLook.accent`.
+        if let accent = water.accent {
+            scene.rootNode.addChildNode(directional(accent, castsShadow: false))
+        }
     }
 
     private func directional(_ spec: WaterLook.Light, castsShadow: Bool) -> SCNNode {
