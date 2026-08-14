@@ -117,6 +117,16 @@ struct WaterLook {
     /// see `Caustics`, whose header records the four measured SceneKit facts the design rests on.
     let caustics: Caustics?
 
+    /// Shafts of light scattering out of the water column, or nil for a look with none.
+    ///
+    /// Deliberately the *complement* of `caustics` rather than another helping of it. Both are
+    /// the same lamp seen through the same surface, but a caustic is the part still focused when
+    /// it reaches the ground and a shaft is the part scattered out on the way — so a look with a
+    /// short, clear column and a bright floor wants caustics, and a look with a long, dim column
+    /// wants shafts. The deep ocean is the only look with no caustics at all and it is the one
+    /// with the strongest rays.
+    let godRays: GodRays?
+
     let bloomIntensity: CGFloat
     let bloomThreshold: CGFloat
     let bloomBlurRadius: CGFloat
@@ -215,6 +225,11 @@ extension WaterLook {
         // twenty metres of water diffuses that focus away long before it arrives. Dappling this
         // seabed would be the same lie as warming its key.
         caustics: nil,
+        // The strongest of the three, and the look shafts exist for. Twenty metres of water is
+        // a long scattering path and this is the only look whose backdrop is dark enough for a
+        // shaft to read against it — the same darkness that makes it the wrong place for
+        // caustics makes it the right place for these.
+        godRays: GodRays(count: 11, brightness: 0.50, width: 0.34, sway: 0.9, swayPeriod: 34),
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.
@@ -253,6 +268,19 @@ extension WaterLook {
         // thing this look was missing that a snorkeller would notice immediately. The largest
         // cells of the three, because the shallower the water the wider the net it throws.
         caustics: Caustics(tileMetres: 2.6, strength: 0.45, drift: 0.010),
+        // None, which was not the plan — this look was going to be the one with both, and it was
+        // tried at six brightnesses from 0.20 down to 0.055. A shaft is only visible by its
+        // contrast against the water beside it, and this backdrop is the brightest of the three
+        // *and* the smoothest: an additive band on a smooth bright gradient shows its own edge
+        // however soft that edge is drawn, so the shafts read as hard diagonal stripes ruled over
+        // the reef at every setting that made them visible at all. Turning them down did not fix
+        // that, it only made the stripes fainter, which is the tell that the problem was never
+        // the brightness.
+        //
+        // Which is the same fact that gives this look the strongest caustics, read the other way
+        // round: bright shallow water puts its light on the ground, not in the column. A diver
+        // sees dappled sand here and shafts in the gloom, and so does this tank.
+        godRays: nil,
         // Most bloom, least vignette: sunny and open.
         bloomIntensity: 0.45, bloomThreshold: 0.88, bloomBlurRadius: 12,
         vignettingIntensity: 0.32, vignettingPower: 1.2,
@@ -299,6 +327,12 @@ extension WaterLook {
         // caustics in this look is the rock and coral standing in them. The reef's sand has no
         // such problem, which is why it takes the tighter, stronger net.
         caustics: Caustics(tileMetres: 2.8, strength: 0.45, drift: 0.017),
+        // None. A shaft is only visible because of what the light hits on the way down, and a
+        // maintained tank has a filter — this is the look whose marine snow is nearly zero for
+        // exactly that reason, and shafts through clean water in a two-metre box would be
+        // lighting nothing. It is also the only look lit from *inside* the room's own eyeline,
+        // where a visible shaft would read as a dirty lens rather than as water.
+        godRays: nil,
         // Least vignette of the three — glass and a lamp, not a diver's mask.
         bloomIntensity: 0.40, bloomThreshold: 0.90, bloomBlurRadius: 12,
         vignettingIntensity: 0.30, vignettingPower: 1.2,

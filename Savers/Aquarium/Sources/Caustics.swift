@@ -62,40 +62,15 @@ struct Caustics {
 enum CausticTexture {
     /// Turns a linear float buffer into an image SceneKit will deliver *unaltered*.
     ///
-    /// Sixteen bits rather than eight because a caustic is thin bright filaments over wide dim
-    /// gaps, and the gaps sit at the bottom of the range where linear 8-bit steps are coarsest.
-    /// This scene already has visible 8-bit banding in its backdrop, so contour lines across the
-    /// floor were a real risk rather than a theoretical one.
-    ///
-    /// The linear tag is the load-bearing part — see fact 3 in this file's header. Returns nil
-    /// rather than falling back to an untagged image, because an untagged one is silently
-    /// gamma-decoded and would deliver about half the light it claims to.
+    /// The linear tag is the load-bearing part — see fact 3 in this file's header — and it lives
+    /// in `LinearImage`, which is where the measurements behind it are written down.
     static func image(from values: [Float],
                       size: Int = CausticPattern.resolution) -> NSImage? {
         precondition(values.count == size * size, "buffer is not \(size)x\(size)")
-        guard let linearSpace = CGColorSpace(name: CGColorSpace.linearSRGB),
-              let linear = NSColorSpace(cgColorSpace: linearSpace),
-              let rep = NSBitmapImageRep(
-                bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
-                bitsPerSample: 16, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: size * 6, bitsPerPixel: 48),
-              let data = rep.bitmapData
-        else { return nil }
-
-        for index in 0..<(size * size) {
-            let clamped = max(0, min(1, values[index]))
-            let sample = UInt16((clamped * 65535).rounded())
-            let byte = index * 6
-            for channel in 0..<3 {
-                data[byte + channel * 2] = UInt8(sample & 0xFF)
-                data[byte + channel * 2 + 1] = UInt8(sample >> 8)
-            }
+        return LinearImage.make(width: size, height: size) { x, y in
+            let value = values[y * size + x]
+            return (value, value, value)
         }
-
-        guard let tagged = rep.retagging(with: linear) else { return nil }
-        let image = NSImage(size: CGSize(width: size, height: size))
-        image.addRepresentation(tagged)
-        return image
     }
 }
 
