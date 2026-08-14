@@ -66,6 +66,9 @@ class SaverView: ScreenSaverView {
     /// scene driven by that clock snaps back to where it started.
     private var timeOffset: CFTimeInterval = 0
 
+    /// Nil unless `SAVERKIT_STATS` is set; see `FrameStats`.
+    private let stats = FrameStats.makeIfEnabled()
+
     private var isPreviewSized: Bool { bounds.width < previewWidthThreshold }
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
@@ -300,6 +303,10 @@ class SaverView: ScreenSaverView {
         let delta = min(max(time - lastFrameTime, 0), 0.1)
         lastFrameTime = time
 
+        // `timestamp`, not `targetTimestamp`: this measures the rate frames are actually
+        // delivered at, not the vsync they were aimed at.
+        stats?.frameTick(link.timestamp, drawableSize: metalLayer?.drawableSize ?? .zero)
+
         render(time: time, delta: delta)
     }
 
@@ -335,6 +342,7 @@ class SaverView: ScreenSaverView {
                                  commandBuffer: commandBuffer,
                                  passDescriptor: pass))
 
+        stats?.observe(commandBuffer)
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
