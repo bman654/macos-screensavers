@@ -37,6 +37,11 @@ final class AquariumScene {
     private var school: School?
     private var rand: Rand
 
+    /// The key light's gobo, held so the caustic net can be drifted each frame, and nil for a
+    /// look with no caustics. It is the light's property rather than a node, because what moves
+    /// is the pattern's texture transform and not the lamp.
+    private var causticGobo: SCNMaterialProperty?
+
     /// Width over height of the drawable. Every vertical extent in the tank is derived from
     /// this, and it is re-read each frame from `FrameContext` because a view can change shape
     /// under a live scene — a display mode change, or the System Settings preview being
@@ -144,6 +149,22 @@ final class AquariumScene {
         // animation around this call — see the comment there.
         adoptAspect(Tank.aspect(of: frame.drawableSize))
         school?.update(time: frame.time, dt: Float(frame.deltaTime))
+        driftCaustics(time: frame.time)
+    }
+
+    /// Crawls the caustic net across the floor.
+    ///
+    /// Translating the gobo's texture transform rather than moving the light, because moving the
+    /// light would swing where every shadow and highlight in the tank falls. With the gobo set
+    /// to repeat, a translation of any size stays seamless.
+    ///
+    /// The two axes drift at different rates on purpose. Equal rates make the net travel along a
+    /// 45° diagonal, and a pattern with a single direction of travel reads as a sheet being
+    /// pulled across the tank; unequal ones keep it from lining up with anything.
+    private func driftCaustics(time: TimeInterval) {
+        guard let gobo = causticGobo, let caustics = style.water.caustics else { return }
+        let t = CGFloat(time) * caustics.drift
+        gobo.contentsTransform = SCNMatrix4MakeTranslation(t, t * 0.61, 0)
     }
 
     /// Retunes the one thing in the tank that is measured in pixels, when the view moves to a
@@ -222,13 +243,46 @@ final class AquariumScene {
         ambient.intensity = water.ambient.intensity
         scene.rootNode.addChildNode(node(with: ambient))
 
-        scene.rootNode.addChildNode(directional(water.key, castsShadow: false))
+        // The key carries the caustics, because the key is the light a caustic is *made of* —
+        // the net on the floor is the surface overhead focusing that same lamp. Hanging it here
+        // rather than on a surface also means it lands on the props and on the fish for free.
+        let keyNode = directional(water.key, castsShadow: false)
+        if let caustics = water.caustics { attach(caustics, to: keyNode.light!) }
+        scene.rootNode.addChildNode(keyNode)
         scene.rootNode.addChildNode(directional(water.rim, castsShadow: false))
         // Optional, and only the aquarium has one — a low warm source for the things standing
         // up in a tank whose every other light is blue. See `WaterLook.accent`.
         if let accent = water.accent {
             scene.rootNode.addChildNode(directional(accent, castsShadow: false))
         }
+    }
+
+    /// Hangs the caustic net on a light, and pays for it.
+    ///
+    /// The compensation is the part that must not be skipped: a gobo multiplies its light by the
+    /// tile's own mean, so a pattern averaging 0.5 would halve everything this lamp delivers and
+    /// drag the floor-versus-water ratio down with it. Scaling the intensity back up by 1/mean
+    /// is what lets `WaterLook` go on stating the light the lamp delivers rather than the light
+    /// it would deliver if the gobo were white — which is the number every substrate in this
+    /// saver was balanced against.
+    private func attach(_ caustics: Caustics, to light: SCNLight) {
+        let tile = CausticPattern.tile(contrast: caustics.strength)
+        guard let image = CausticTexture.image(from: tile.values), let gobo = light.gobo else {
+            // A tile that cannot be encoded is a tank with no caustics, which is the look as it
+            // was before this existed. Silently lighting it at 1/mean without the pattern would
+            // be a tank lit twice as brightly as intended.
+            return
+        }
+        gobo.contents = image
+        gobo.wrapS = .repeat
+        gobo.wrapT = .repeat
+        gobo.intensity = 1
+        // The floor is seen almost edge-on, which is what erased the substrate's own texture
+        // until it was made anisotropic. The net projected onto it is sampled just as obliquely.
+        gobo.maxAnisotropy = 16
+        light.orthographicScale = caustics.orthographicScale
+        light.intensity *= Caustics.compensation(forMean: tile.mean)
+        causticGobo = gobo
     }
 
     private func directional(_ spec: WaterLook.Light, castsShadow: Bool) -> SCNNode {

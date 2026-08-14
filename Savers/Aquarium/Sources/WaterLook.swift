@@ -112,6 +112,11 @@ struct WaterLook {
     /// key is already warm and the deep look is warm nowhere on purpose.
     let accent: Light?
 
+    /// The net of focused light a rippled surface throws on what is under it, or nil for a look
+    /// that should not have one. It rides the key, because the key is the light it is made of —
+    /// see `Caustics`, whose header records the four measured SceneKit facts the design rests on.
+    let caustics: Caustics?
+
     let bloomIntensity: CGFloat
     let bloomThreshold: CGFloat
     let bloomBlurRadius: CGFloat
@@ -205,6 +210,11 @@ extension WaterLook {
         // Warm nowhere, on purpose: twenty metres of water is what takes the red out, and a
         // warm accent here would say "studio lamp" as loudly as a warm key would.
         accent: nil,
+        // No caustics either, and for the same reason the key is not warm. A caustic net is a
+        // shallow-water phenomenon: it is the surface's own ripple focused onto the ground, and
+        // twenty metres of water diffuses that focus away long before it arrives. Dappling this
+        // seabed would be the same lie as warming its key.
+        caustics: nil,
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.
@@ -238,6 +248,11 @@ extension WaterLook {
         // The key is already warm at this depth, which is the whole difference between this
         // look and the deep one. A second warm source would be warmth with nothing to fix.
         accent: nil,
+        // The look caustics exist for. A few metres of water under a bright sun is exactly the
+        // condition that focuses a surface ripple into a net on the sand, and it is the one
+        // thing this look was missing that a snorkeller would notice immediately. The largest
+        // cells of the three, because the shallower the water the wider the net it throws.
+        caustics: Caustics(tileMetres: 2.6, strength: 0.45, drift: 0.010),
         // Most bloom, least vignette: sunny and open.
         bloomIntensity: 0.45, bloomThreshold: 0.88, bloomBlurRadius: 12,
         vignettingIntensity: 0.32, vignettingPower: 1.2,
@@ -275,6 +290,15 @@ extension WaterLook {
         key: Light(1.0, 0.95, 0.82, intensity: 1316, elevation: 78, azimuth: 8),
         rim: Light(0.42, 0.68, 1.0, intensity: 430, elevation: -20, azimuth: 143),
         accent: Light(1.0, 0.72, 0.42, intensity: 260, elevation: 18, azimuth: -38),
+        // Broader and fainter than the reef's, which is the opposite of what a tank's shorter,
+        // busier surface ripple would suggest, and the reason is the floor rather than the
+        // water: this bed is *gravel*, a field of resolved stones with its own light and shade
+        // at exactly the scale a tight caustic net would land on. A first pass at 1.1 m cells
+        // disappeared into it — the two patterns competed and the result read as noise. Wide
+        // cells sit on the bed instead of arguing with it, and what actually carries the
+        // caustics in this look is the rock and coral standing in them. The reef's sand has no
+        // such problem, which is why it takes the tighter, stronger net.
+        caustics: Caustics(tileMetres: 2.8, strength: 0.45, drift: 0.017),
         // Least vignette of the three — glass and a lamp, not a diver's mask.
         bloomIntensity: 0.40, bloomThreshold: 0.90, bloomBlurRadius: 12,
         vignettingIntensity: 0.30, vignettingPower: 1.2,
