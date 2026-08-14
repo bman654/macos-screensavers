@@ -31,6 +31,10 @@ final class AquariumView: SaverView {
                                 sampleCount: context.isPreview ? 1 : 4,
                                 clearColor: scene.clearColor)
         host.onUpdate = { [weak scene] frame in scene?.update(frame) }
+        // Only the backing scale is worth reacting to here; the drawable's shape reaches the
+        // scene every frame through `FrameContext`. This is not optional polish — the scene is
+        // always built at a provisional scale of 1, and this is what corrects it.
+        host.onResize = { [weak scene] targets in scene?.adopt(backingScale: targets.backingScale) }
 
         // Held so the scene outlives `makeHost`; the host only retains the `SCNScene`, not
         // the object that drives the school.

@@ -252,7 +252,8 @@ class SaverView: ScreenSaverView {
         host.hostDidResize(to: RenderTargets(drawableSize: size,
                                              sampleCount: resolvedSampleCount,
                                              colorPixelFormat: host.colorPixelFormat,
-                                             depthPixelFormat: host.depthPixelFormat),
+                                             depthPixelFormat: host.depthPixelFormat,
+                                             backingScale: metalLayer.contentsScale),
                            device: metalDevice)
     }
 

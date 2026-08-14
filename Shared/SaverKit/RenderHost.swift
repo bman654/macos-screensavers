@@ -32,6 +32,13 @@ struct HostContext {
     let isPreview: Bool
 
     /// Size in *pixels*, not points.
+    ///
+    /// Deliberately not accompanied by a backing scale. A host is created on the first layout
+    /// with a usable size, and that layout routinely happens *before* the view is in a window
+    /// — at which point the layer's scale is still 1 whatever display it is about to land on.
+    /// A creation-time scale would therefore be a value that is quietly wrong on exactly the
+    /// displays it exists for. The scale arrives with `RenderTargets`, which is delivered
+    /// before any frame is encoded and again whenever it changes.
     let drawableSize: CGSize
 }
 
@@ -47,6 +54,20 @@ struct RenderTargets {
     let sampleCount: Int
     let colorPixelFormat: MTLPixelFormat
     let depthPixelFormat: MTLPixelFormat
+
+    /// Pixels per point: 1 on a conventional display, 2 on a Retina one.
+    ///
+    /// The one property of the drawable a resize can change without changing its shape, and
+    /// the only place a host can learn it. Anything sized in target pixels that should look
+    /// the same physical size to a viewer must be multiplied by this — SceneKit's
+    /// post-process radii are the case that prompted it. `SCNCamera.bloomBlurRadius` is
+    /// documented in points and measured to be applied in render-target pixels, so an
+    /// unscaled radius arrives on a Retina display at half its intended apparent size.
+    ///
+    /// It changes under a live view: attaching, mirroring or unplugging a display moves a
+    /// window between scales, and the very first resize after host creation usually carries
+    /// the real value in place of the provisional 1 the host was built under.
+    let backingScale: CGFloat
 }
 
 /// State for a single frame.

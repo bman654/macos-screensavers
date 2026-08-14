@@ -43,6 +43,14 @@ final class SceneKitHost: RenderHost {
     /// `stopAnimation()` and `startAnimation()`.
     var onUpdate: ((FrameContext) -> Void)?
 
+    /// Called whenever the drawable is rebuilt, before the next frame.
+    ///
+    /// A scene that reads only the drawable's *shape* does not need this — `FrameContext`
+    /// carries the size every frame. It exists for what the shape does not tell you: the
+    /// backing scale, which changes under a live view when a display is attached, mirrored or
+    /// unplugged, and which any pixel-space effect radius has to follow.
+    var onResize: ((RenderTargets) -> Void)?
+
     init(device: MTLDevice,
          scene: SCNScene,
          pointOfView: SCNNode,
@@ -62,10 +70,22 @@ final class SceneKitHost: RenderHost {
         renderer.autoenablesDefaultLighting = false
     }
 
+    // Declared here rather than left to the protocol extension: those defaults are statically
+    // dispatched, so an undeclared member freezes to the extension's no-op and this callback
+    // would silently never fire. See the README.
+    func hostDidResize(to targets: RenderTargets, device: MTLDevice) {
+        // Same reason `encode` opens a zero-duration transaction: a node property set outside
+        // SceneKit's render loop is otherwise wrapped in an implicit animation stamped with a
+        // clock this renderer does not use, and never takes effect.
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = 0
+        onResize?(targets)
+        SCNTransaction.commit()
+    }
+
     // The viewport is taken from `FrameContext` each frame rather than cached at resize,
     // because that is the size the drawable actually came back as — there is no window in
-    // which the two can disagree. Nothing else here depends on size, so `hostDidResize`
-    // stays the protocol's no-op.
+    // which the two can disagree.
     func encode(_ frame: FrameContext) {
         // Any node property set outside SceneKit's own render loop is wrapped in an implicit
         // animation, and those animations are stamped with `CACurrentMediaTime()` while
@@ -92,6 +112,7 @@ final class SceneKitHost: RenderHost {
 
     func teardown() {
         onUpdate = nil
+        onResize = nil
         renderer.scene = nil
     }
 }

@@ -43,6 +43,15 @@ final class AquariumScene {
     /// resized — and a tank laid out for the old shape would otherwise be half outside the frame.
     private var aspect: Float
 
+    /// Pixels per point, used only to keep the bloom the same apparent size on a Retina
+    /// display as on a conventional one — see `buildCamera` and `adopt(backingScale:)`.
+    ///
+    /// Starts at 1 and is corrected before the first frame, because the scene is built before
+    /// the view is in a window and therefore before its true scale is knowable. A var for the
+    /// same reason it cannot be a parameter: a live view moves between scales when a display
+    /// is attached, mirrored or unplugged.
+    private var backingScale: CGFloat = 1
+
     /// How much of the library the *reference* tank draws. The preview thumbnail runs alongside
     /// the rest of System Settings, so it takes a thinner tank; the composition is identical.
     ///
@@ -133,6 +142,15 @@ final class AquariumScene {
         // animation around this call — see the comment there.
         adoptAspect(Tank.aspect(of: frame.drawableSize))
         school?.update(time: frame.time, dt: Float(frame.deltaTime))
+    }
+
+    /// Retunes the one thing in the tank that is measured in pixels, when the view moves to a
+    /// display of a different scale. Everything else here is in metres or in fractions of the
+    /// frame and does not care.
+    func adopt(backingScale newScale: CGFloat) {
+        guard newScale != backingScale, newScale > 0 else { return }
+        backingScale = newScale
+        cameraNode.camera?.bloomBlurRadius = style.water.bloomBlurRadius * newScale
     }
 
     /// Reshapes the tank when the drawable changes shape.
@@ -234,7 +252,13 @@ final class AquariumScene {
         camera.wantsExposureAdaptation = false
         camera.bloomIntensity = style.water.bloomIntensity
         camera.bloomThreshold = style.water.bloomThreshold
-        camera.bloomBlurRadius = style.water.bloomBlurRadius
+        // The look's radius as authored, i.e. at 1x; `adopt(backingScale:)` scales it to the
+        // display before the first frame. `bloomBlurRadius` is documented in points but
+        // SceneKit applies it in render-target pixels — a probe rendering one emissive quad of
+        // fixed frame fraction at 512, 1024 and 2048 px measured the same 24 px halo at all
+        // three — so unscaled, a look tuned on a conventional display arrives on a Retina one
+        // with its glow at half the apparent width.
+        camera.bloomBlurRadius = style.water.bloomBlurRadius * backingScale
         camera.vignettingIntensity = style.water.vignettingIntensity
         camera.vignettingPower = style.water.vignettingPower
 
