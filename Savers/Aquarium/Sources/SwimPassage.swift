@@ -32,12 +32,31 @@ struct SwimPassage {
     /// Both ends, which are the only places a fish may join.
     var entrances: [SIMD3<Float>] { [waypoints.first, waypoints.last].compactMap { $0 } }
 
-    /// Whether a fish of this girth fits.
+    /// Whether a fish of this girth fits, with room to steer.
     ///
     /// Girth, never length — see `ModelCache.LoadedModel.girth`. A moray is 1.5 m end to end and
     /// thinner through the body than a blue tang a sixth its length, so a test on length refuses
     /// exactly the animal the feature exists for.
-    func admits(girth: Float) -> Bool { girth <= radius }
+    ///
+    /// **The margin is the fix for a fish threading a hole and clipping it anyway.** `girth <=
+    /// radius` is the condition for a *stationary* fish to be inside the tube, and nothing steers
+    /// that well: a route is followed to some tracking error, and a fish admitted with almost none
+    /// to give spends the crossing with its body through the geometry. Reported from the installed
+    /// build as a large fish whose belly went through the crown of the rock arch, and the numbers
+    /// agree — on shallowReef seed 42 a deep-bodied species of girth 0.0884 was admitted to a
+    /// route of clearance 0.0978, an 11% margin.
+    ///
+    /// Bought here rather than by tightening the arrival test, which was tried and is worse: held
+    /// to `radius - girth` the eel could satisfy no waypoint at all and crossings went to zero,
+    /// because a fish that cannot tick off a waypoint does not leave — it sits in the hole until
+    /// the transit times out. Refusing a species the route costs one species one prop; tightening
+    /// arrival costs every fish every route.
+    func admits(girth: Float) -> Bool { girth <= radius * SwimPassage.fitMargin }
+
+    /// How much of a route's clearance a fish's body may take. The remainder is what its steering
+    /// is allowed to be wrong by, and 30% of the clearance is comfortably more than the tracking
+    /// error measured on the pursuit path.
+    private static let fitMargin: Float = 0.7
 
     /// Reads every route out of the placed reef.
     ///

@@ -436,6 +436,14 @@ final class School {
         // The last waypoint is an approach point in open water rather than a hole, so a fish is
         // allowed to simply touch it — otherwise leaving the route depends on overshooting a
         // point that has nothing beyond it to aim at.
+        // Deliberately the full radius rather than `radius - girth`, though the fish is not a
+        // point and that subtraction is what containment really means. Held to `radius - girth`
+        // the eel could not satisfy it at all — crossings on `AQUARIUM_SEED=4` went from three per
+        // two minutes to none — because nothing in this school tracks a line to two centimetres.
+        // A fish that cannot tick off a waypoint does not go somewhere better; it sits in the hole
+        // until the transit times out. The body margin is bought at admission instead, where it
+        // costs a species the route rather than costing every route its fish — see
+        // `SwimPassage.admits`.
         let isExit = fish.brain.waypoint == count - 1
         if (lateral < route.radius && along > 0)
             || simd_length(offset) < (isExit ? max(route.radius, fish.girth * 2) : route.radius) {
@@ -461,15 +469,68 @@ final class School {
         // Inside a passage there is only one direction worth having anyway, and it is the
         // passage's. Handing the fish the route axis both removes the singularity and is what
         // threading a hole actually looks like.
-        let horizontal = SIMD2<Float>(offset.x, offset.z)
+        // **Follow the tube, do not aim at its far end.**
+        //
+        // Steering straight at the next waypoint lets a fish cut the corner into whatever the
+        // route bends around, and on a route that climbs it also commands a height a whole leg
+        // away — so a fish arrives at the mouth off-axis and threads the geometry instead of the
+        // hole. Tightening the arrival test alone made that worse rather than better: with the
+        // centre held to `radius - girth` and nothing pulling it there, crossings on
+        // `AQUARIUM_SEED=4` went from three per two minutes to none.
+        //
+        // The fish is steered at its own projection onto the current leg, carried a lookahead
+        // forward — so being off-axis produces a correction toward the axis rather than a heading
+        // that merely happens to end at the right place.
+        let carrot = pursuitPoint(on: route, toward: world, traversal: fish.brain.waypoint,
+                                  reversed: fish.brain.passageReversed, from: fish.position,
+                                  floorY: bounds.floorY)
+        let toCarrot = carrot - fish.position
+
+        // Below a body's width the direction to any point is noise, and the yaw derived from it
+        // spins the fish: measured on the moray, yaw ran from -7.2 to -13.1 radians in four
+        // seconds while its distance to the waypoint barely changed, and it could not escape
+        // because a transit may not be abandoned partway. Inside a passage there is only one
+        // direction worth having anyway, and it is the passage's.
+        let horizontal = SIMD2<Float>(toCarrot.x, toCarrot.z)
         let axisHorizontal = SIMD2<Float>(axis.x, axis.z)
-        if simd_length(horizontal) > max(route.radius, fish.girth) {
+        if simd_length(horizontal) > max(fish.girth, 1e-3) {
             fish.brain.targetYaw = atan2(-horizontal.y, horizontal.x)
         } else if simd_length(axisHorizontal) > 1e-3 {
             fish.brain.targetYaw = atan2(-axisHorizontal.y, axisHorizontal.x)
         }
-        fish.brain.targetHeight = target.y
+        fish.brain.targetHeight = carrot.y - bounds.floorY
         return true
+    }
+
+    /// The point on the route a transiting fish is actually steered at.
+    ///
+    /// The fish's own projection onto the leg it is currently on, carried `lookahead` further
+    /// along it — the standard remedy for a follower that cuts corners, and here also the thing
+    /// that centres a fish in a hole it is only just thin enough for. On the first leg there is
+    /// no segment behind the fish to project onto, so it simply aims at the waypoint: it is
+    /// outside the prop and approaching, which is the one part of a transit where going straight
+    /// at the mouth is right.
+    private func pursuitPoint(on route: SwimPassage, toward world: SIMD3<Float>,
+                              traversal: Int, reversed: Bool, from position: SIMD3<Float>,
+                              floorY: Float) -> SIMD3<Float> {
+        let count = route.waypoints.count
+        guard traversal > 0 else { return world }
+        let previous = reversed ? count - traversal : traversal - 1
+        guard route.waypoints.indices.contains(previous) else { return world }
+        let start = route.waypoints[previous]
+        let from = SIMD3<Float>(start.x, floorY + start.y, start.z)
+
+        let leg = world - from
+        let legLength = simd_length(leg)
+        guard legLength > 1e-5 else { return world }
+        let direction = leg / legLength
+        let travelled = min(max(simd_dot(position - from, direction), 0), legLength)
+        // A fraction of the *leg*, never of the fish. Half a body length is 24 cm for the moray
+        // against legs 7 cm long, so the carrot pinned to the far end of every segment and pure
+        // pursuit silently degenerated into aiming at the waypoint — the exact behaviour it was
+        // added to replace, with no symptom but an unchanged measurement.
+        let lookahead = legLength * 0.4
+        return from + direction * min(travelled + lookahead, legLength)
     }
 
     /// Which way the route is running at a given waypoint, as a unit vector in reef space.

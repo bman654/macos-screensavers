@@ -412,25 +412,46 @@ finished end to end) alongside the behaviour counts. A run whose `crossings` is 
 `AQUARIUM_PASSAGE_MARKERS=1` puts a coloured ball on every waypoint — green first, red last — and
 prints the route in reef space. Both are kept deliberately; see the traps below.
 
-### Still open: a passage can be correct and still read as a fish inside a rock
+### A fish threading a hole may still clip it, and the margin is bought at admission
 
-The user's third report — fish clipping through the arch's apex and through the plank over the
-wreck's hole — is **half explained and not fixed**. Fish do now go through both props, and the
-render proves it: on `AQUARIUM_SEED=4` at t=38.6 s a clownfish is framed inside the wreck's ribs.
+The user's third report was **a large fish whose belly went through the crown of the rock arch,
+with the arch facing the camera and the hole plainly visible** — so it was neither a fish that
+never entered nor a viewing-angle problem. It is a fish correctly on the route whose body is wider
+than the tolerance the route was steered to.
 
-But `AQUARIUM_SEED=5` shows the other half. Its rock arch draws a yaw that puts the passage
-*across* the frame, and the arch is a tunnel rather than a bridge — so the camera sees the
-tunnel's side wall, and a fish correctly inside the passage reads as a fish embedded in solid
-rock. That is almost certainly what was reported as clipping through the apex.
+`admits` was `girth <= radius`, which is the condition for a *stationary* fish to be inside the
+tube and says nothing about a moving one. On shallowReef seed 42 a deep-bodied species of girth
+0.0884 was admitted to a route of clearance 0.0978 — an 11% margin — while the arrival test let its
+centre sit a full radius off the axis, so its body could reach almost twice the clearance. It is
+0.7 of the radius now: the body may take 70% of the tube and the remaining 30% is what the steering
+is allowed to be wrong by.
 
-**The obvious fix is wrong and was tried and reverted.** Turning every passable prop so its route
-runs across the frame is right for the arch and backwards for the wreck: the wreck's route runs
-port to starboard, so forcing that axis across the screen points the ship's keel at the camera and
-loses the broadside profile that makes it the best-looking prop in the library. The wreck is
-already legible from the side because its hull is open-topped. So **which orientation sells a
-passage is per-prop art, not a rule** — it is authoring data, and it belongs in the manifest
-beside `radius`, not in a hard-coded name list. Do this with a render open; the numbers cannot
-tell you whether a hole reads as a hole.
+Two things were tried first and are worth not repeating:
+
+- **Tightening the arrival test to `radius - girth` is worse, not better.** It is the honest
+  statement of containment and the school cannot track a line to two centimetres, so the eel
+  satisfied no waypoint at all and crossings on `AQUARIUM_SEED=4` went from three per two minutes
+  to none. A fish that cannot tick off a waypoint does not go somewhere better — it sits in the
+  hole until the transit times out. Refusing a species a route costs one species one prop;
+  tightening arrival costs every fish every route.
+- **A lookahead stated in body lengths silently disables pure pursuit.** Half a body length is
+  24 cm for the moray against legs 7 cm long, so the carrot pinned to the far end of every segment
+  and the follower degenerated into aiming at the waypoint — with no symptom except a measurement
+  that did not move. A lookahead has to be a fraction of the *leg*.
+
+Transits are now steered by pursuit along the current leg rather than aimed at its far end, which
+is what centres a fish in a hole and stops it cutting the corner into the geometry the route bends
+around. Measured over 150 s: aquarium/4 one crossing, aquarium/5 four, shallowReef/42 three, and
+the largest fish to cross the arch (girth 0.0597 against clearance 0.0978) is framed by the opening
+with daylight around it.
+
+**A correction worth keeping, because it nearly became a change.** An earlier pass concluded from
+`AQUARIUM_SEED=5` that the arch reads as solid rock when its passage runs across the frame, and
+proposed turning every passable prop broadside. That was a misreading of one render — the opening
+is plainly visible on seed 42 — and the change was tried and reverted for a second reason anyway:
+it is backwards for the wreck, whose route runs port to starboard, so forcing that axis across the
+screen points the ship's keel at the camera and loses the profile that makes it the best-looking
+prop in the library. **The user's direct observation beat the render every time this session.**
 
 ## Superseded — kept for the reasoning. Two behaviours judged wrong on the installed build
 
@@ -487,9 +508,10 @@ Known and unresolved:
 1. **Turn the seed badge off by default**, once the tank has stopped being debugged. One line in
    `AquariumSettings.default`. Listed first because it is the only thing here that ships a
    debugging aid to a user, and it is trivial enough to be forgotten.
-2. **Make a passage's viewing angle authoring data.** See the open section above: a fish inside
-   the rock arch reads as a fish inside a rock, and the general fix is wrong because the wreck
-   wants the opposite orientation.
+2. **Judge the passages on the installed build.** The eel and the crossings are measured and
+   rendered but not yet seen by the user at full screen. `SwimPassage.fitMargin` (0.7) is the knob
+   if a fish still clips: raising it refuses more species, lowering it admits more and risks the
+   belly through the crown again.
 3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
 4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
@@ -598,10 +620,16 @@ Known and unresolved:
 - **A timeout that also covers the approach is not a stall detector.** Most of a transit's budget
   went on swimming to the route, so the clock ran out inside the hull. Refresh the patience on
   progress, or the measurement is of the approach rather than of the crossing.
-- **A passage can be geometrically perfect and read as a fish inside a rock.** Whether a
-  swim-through is *visible* depends on the prop's yaw against the camera, and the right answer
-  differs per prop: an arch is a tunnel and must be entered toward the viewer, a wreck is
-  open-topped and is best broadside. A general rule fixes one and breaks the other.
+- **A fit test is written for a stationary fish and used by a moving one.** `girth <= radius` says
+  the animal is inside the tube if you place it there; it says nothing about an animal steering
+  along it, which arrives with some tracking error. Admitted at an 11% margin, a deep-bodied fish
+  crossed the rock arch with its belly through the crown. Buy the margin at admission — tightening
+  the *arrival* test instead is worse, because a fish that cannot tick off a waypoint does not
+  leave, it sits in the hole until the transit times out.
+- **A lookahead stated in body lengths silently disables pure pursuit.** Half a body length is
+  24 cm for the moray against route legs 7 cm long, so the carrot clamped to the far end of every
+  segment and the follower quietly became the thing it replaced — aiming straight at the waypoint.
+  There is no symptom but a measurement that does not move. Make a lookahead a fraction of the leg.
 - **A SpriteKit overlay costs a full-screen pass whatever is on it.** The seed badge is a few
   characters and measures 2.0 ms of GPU at 2056x1329 — 5.8 ms without it, 7.8 ms with. 60 fps is
   unaffected and the energy is not free. If it ever matters, the cheap version is a quad parented
