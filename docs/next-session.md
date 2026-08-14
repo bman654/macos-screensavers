@@ -62,8 +62,69 @@ all of it:
   second helping — a caustic is the light still focused when it lands, a shaft is the light
   scattered out on the way down, so they want opposite water.
 
-Everything holds its measurements: reef 0.68, deep ocean 0.59, aquarium 0.78 on river. GPU is
-4.4 ms at 3200x1800 and 60 fps is unchanged.
+Everything holds its measurements: reef 0.68, deep ocean 0.58, aquarium 0.78 on river. GPU is
+3.6 ms and 60 fps is unchanged.
+
+**The caustics are signed off and the god rays are not.** Judged on the installed build, at full
+screen, by the user:
+
+- **Caustics: keep.** Both looks, and the difference between them reads as intended — the
+  aquarium's larger, sparser and slower, the reef's finer and denser. The thing singled out as
+  best was not on the floor at all: the net playing across the decorations and over the backs of
+  the fish, which is what riding the key light buys and would have cost per-object work any other
+  way.
+- **God rays: still wrong after three passes.** They have gone from "awful" to "a little better",
+  which is not the same as good. See below before touching them.
+
+## The god rays, and what has already been tried
+
+Three passes, each fixing something real and none of them finishing the job. **Read this before
+changing a number, because two plausible-looking approaches have already been measured and
+rejected and the third was a wrong diagnosis that cost a whole pass.**
+
+What is in the build now: a Gaussian cross-section, colour weighted 0.72 to the water rather than
+the lamp, swell along the length that may only widen, shafts fanned from a virtual source 7.5 m
+overhead, and each shaft fading in and out on its own period from a 9-26 s range. The deep look's
+`surface` ramp was strengthened at the same time and for the same reason.
+
+Rejected, with the reason, so it is not re-tried:
+
+- **Dimming them does not fix it.** Six settings from 0.20 down to 0.055 in one pass and 0.50 down
+  to 0.07 in another: the failure changes intensity and never character. That is the tell that
+  brightness was never the fault.
+- **Widening the quads made it worse**, not softer — wide beams overlap and additive light stacks,
+  so contrast went *up*.
+- **A symmetric swell made the edges sharper.** A narrower Gaussian is a steeper one, so the thin
+  part of every shaft carried the hardest edge in the frame. It may only widen.
+
+The last user feedback, still only partly addressed, and the most useful thing on this page:
+
+1. **Overlapping shafts stack and the overlap is where it looks worst.** Fewer are present at once
+   now, which dissolves some of it and does not solve it. Additive light genuinely does sum; if
+   this is still the complaint, the answer is probably fewer shafts rather than fainter ones, or
+   some form of soft-max rather than a sum.
+2. **Is the deep ocean still *deep*?** The `surface` ramp is much brighter than the one that look
+   was signed off with. It is the only place this work changed a look the user had already
+   approved, and it is a real change of character. Unanswered.
+3. **Is the fan too strong?** `GodRays.sourceHeight`, one number, lower fans harder. Unanswered.
+
+Both open questions want a *look at the installed build*, not a measurement.
+
+**And a warning about measuring any of this.** Three separate metrics lied here in one session,
+each in the direction of saying a broken thing was fine:
+
+- A contrast reading across a row of open water is dominated by the **vignette**, not by the
+  shafts.
+- Detrended, it still carries a **noise floor of about 0.0112** from the marine snow — so a sweep
+  appeared to show brightness having almost no effect when in truth three settings had all fallen
+  below the floor and become invisible. Render at `brightness: 0` to measure the floor before
+  trusting a reading.
+- Comparing a *vertical* profile against a reference photograph has to be restricted to the water
+  above the horizon, or this tank's lit seabed decides the number.
+
+The reference photograph the current values are matched against is worth having beside any further
+work: lateral amplitude ~36% of the local water at every height, and the water itself falling to
+0.20 of its top-of-frame brightness by the horizon.
 
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
@@ -127,17 +188,20 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Next, in order
 
-1. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
+1. **Finish the god rays**, which are the only thing in the tank the user has looked at and not
+   accepted. See the section above for the three passes already spent, what was measured and
+   rejected, and the two questions that need an answer from a real display rather than a metric.
+2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
    the tank a second kind of motion. This is now the top of the list: caustics and god rays are
    done, and the one open note carried into that phase — the dull gravel — was the lamp's fault
    and is fixed.
 
-2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
    last: the picture should be a frame of the finished tank, so shooting it before the
    caustics and the fish AI land means shooting it twice.
 
