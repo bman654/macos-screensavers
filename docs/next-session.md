@@ -1,150 +1,151 @@
 # Where to pick up
 
-Rewritten 2026-08-13, at the end of the session that built the model library.
+Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
+its three looks.
 
 ## State
 
-**The asset pipeline is finished end to end**, and the model library is most of the way
-there. Nothing is blocked.
+**The aquarium renders as a tank.** A random assortment of fish and decorations is drawn per
+launch, placed on a substrate, lit by one of three art-directed looks, and every model is
+textured. Nothing is blocked.
 
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
- 7 reef props          Savers/Aquarium/Models/props/<name>.py
-   the bake            tools/blender/saverlib/bake.py
-   primitives          tools/blender/saverlib/{tube,hardsurface,surfaces,markings}.py
+16 props               Savers/Aquarium/Models/props/<name>.py
+   the library build   tools/build-library.py      -> Savers/Aquarium/Assets/ (36.8 MB)
+   the tank            Savers/Aquarium/Sources/*.swift
+   the three looks     docs/water-looks.md
 ```
 
-Texture baking is **done** and is no longer a blocker for anything — fish, static props and
-articulated props all bake. See `spikes/005-texture-bake/README.md`. Baking is cheap (about
-5–6s for a 2048² three-map bake once the Metal kernels are cached), so it belongs inside the
-authoring loop rather than as a batch step at the end.
+**The generated library is not tracked.** Models are code; the `.usdz` and `.json` under
+`Savers/Aquarium/Assets/` are its outputs, and a re-bake is part of the normal loop rather
+than an event. On a fresh clone run `tools/build-library.py` (about 10 minutes) before
+`tools/build-saver.sh`.
 
 ## Loops
 
 ```bash
-tools/blender/run.sh Savers/Aquarium/Models/build_fish.py -- --species clownfish --render --preview
-tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- --prop staghorn_coral --render --preview
-tools/blender/run.sh Savers/Aquarium/Models/build_prop.py -- --prop boulder --export /tmp/b.usdz --bake
-tools/gallery.py --out /tmp/reef.png --columns 4 'build/props/*/water_00_side.png'
+tools/build-library.py --only clownfish --only boulder     # rebuild specific assets
+tools/build-saver.sh Aquarium
+AQUARIUM_STYLE=aquarium AQUARIUM_SEED=42 tools/run-saver.swift Aquarium \
+    --size 1600x900 --seconds 4 --screenshot /tmp/tank.png
+tools/water-luminance.py /tmp/tank.png                     # floor-vs-water coherence
+tools/gallery.py --out /tmp/sheet.png --columns 4 'build/props/*/water_00_side.png'
 ```
 
-**Look at the PNG at the size it will be seen.** A detail crop hid a kelp that read as bamboo
-at full-plant scale, and a bubbler rendered only closed hid a mantle that glowed like an LED
-when it opened. Use `--pose part=degrees` for the open pose, and judge a tall prop from its
-whole silhouette before its close-ups.
+`AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`. `AQUARIUM_SEED`
+pins the layout; without it every launch draws a different tank.
+
+**Look at the PNG, at the size it will be seen.** This repo's hardest-won rule, and it held
+again all session: every art problem found this session was visible in an image and invisible
+in the parameters. The user caught a floating wreck, an oversized diving suit, a skeleton
+inside a rock and a white seam on the clam by looking at renders.
 
 **Never pipe a build through `tail`.** A run dying with a `NameError` still exits past a
-`| tail -2`, and the PNGs you then open are the previous run's — worth three iterations to one
-author and a stale-binary debug to another. Grep for `Error|Traceback` instead.
-
-**Look at the PNG.** This is the repo's hardest-won rule and it held all session: the numbers
-never tell you whether a model reads. Every species took four to seven render-and-adjust
-iterations, and in every case the thing that fixed it was visible in an image and invisible in
-the parameters.
+`| tail -2`, and the PNGs you then open are the previous run's. Grep for `Error|Traceback`.
 
 ## Next, in order
 
-1. **Decorations.** `docs/decorations.md` has the roster and the manifest contract. The three
-   bubblers (treasure chest, clamshell, skeleton with a jug) are unblocked — articulated props
-   bake with their hierarchy intact and hinge correctly in SceneKit.
-2. **Tank population.** Draw a random assortment per launch, placed and spaced from each
-   model's manifest. `props/_spec.py` already emits everything the placement pass needs.
-   **Space by `(footprint + height * sin(maxTilt)) * scale`.** Every prop declares its
-   footprint untilted, by design — see `docs/decorations.md`. Ignore the tilt term and two
-   maximum-scale pillars overlap by 14 cm, and the diving suit is already tight at scale 1.0.
-3. **Baking the committed library.** No model has been baked into `Savers/Aquarium/Assets/`
-   yet; only probes have run. That is a mechanical pass once the library settles.
-4. The rest of `docs/aquarium-plan.md` §2: water look, depth lanes and fish AI, camera.
+1. **A settings sheet.** The three looks exist but **a real user cannot choose one** — the
+   style is selected by an environment variable, which is a developer affordance. This wants
+   `ScreenSaverView.configureSheet` with `ScreenSaverDefaults`, keyed by the *bundle's*
+   identifier rather than `Bundle.main`. It is also where the audio toggle belongs.
+2. **Caustics and god rays.** Deliberately held back so the lighting pass did not sprawl.
+   The shallow reef is now good enough that dappled light on the sand would sell it hard;
+   a ripple gobo is a spotlight cookie, not new infrastructure.
+3. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
+   `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
+   the tank a second kind of motion.
+4. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+   direction and the three hazards that will not be obvious later.
+5. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+   twelve did not (independent dorsal spines; a curled prehensile tail).
 
 ## Known gaps, deliberately left
 
-- **`mouth` should probably fold into `patches`.** Now that `mouth_color` is settable it is
-  just a patch with frozen softness and weaker validation. Deferred because it touches all
-  fourteen species files.
-- **`cap_rings` is not exposed by `build_branching`**, and rounded tip caps are ~40% of a
-  branching prop's vertices. A passthrough is the cheapest geometry win available.
-- **`BranchingResult` reports no generation or arc position**, so the staghorn recovers
-  generation by inverting the radius decay. It works; it is fragile-adjacent.
-- **The boulder is the weakest prop** — faceted, and its own worked-example origins show.
-- **Scale relationships between props have never been checked in one scene.** Each was
-  authored to real metres independently.
+- **Brass cannot glint in the aquarium.** Reflection is `baseColour x environment` and the
+  aquarium's environment is strongly blue, so a red-orange alloy has no red to return. A warm
+  accent lamp in that look is the fix; the shallow reef already has enough warmth.
+- **No screen-space occlusion test in placement.** World spacing is respected, but a far
+  anchor can still end up behind a near cluster.
+- **A live reshape keeps the layout it was born with.** Only the floor height follows;
+  redrawing would mean re-importing mid-run.
+- **`mouth` should probably fold into `patches`** — it is a patch with frozen softness.
+- **`cap_rings` is not exposed by `build_branching`**; rounded tip caps are ~40% of a
+  branching prop's vertices.
+- **The boulder is the weakest prop.**
 - **`studio_lights` runs about a stop hot for large matte props**; `build_prop.py` compensates
-  with `exposure=-2.0` rather than falsifying albedos. A calibration pass would be better.
-- **`gallery.build_sheet` fails on a single tile** (`xstack` "Result too large").
-- **`SceneKitProbe.worldBounds` over-reports a rotated hierarchy**, transforming each child's
-  *local* AABB corners and so returning the AABB of a rotated AABB — it called a
-  2.38 x 1.47 x 0.86 m wreck 2.66 x 2.26. Harmless as a diagnostic, wrong if placement ever
-  derives extents from geometry instead of the manifest.
-- **`rock(flatten=1.0)` still only squashes about 0.4x**, which is a boulder, not a drift. A
-  sand drift needs roughly 0.15x and it has to be a mesh-space scale. The wreck does it
-  locally; a second prop needing it should push a `drift()` into `saverlib`.
-- **`SceneKitProbe` frames on X extent**, so it crops a tall prop to its middle. Harmless for
-  fish, wrong for the 1.65 m diving suit and the 2.6 m kelp. It wants a `--fit` flag.
-- **`studio.render_views` cannot frame a height band**, so tall props need a throwaway detail
-  render to judge anything but the whole silhouette. Two prop authors wrote one independently.
+  with `exposure=-2.0` rather than falsifying albedos.
+- **`SceneKitProbe.worldBounds` over-reports a rotated hierarchy** — same bug class as the one
+  fixed in `_drop_to_floor`, still present in the diagnostic.
+- **`SceneKitProbe` frames on X extent**, so it crops a tall prop to its middle.
 
-## Traps that cost real time this session
+## Traps that cost real time. Each is commented where it happens; this is the index
 
-Each is commented where it happens; this is the index.
-
+- **`scene_bounds` returns the box of a rotated box.** It transforms local bounding-box
+  corners, so for anything rotated it is a superset. Right for framing a camera, wrong for any
+  number that becomes a contract — a listing wreck exported hanging 0.65 m above the seabed.
+  Use `studio.world_mesh_bounds` where exactness matters.
+- **The bake only keeps what `UsdPreviewSurface` can express.** Coat, iridescence, sheen and
+  transmission are all discarded. A material authored as a pale substrate under an iridescent
+  coat arrives as just the pale substrate — the clam's interior baked to near-white. Put the
+  colour in the albedo, because it is the only channel that travels.
+- **The Blender preview is not the shipped material.** It still shows the coat, so a fix of
+  the kind above is invisible there. Measure the atlas.
+- **A metal has almost no diffuse component**, so a `DIFFUSE` bake loses its albedo entirely —
+  the diving suit's brass measured 0.000 warm texels against a declared red-orange. Base colour
+  bakes through an emission pass for this reason.
+- **Nothing is metal unless metalness is baked and wired.** Without it every material is a
+  dielectric and cannot return a coloured reflection whatever its albedo.
+- **Metal needs an environment to reflect.** With no `scene.lightingEnvironment`, PBR metal
+  collapses toward its dark specular response and reads as wet stone. Three directional lights
+  give highlights, not an environment.
+- **The ground must not out-brighten the water it is seen through.** Light on the seabed and
+  light scattering in the column come from one budget. The old tank had the floor at 4.87x the
+  backdrop *and* darkening with distance, which reads as a lit shelf dropping into an abyss.
+  `tools/water-luminance.py` checks it.
+- **An acceptance metric calibrated on one tank silently lies about another.** The
+  fish-colour check discarded every fish in the aquarium as scenery, because its size filter
+  predated fish being 3x the frame fraction — it reported a frame of vivid tangs as colourless.
+  Reject props by whether they stand on the floor, not by size.
+- **Decorations are sized in screen fractions; fish are sized in metres.** A 0.4 m angelfish
+  beside a 0.6 m wreck is *correct* in the aquarium and looks wrong by ocean logic. Do not
+  "fix" it — the asymmetry is what makes a small tank read as a tank.
+- **A texture tuned for one floor depth is wrong at another.** Gravel tiled for a floor
+  entering at 6.2 m read as boulders at 2.25 m.
+- **The capture harness must never surface.** `run-saver.swift` parks its window at desktop
+  level during a screenshot: not activating is insufficient, because macOS gives the top window
+  focus and this tool runs several times a minute across concurrent agents.
+- **Do not let agents research on the web here.** A research fan-out hit a CAPTCHA and one
+  subagent escalated to a *headed* browser to defeat it, putting windows on the user's screen.
+  Ask the user for a number instead; they are faster and it is their machine.
 - **Never leave scale on an object.** A non-uniform parent scale puts children in a stretched
-  space: their positions arrive in the wrong units and rotating them *shears* instead of
-  turning. Fatal for anything hinged. `spikes/004-articulated-decor/`.
+  space and rotating them shears instead of turning. Fatal for anything hinged.
 - **Never bake a mesh with live modifiers.** Unwrapping sees the base mesh, baking sees the
-  evaluated one, so a Solidify shell silently shares texels with the faces it grew from. No
-  error, no visual tell. `bake_atlas` refuses.
-- **Custom vertex attributes need not survive export** — Cycles evaluates them during the bake
-  and writes the result into the atlas.
-- **A positive `diagonal_stripes` angle rises rearward.** The algebra says otherwise; a
-  rendered pair settled it and is now a permanent swatch.
-- **A caudal lobe's width comes from `flare`, not `span`.** Span spike → needles, flat span →
-  paddles, monotone falloff into the cut → tapered points.
-- **A ColorRamp holds 32 stops**, so roughly three outlined bands per ramp. It now raises.
-- **Colours render about twice as bright as written** under the studio key, and accents clip
-  harder than ground colours. Black markings read as charcoal — do not compensate, the
-  exporter bakes albedo.
-- **Cosine ring spacing puts the first ring a fraction of a millimetre from the pole**, so on a
-  long body an end control point sized like a compact fish's builds a flat disc across the
-  snout.
-- **A small eye vanishes into a narrow head** — `_build_eyes` seats it at `abs(y) * 0.62`.
-- **Branching density is not what makes coral read as coral.** Internode length is: a tree's
-  shortens at every fork, a gorgonian's stays constant.
-- **A direct mesh write does not tag the depsgraph**, so a Boolean modifier happily evaluates
-  a *stale* operand. Writing `vertices[i].co` or calling `mesh.transform()` left an arch's
-  cutter unstretched, undisplaced and unmoved as far as the solver was concerned, and every
-  early render had a suspiciously tidy circular hole. Call `obj.update_tag()` and
-  `view_layer.update()` before `evaluated_get`.
-- **The exact boolean does not report failure — it returns a wrong answer.** Given a
-  self-intersecting operand it silently returns the *union*, or an empty mesh. Both sail
-  through a clearance check, since an arch containing no rock at all measures beautifully
-  clear. Defend twice: cut with a clean primitive and erode *afterwards*, and assert that a
-  difference can only shrink the bounding box. `rock()`'s `angularity` fractures are what made
-  operands unclassifiable, so build anything destined to be cut with angularity near zero.
-- **`displace` along normals tears at silhouette-scale amplitudes.** Past the local surface
-  radius it folds rounded edges into flaps. `along_normal=False` is the safe primitive for
-  anything reshaping a large mass.
-- **`displace` with a feature size near the mesh's own edge length facets instead of
-  undulating.** Sand drifts at `feature_size=0.34, strength=0.30` came out as crumpled foil;
-  `strength=0.15, feature_size=0.70` on a `detail=5` sphere reads as sand. Reach for a
-  *broader, weaker* displacement than instinct suggests, and add mesh resolution before
-  adding noise frequency.
-- **`obj.matrix_world` is lazy, so `obj.matrix_world = m @ obj.matrix_world` silently discards
-  a `.location` set in the same tick.** It collapsed four boot pieces into a flat stack at
-  z = 0. Same trap as spike 003's note about `scene_bounds` seeing stale matrices: force the
-  depsgraph, or compose the transform rather than reading back what you just wrote.
-- **`rock_material` has a brightness floor around 0.19 median luminance**, so albedo stops
-  buying darkness long before black. Measured through the prop builder's own `exposure=-2.0`:
-  base 0.050 renders at 0.440, 0.010 at 0.258, and 0.002 still at 0.192 — a 25x albedo range
-  compressed into barely 2x. The residual is the fixed dielectric specular response, which is
-  achromatic, so it desaturates as well as lightens. `speckle` is *not* the cause: sweeping it
-  0.10 to 0.80 changed aggregate luminance immeasurably, because the flecks are too sparse to
-  matter. Anything meant to read near-black must earn it by contrast with a brighter
-  neighbour, not by driving base toward zero.
+  evaluated one. `bake_atlas` refuses.
+- **A direct mesh write does not tag the depsgraph**, so a Boolean happily evaluates a stale
+  operand. Call `obj.update_tag()` and `view_layer.update()` before `evaluated_get`.
+- **The exact boolean does not report failure — it returns a wrong answer**, silently the
+  union or an empty mesh. Cut with a clean primitive, erode afterwards, and assert a difference
+  can only shrink the bounding box.
+- **`displace` along normals tears at silhouette-scale amplitudes**, and facets rather than
+  undulates when the feature size nears the mesh's edge length. Reach for broader and weaker
+  than instinct suggests; add mesh resolution before adding noise frequency.
+- **A ColorRamp holds 32 stops.** It now raises.
+- **`rock_material` has a brightness floor around 0.19 median luminance.** Anything meant to
+  read near-black must earn it by contrast with a brighter neighbour.
+- **Branching density is not what makes coral read as coral** — internode length is.
+- **Contrast is fine; contrast aligned with a crease is not.** Strata bands quantised to a
+  ring grid read as hazard tape, and the same step landing on the crown seam read as a moss
+  beret. The rock pillars took two rounds of this.
 
 ## Unverified — do not assume these work
 
+- **Audio from inside a sandboxed `legacyScreenSaver`.** Output needs no entitlement so it
+  ought to work, but `WKWebView` also looked fine here and blanked after three seconds.
 - **Retina 2x and multi-display.** Still never executed; this machine has one 1x display.
-  Opening the laptop and previewing is a five-minute test that would de-risk every saver.
+  Multi-display matters more now: macOS instantiates a saver per screen, which is also what
+  would make audio play three times at once.
 - **Long-run stability.** Proven numerically to a week, but nothing has run for more than
   seconds.
 - **The `default.metallib` path**, for lack of a Metal toolchain on this machine.
