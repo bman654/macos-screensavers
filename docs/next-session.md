@@ -121,6 +121,24 @@ inside a rock and a white seam on the clam by looking at renders.
    overhead is exactly the light a caustic belongs on — plus a new one: the substrate's crevice
    shading is baked into the albedo and its directional shading deliberately is not, so a gobo
    modulating the key is already correct and must not be compensated for twice.
+
+   **Carry one open note into this phase: the gravel still reads a little dull, and the
+   hypothesis is that it is the lamp's fault rather than the palette's.** That is the user's
+   read on the installed build, and the reasoning behind it is worth having: a home tank is lit
+   by *fluorescent* tubes, and dyed gravel under one of those is startlingly saturated — far
+   more so than the same bag in daylight. This tank's key is `0.86, 0.94, 1.0`, which is a cool
+   white, and every other thing lighting that floor (ambient, environment, fog) is frankly blue.
+   So the deficit is in the illuminant.
+
+   Fix it on the lamp, not on the albedo. `GravelPalette.chroma` is at 1.75 and could be pushed
+   further, but it is already the second correction stacked on the same problem and past here it
+   starts making the gravel look cut out and pasted into the tank rather than lit by it. A warmer
+   or broader aquarium key is the honest fix, it is what the brass has been waiting for too — see
+   the gap below — and it is cheap to try, because the substrate work made the floor measurement
+   insensitive to it: every palette is normalised to a delivered luminance, so relighting the
+   tank moves the colour without moving the floor ratio. **Re-judge the gravel after the lighting
+   lands and before touching `chroma` again**, and re-run the palette contact sheet rather than
+   one render — `river`, `quartz`, `neon` and `tangerine` are the four that show the difference.
 2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
    the tank a second kind of motion.
@@ -157,8 +175,10 @@ inside a rock and a white seam on the clam by looking at renders.
 - **The bright hues are still the hard ones.** There is no dark yellow that reads as yellow, and
   the floor's luminance is capped by the water above it, so `sunflower` and `tangerine` sit at
   the top of the brightness clamp and still read closer to gold and rust than to the bag. This is
-  a real constraint of the look rather than a tuning miss; the fix, if it is ever wanted, is a
-  warmer accent lamp in the aquarium — which is the same fix the brass needs.
+  a real constraint of the look rather than a tuning miss, and it is the same complaint as the
+  "a little dull" note under caustics above: three separate things in this file now point at the
+  aquarium's illuminant — the dull gravel, the bright hues, and the brass — and one warmer lamp
+  is the fix for all three. Do not chase any of them individually.
 - **Brass cannot glint in the aquarium.** Reflection is `baseColour x environment` and the
   aquarium's environment is strongly blue, so a red-orange alloy has no red to return. A warm
   accent lamp in that look is the fix; the shallow reef already has enough warmth.

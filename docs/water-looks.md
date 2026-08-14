@@ -359,6 +359,16 @@ fluorescent bag, which is the one place the hue-count rule is broken on purpose.
   own grey at constant luminance, and `warmth` puts back the red end first, since blue is what
   the wash is made of. Neither can move the floor measurement however far they are pushed.
 
+  **1.75 is where this should stop, and the remaining deficit belongs to the lamp.** The
+  installed build still reads a little dull, and the reason is upstream of the palette: a home
+  tank is lit by *fluorescent* tubes, under which dyed gravel is startlingly saturated — much
+  more so than the same bag in daylight — and this look's key is a cool white with every other
+  contribution to that floor frankly blue. Pushing `chroma` further is a second correction
+  stacked on the same problem, and past here it starts making the gravel look cut out and pasted
+  into the tank rather than lit by it. Relighting is also nearly free to try, because every
+  palette is normalised to a *delivered* luminance: a warmer key moves the colour without moving
+  the floor ratio. See the caustics entry in `docs/next-session.md`.
+
   Two details in `styled()` that both cost a rendered catalogue to find. The push works on the
   colour's **tint** — what is left after its own grey — and never on the grey itself, because
   warming a whole colour also warms the slight bias in an off-white stone and then amplifies it,
