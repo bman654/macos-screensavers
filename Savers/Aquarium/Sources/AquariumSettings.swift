@@ -39,28 +39,65 @@ enum StylePreference: Equatable {
 struct AquariumSettings: Equatable {
     var style: StylePreference
 
+    /// The layout to pin, or nil to draw a fresh tank every launch.
+    ///
+    /// The same number `AQUARIUM_SEED` takes, reachable without an environment — inside
+    /// `legacyScreenSaver` the environment is empty, so until this existed a tank seen on the
+    /// real screensaver could never be looked at again. That is the whole feature: the seed is
+    /// shown in the corner of the tank (`showsSeed`), and typing it back here returns to it.
+    var seed: UInt64?
+
+    /// Whether the tank prints the seed it was drawn from in its corner.
+    var showsSeed: Bool
+
     /// What a machine that has never opened the sheet gets. `shallowReef` because it is the
     /// most legible of the three at a glance.
-    static let `default` = AquariumSettings(style: .fixed(.shallowReef))
+    ///
+    /// `showsSeed` defaults *on* because the two halves of the feature only work together: a
+    /// user who cannot see a seed has nothing to type into the field, so a default-off badge
+    /// leaves the field addressing a number the user has no way to learn. It is one click to
+    /// turn off, and the badge is deliberately faint.
+    static let `default` = AquariumSettings(style: .fixed(.shallowReef), seed: nil,
+                                            showsSeed: true)
 
     /// Not a `TankStyleName`, and it must stay that way — a style added under this name would
     /// be unreachable, since `StylePreference(stored:)` resolves it to `.random` first.
     static let randomStoredValue = "random"
 
     private static let styleKey = "TankStyle"
+    private static let seedKey = "TankSeed"
+    private static let showsSeedKey = "ShowsSeed"
 
     // MARK: Persistence
 
     static func load(from defaults: ScreenSaverDefaults?) -> AquariumSettings {
-        guard let stored = defaults?.string(forKey: styleKey),
-              let style = StylePreference(stored: stored)
-        else { return .default }
-        return AquariumSettings(style: style)
+        guard let defaults else { return .default }
+        var settings = AquariumSettings.default
+        if let stored = defaults.string(forKey: styleKey),
+           let style = StylePreference(stored: stored) {
+            settings.style = style
+        }
+        // Stored as a string, not as an integer: `UInt64` has no `UserDefaults` accessor that
+        // round-trips the top of its range, and an absent key has to be distinguishable from a
+        // pinned zero — `integer(forKey:)` returns 0 for both.
+        settings.seed = defaults.string(forKey: seedKey).flatMap(UInt64.init)
+        if defaults.object(forKey: showsSeedKey) != nil {
+            settings.showsSeed = defaults.bool(forKey: showsSeedKey)
+        }
+        return settings
     }
 
     func write(to defaults: ScreenSaverDefaults?) {
         guard let defaults else { return }
         defaults.set(style.storedValue, forKey: AquariumSettings.styleKey)
+        if let seed {
+            defaults.set(String(seed), forKey: AquariumSettings.seedKey)
+        } else {
+            // Removed rather than written empty, so "no seed" reads the same whether the user
+            // has never pinned one or has just cleared the field.
+            defaults.removeObject(forKey: AquariumSettings.seedKey)
+        }
+        defaults.set(showsSeed, forKey: AquariumSettings.showsSeedKey)
         // Screensaver defaults are conventionally synchronized on write: the sheet runs inside
         // `legacyScreenSaver`, which System Settings kills freely, and an unflushed preference
         // is one the user set and then watched not happen.
@@ -75,11 +112,18 @@ struct AquariumSettings: Equatable {
     /// It accepts `random` as well as the three style names, so the drawn path is reachable
     /// from a build loop too.
     static func forLaunch(defaults: ScreenSaverDefaults?) -> AquariumSettings {
+        var settings = load(from: defaults)
         if let pinned = ProcessInfo.processInfo.environment["AQUARIUM_STYLE"],
            let style = StylePreference(stored: pinned) {
-            return AquariumSettings(style: style)
+            settings.style = style
         }
-        return load(from: defaults)
+        // The badge is a debugging aid in this repo's render loop and a stored preference on a
+        // user's machine, so the environment has to be able to turn it off as well as on —
+        // otherwise every screenshot taken for `docs/water-looks.md` would carry a seed on it.
+        if let shown = ProcessInfo.processInfo.environment["AQUARIUM_SHOW_SEED"] {
+            settings.showsSeed = (shown as NSString).boolValue
+        }
+        return settings
     }
 
     // MARK: Drawing a style

@@ -74,6 +74,9 @@ final class AquariumView: SaverView {
                                 pointOfView: scene.cameraNode,
                                 sampleCount: context.isPreview ? 1 : 4,
                                 clearColor: scene.clearColor)
+        // The seed badge. It hangs on the renderer rather than on the scene, which is why the
+        // scene builds it and this hands it over — see `SeedBadge`.
+        host.renderer.overlaySKScene = scene.overlay
         host.onUpdate = { [weak scene] frame in scene?.update(frame) }
         // Only the backing scale is worth reacting to here; the drawable's shape reaches the
         // scene every frame through `FrameContext`. This is not optional polish — the scene is
