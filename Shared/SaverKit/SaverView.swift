@@ -79,6 +79,16 @@ class SaverView: ScreenSaverView {
     private var startTimestamp: CFTimeInterval = 0
     private var lastFrameTime: CFTimeInterval = 0
 
+    /// True between `startAnimation()` and `stopAnimation()`, which is not the same as "frames
+    /// are being delivered": a view that is not in a window still wants to animate, and is
+    /// suspended until one arrives.
+    private var wantsFrames = false
+
+    /// True when animation was stopped only because the view left its window, so moving back
+    /// into one resumes it. Distinguishing that from a host's own `stopAnimation()` is what
+    /// keeps a reparented view running.
+    private var isSuspended = false
+
     /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
     /// backwards. `SCNRenderer.render(atTime:)` takes an absolute clock: handing it a value
     /// lower than the last one re-simulates or resets particle systems, and every phase in a
@@ -91,6 +101,22 @@ class SaverView: ScreenSaverView {
     private var isPreviewSized: Bool { bounds.width < previewWidthThreshold }
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
+
+    /// `SAVERKIT_LIFECYCLE=1` logs every saver view created and destroyed, with its address.
+    ///
+    /// The one question about a saver that neither a screenshot nor a frame-rate number can
+    /// answer: whether the views a host builds and discards are actually being freed. Counting
+    /// the two lines is the whole test — a host that creates ten views and destroys nine is
+    /// leaking a whole render graph per cycle, which is invisible until the process runs out of
+    /// memory hours later and something unrelated fails to allocate.
+    private static let logsLifecycle =
+        ProcessInfo.processInfo.environment["SAVERKIT_LIFECYCLE"] != nil
+
+    private func logLifecycle(_ event: String) {
+        guard SaverView.logsLifecycle else { return }
+        NSLog("SaverKit lifecycle: \(event) \(type(of: self)) "
+              + "\(Unmanaged.passUnretained(self).toOpaque())")
+    }
 
     // MARK: Init
 
@@ -106,6 +132,7 @@ class SaverView: ScreenSaverView {
         animationTimeInterval = 1.0
 
         guard metalDevice != nil else { return }
+        logLifecycle("created")
         commandQueue = metalDevice?.makeCommandQueue()
         wantsLayer = true
         layerContentsRedrawPolicy = .duringViewResize
@@ -117,6 +144,7 @@ class SaverView: ScreenSaverView {
     }
 
     deinit {
+        logLifecycle("destroyed")
         frameLink?.invalidate()
         host?.teardown()
     }
@@ -163,6 +191,18 @@ class SaverView: ScreenSaverView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         viewDidChangeBackingProperties()
+        if window == nil {
+            suspendFrames()
+        } else {
+            if isSuspended {
+                isSuspended = false
+                super.startAnimation()
+            }
+            // Not conditional on having been suspended: a host may call `startAnimation()`
+            // before putting the view in a window, and this is then the first moment the link
+            // can legally be created.
+            startFrameLink()
+        }
     }
 
     private func updateDrawableSize() {
@@ -303,7 +343,45 @@ class SaverView: ScreenSaverView {
     override func startAnimation() {
         // The header is explicit that overrides must call the inherited implementation.
         super.startAnimation()
-        guard metalDevice != nil, frameLink == nil else { return }
+        wantsFrames = true
+        isSuspended = false
+        startFrameLink()
+    }
+
+    override func stopAnimation() {
+        wantsFrames = false
+        isSuspended = false
+        stopFrameLink()
+        super.stopAnimation()
+    }
+
+    /// Stop drawing, and stop the inherited timer with it, because the view has no window.
+    ///
+    /// This is the difference between a discarded saver view being collected and being
+    /// immortal. A `CADisplayLink` retains its target and is itself retained by the run loop it
+    /// was added to, and `ScreenSaverView`'s own animation timer does exactly the same — so once
+    /// a view is animating, the main run loop holds a strong reference to it that no other
+    /// object can release. A host that throws a saver view away without calling
+    /// `stopAnimation()` therefore does not free it: the view, its scene, its renderer, its
+    /// render attachments and its layer's drawables all survive, and it goes on rendering an
+    /// invisible frame sixty times a second for the life of the process. Measured at 2056x1329:
+    /// 161 MB retained per discarded view, none of them ever deallocated, growing without bound
+    /// across repeated previews until an allocation the host needed — a settings sheet, say —
+    /// could no longer be satisfied.
+    ///
+    /// Leaving a window is the signal available for it, and it is the right one: a view with no
+    /// window has nothing to composite into, so there is no frame worth producing.
+    private func suspendFrames() {
+        guard wantsFrames, !isSuspended else { return }
+        isSuspended = true
+        stopFrameLink()
+        super.stopAnimation()
+    }
+
+    private func startFrameLink() {
+        // No window means no compositor to draw into — and a link started there is what makes a
+        // discarded view immortal. See `suspendFrames`.
+        guard metalDevice != nil, frameLink == nil, wantsFrames, window != nil else { return }
 
         // Rebase on the next callback, continuing from `lastFrameTime` rather than restarting
         // at zero — see `timeOffset`.
@@ -321,13 +399,12 @@ class SaverView: ScreenSaverView {
         frameLink = link
     }
 
-    override func stopAnimation() {
+    private func stopFrameLink() {
         frameLink?.invalidate()
         frameLink = nil
         // Carry the clock across the pause. A view can be stopped and started repeatedly —
         // System Settings previews do exactly this — while keeping the same host and scene.
         timeOffset = lastFrameTime
-        super.stopAnimation()
     }
 
     /// Intentionally empty. The inherited timer exists because the host expects it; frames
@@ -335,6 +412,16 @@ class SaverView: ScreenSaverView {
     override func animateOneFrame() {}
 
     @objc private func frameLinkFired(_ link: CADisplayLink) {
+        // The safety net for `suspendFrames`. `viewDidMoveToWindow` is what normally catches a
+        // discarded view, but it is AppKit's to send and a host that tears its window down
+        // around the view need not produce one. The link itself always fires, so checking here
+        // means a view can never go on rendering — and go on keeping itself alive — into a
+        // window that is gone.
+        guard window != nil else {
+            suspendFrames()
+            return
+        }
+
         // `targetTimestamp` is the vsync this frame is for, so animation driven from it is
         // one frame less latent than one driven from `timestamp`.
         if startTimestamp == 0 { startTimestamp = link.targetTimestamp }

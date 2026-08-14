@@ -118,6 +118,31 @@ not have to know about it.
 | A post-process radius is in target *pixels*, so a look tuned at 1x arrives at half its apparent size on Retina | `RenderTargets.backingScale`, which the host multiplies in |
 | A host is created on the first layout, which routinely happens *before* the view is in a window — so the layer's scale is still 1 then, whatever display it is about to land on | scale is delivered with `RenderTargets`, never in `HostContext` |
 | A crash is an unrecoverable black screen | every failure path degrades instead of trapping |
+| An animating view is retained by the main run loop and cannot be freed, so a host that discards one without `stopAnimation()` leaks the whole render graph and keeps drawing | `SaverView.suspendFrames()` — see below |
+
+### An animating saver view is immortal
+
+Both things that can drive frames — the `CADisplayLink` and `ScreenSaverView`'s own animation
+timer — retain their target, and both are themselves retained by the main run loop. Once a view
+is animating, the run loop therefore holds a strong reference to it that nothing else can
+release: `deinit` cannot run, because the only code that would invalidate the link is in
+`deinit`. A host that throws a saver view away without calling `stopAnimation()` does not free
+it. The view, its scene, its renderer, its MSAA and depth attachments and its layer's drawables
+all survive, and it goes on rendering an invisible frame sixty times a second for the life of
+the process.
+
+This is not hypothetical: it is what made System Settings' `legacyScreenSaver` reach a 5.6 GB
+footprint — 1.7 GB of it live `IOSurface` drawables — after a dozen previews, at which point the
+settings sheet could no longer allocate its own live preview and the Settings button silently
+did nothing. Measured at 2056x1329, a host that discards a view without stopping it: **161 MB
+retained per cycle and zero views deallocated, against 3 MB per cycle and every view
+deallocated** once leaving a window suspends the frames.
+
+So `SaverView` ties frames to *being in a window* rather than to `startAnimation()` alone:
+`viewDidMoveToWindow` suspends and resumes them, and the display-link callback checks too,
+because a host that tears its window down around the view need not send the notification.
+`SAVERKIT_LIFECYCLE=1` logs every view created and destroyed, which is the only way to see any
+of this — count the two lines, and they must match.
 
 Two more that are not SaverKit's to fix, but will bite:
 
