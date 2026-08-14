@@ -321,7 +321,7 @@ enum Avoidance {
     /// prop, so the term that keeps fish from swimming into hulls is also the term that would
     /// push one out of the hole it is aiming at. The route's declared clearance is what keeps it
     /// off the geometry instead, which is what the declaration is for.
-    static func push(position: SIMD3<Float>, length: Float, bounds: WaterBounds,
+    static func push(position: SIMD3<Float>, length: Float, girth: Float, bounds: WaterBounds,
                      surface: SurfaceField, avoidingProps: Bool = true) -> SIMD3<Float> {
         // The distance over which a wall makes itself felt. Its own body length is the natural
         // unit — a moray has to start its turn much earlier than a gramma does — and a little
@@ -333,7 +333,7 @@ enum Avoidance {
         // Underneath, always, in both looks. The floor is the one wall the ocean has too.
         let ceiling = bounds.ceilingY(atDepth: depth)
         let column = max(ceiling - bounds.floorY, 1e-3)
-        let vertical = Avoidance.margin(want, within: column)
+        let vertical = Avoidance.margin(Avoidance.verticalWant(girth), within: column)
         push.y += ramp(position.y - bounds.floorY, vertical)
         push.y -= ramp(ceiling - position.y, vertical)
 
@@ -365,6 +365,27 @@ enum Avoidance {
         }
         return push * strength
     }
+
+    /// How much water a fish wants under it, and over it — a girth question, never a length one.
+    ///
+    /// **This is what kept the eel off the floor, and it is the same trap the floor clearances in
+    /// `Tank` were already rewritten for.** A ramped push settles a fish at roughly the margin
+    /// itself, so the vertical margin *is* the height the animal flies at. Stated as `length *
+    /// 2.4` it asked a length-capped moray for 1.17 m of water under a body 2.4 cm through — ten
+    /// times the 3 girths the decision layer is allowed to *name* as a target — so the eel was
+    /// commanded down by its brain and held up by the field, permanently, and settled at the
+    /// 0.33-of-the-column cap below. Measured on `AQUARIUM_SEED=4`: `lurker@0.35–0.59`.
+    ///
+    /// Three girths, because that is exactly `FishDecision.verticalSpan.low`. The invariant is
+    /// that the field must be neutral at the lowest height a behaviour may aim at, or the two
+    /// systems fight for the whole of the animal's life — the same limit-cycle class as the
+    /// intent-versus-wall oscillation already fixed in `FishBrain`.
+    ///
+    /// It leaves ordinary fish where they were: a fish of ordinary proportions is about five
+    /// girths long, so three girths and `length * 2.4` land within a few centimetres of each
+    /// other, and both are above the 0.33 cap in a glass tank anyway. Only the animals whose
+    /// length and girth do not track each other move — which is the entire point.
+    private static func verticalWant(_ girth: Float) -> Float { max(girth * 3, 0.06) }
 
     /// A margin can never claim so much of an axis that there is no free water left on it.
     ///

@@ -7,6 +7,7 @@
 // The arch and the wreck exist to be swum *through*, not past. A tank of things a fish routes
 // around is flat; one opening a fish commits to crossing gives the depth axis something to prove.
 
+import AppKit
 import Foundation
 import SceneKit
 import simd
@@ -57,12 +58,47 @@ struct SwimPassage {
                 // through the gap would send it into whatever the missing point was avoiding.
                 // Dropping it costs one feature on one prop; taking it costs a fish inside a hull.
                 guard points.count == spec.nodes.count, points.count >= 2 else { continue }
-                routes.append(SwimPassage(waypoints: points,
-                                          radius: spec.radius * prop.placement.scale,
-                                          isShelter: prop.manifest.isShelter))
+                let route = SwimPassage(waypoints: points,
+                                        radius: spec.radius * prop.placement.scale,
+                                        isShelter: prop.manifest.isShelter)
+                routes.append(route)
+                if ProcessInfo.processInfo.environment["AQUARIUM_PASSAGE_MARKERS"] != nil {
+                    draw(route, named: prop.manifest.name, in: reefNode)
+                }
             }
         }
         return routes
+    }
+
+    /// Puts a coloured ball on every waypoint and prints the route, under
+    /// `AQUARIUM_PASSAGE_MARKERS`.
+    ///
+    /// Worth keeping rather than deleting after the session that needed it, because the question
+    /// it answers cannot be answered any other way. Whether a route lands where the model author
+    /// meant it to survives every transform in `Reef.seat` plus the model's own attitude, and a
+    /// wrong one produces no error and no log line — only fish behaving oddly near a prop. It is
+    /// also what showed that a passage running across the frame puts the arch's tunnel side-on to
+    /// the camera, so a fish correctly inside it reads as a fish inside a rock.
+    ///
+    /// Green is the first waypoint, red the last, so the direction of the route is readable in a
+    /// still. The markers are children of the reef, i.e. in the same space the waypoints are
+    /// stated in — which is the point: a marker derived some other way could agree with the route
+    /// and both be wrong.
+    private static func draw(_ route: SwimPassage, named name: String, in reefNode: SCNNode) {
+        print("[passage] \(name) radius=\(route.radius) points=\(route.waypoints)")
+        for (index, point) in route.waypoints.enumerated() {
+            let sphere = SCNSphere(radius: 0.035)
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.emission.contents = index == 0 ? NSColor.green
+                : (index == route.waypoints.count - 1 ? NSColor.red : NSColor.yellow)
+            material.diffuse.contents = material.emission.contents
+            sphere.firstMaterial = material
+            let marker = SCNNode(geometry: sphere)
+            marker.position = SCNVector3(point.x, point.y, point.z)
+            marker.renderingOrder = 100
+            reefNode.addChildNode(marker)
+        }
     }
 }
 

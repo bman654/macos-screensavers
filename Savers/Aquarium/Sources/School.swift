@@ -313,8 +313,10 @@ final class School {
         let entries = (censusEntries ?? [:]).sorted { $0.key < $1.key }
             .map { "\($0.key) \($0.value)" }.joined(separator: " ")
         print(String(format:
-            "[school] t=%6.1f  n=%2d  %@  pitched %d  outside %d  reach mean %.2f max %.2f | %@",
-            time, fishes.count, states, pitched, escaped, meanReach, widest, entries))
+            "[school] t=%6.1f  n=%2d  %@  pitched %d  outside %d  reach mean %.2f max %.2f"
+            + "  waypoints %d  crossings %d | %@",
+            time, fishes.count, states, pitched, escaped, meanReach, widest,
+            waypointsReached, routesCrossed, entries))
     }
 
     private var censusBucket = -1
@@ -331,6 +333,16 @@ final class School {
 
     private let censusEnabled = ProcessInfo.processInfo.environment["AQUARIUM_SCHOOL_STATS"] != nil
 
+    /// What actually happened on the routes, rather than how often one was chosen.
+    ///
+    /// **A transit entered is not a fish seen going through anything**, and counting entries was
+    /// the instrument that reported this feature working for a whole session in which nobody
+    /// ever saw it happen. `waypoints` counts arrivals and `crossings` counts routes finished
+    /// end to end; a run whose `crossings` is zero while `transit` entries climb is the exact
+    /// failure that was live, and it is invisible to every other number here.
+    private var waypointsReached = 0
+    private var routesCrossed = 0
+
     /// One fixed step of the whole school.
     private func simulate(bounds: WaterBounds, lanes: SwimLanes) {
         let dt = School.step
@@ -343,7 +355,15 @@ final class School {
                 // Ends either by arriving or by running out of patience. Both set the cooldown,
                 // because a fish that gave up on a route is the one most likely to be sitting in
                 // its mouth and would otherwise re-enter on the very next decision.
-                if !advanceTransit(fish, bounds: bounds) || fish.brain.remaining <= 0 {
+                let routeActive = advanceTransit(fish, bounds: bounds)
+                if !routeActive || fish.brain.remaining <= 0 {
+                    // Finished, as opposed to given up on. `advanceTransit` returns false both
+                    // ways, and the difference between them is the whole measurement.
+                    if !routeActive, let index = fish.brain.passage,
+                       passages.indices.contains(index),
+                       fish.brain.waypoint >= passages[index].waypoints.count {
+                        routesCrossed += 1
+                    }
                     endTransit(fish)
                 }
             }
@@ -397,21 +417,82 @@ final class School {
         let world = SIMD3<Float>(target.x, bounds.floorY + target.y, target.z)
         let offset = world - fish.position
 
-        // Reached when it is inside the clearance the route declares, or within a third of its
-        // own body — whichever is more generous. Demanding an exact arrival would stall a fish
-        // that cannot turn tightly enough to touch the point.
-        let arrival = max(route.radius * 0.9, fish.length * 0.35)
-        if simd_length(offset) < arrival {
+        // **Reached is a question about the route, not about absolute distance**, and getting
+        // that wrong is why this feature was counted as working and never seen.
+        //
+        // The old test was a sphere of `max(radius * 0.9, length * 0.35)`, which for the moray is
+        // 17 cm against a 4.5 cm hole. A fish flying *over* the wreck was therefore inside the
+        // sphere of one waypoint after another and ticked the whole route off without ever being
+        // in it — the census counted a transit, the eye saw a fish swim past a shipwreck. It is
+        // the same shape of error as counting transits *entered*, one level further down.
+        //
+        // A waypoint counts as reached when the fish is within the route's declared clearance of
+        // the route's own *axis* and has crossed the plane through the waypoint normal to it.
+        // That is what threading a hole is, and it cannot be satisfied from above.
+        let axis = routeAxis(route, at: step, reversed: fish.brain.passageReversed)
+        let fromWaypoint = -offset
+        let along = simd_dot(fromWaypoint, axis)
+        let lateral = simd_length(fromWaypoint - axis * along)
+        // The last waypoint is an approach point in open water rather than a hole, so a fish is
+        // allowed to simply touch it — otherwise leaving the route depends on overshooting a
+        // point that has nothing beyond it to aim at.
+        let isExit = fish.brain.waypoint == count - 1
+        if (lateral < route.radius && along > 0)
+            || simd_length(offset) < (isExit ? max(route.radius, fish.girth * 2) : route.radius) {
+            waypointsReached += 1
             fish.brain.waypoint += 1
             if fish.brain.waypoint >= count { return false }
+            // Progress buys patience — see `FishBrain.transitPatience`.
+            fish.brain.transitElapsed = 0
+            fish.brain.remaining = FishBrain.transitPatience(isLurker: fish.isLurker)
         }
 
+        // **Steer at the waypoint from a distance and along the route from close up.**
+        //
+        // This is the spin. A yaw derived from the *horizontal* part of the offset is meaningless
+        // once that part is small — a fish sitting a few centimetres above a waypoint has a
+        // horizontal offset of near-zero length whose direction is noise, and the old 0.1 mm
+        // threshold let it through. `targetYaw` then swung across half a turn between frames and
+        // the animal pirouetted: measured on the moray, yaw ran from -7.2 to -13.1 radians in
+        // four seconds while its distance to the waypoint barely changed. The fish never escaped
+        // because the behaviour cannot be abandoned partway, so it span for the whole 26-second
+        // transit, took the cooldown, came back and did it again.
+        //
+        // Inside a passage there is only one direction worth having anyway, and it is the
+        // passage's. Handing the fish the route axis both removes the singularity and is what
+        // threading a hole actually looks like.
         let horizontal = SIMD2<Float>(offset.x, offset.z)
-        if simd_length(horizontal) > 1e-4 {
+        let axisHorizontal = SIMD2<Float>(axis.x, axis.z)
+        if simd_length(horizontal) > max(route.radius, fish.girth) {
             fish.brain.targetYaw = atan2(-horizontal.y, horizontal.x)
+        } else if simd_length(axisHorizontal) > 1e-3 {
+            fish.brain.targetYaw = atan2(-axisHorizontal.y, axisHorizontal.x)
         }
         fish.brain.targetHeight = target.y
         return true
+    }
+
+    /// Which way the route is running at a given waypoint, as a unit vector in reef space.
+    ///
+    /// Taken forward from this waypoint to the next, and backward from the previous one at the
+    /// end of the route — so every point on a route has an axis, including the one a fish leaves
+    /// by. Degenerate routes fall back to world up, which no fish can cross the plane of from
+    /// above and which therefore fails safe: the transit times out rather than completing on a
+    /// geometry nobody authored.
+    private func routeAxis(_ route: SwimPassage, at step: Int, reversed: Bool) -> SIMD3<Float> {
+        let points = route.waypoints
+        let ahead = reversed ? step - 1 : step + 1
+        let behind = reversed ? step + 1 : step - 1
+        let direction: SIMD3<Float>
+        if points.indices.contains(ahead) {
+            direction = points[ahead] - points[step]
+        } else if points.indices.contains(behind) {
+            direction = points[step] - points[behind]
+        } else {
+            return SIMD3<Float>(0, 1, 0)
+        }
+        let length = simd_length(direction)
+        return length > 1e-5 ? direction / length : SIMD3<Float>(0, 1, 0)
     }
 
     private func endTransit(_ fish: Fish) {
@@ -434,13 +515,25 @@ final class School {
         // nothing as it arrives. Commanding the angle directly makes a fish sail through its own
         // target and correct, which reads as a submarine.
         let error = (bounds.floorY + fish.brain.targetHeight) - fish.position.y
-        let climb = error / max(fish.length * 6, 0.05) + fish.brain.pitchBias
+        // The error at which full pitch is commanded — and the third place a length-derived
+        // number ran away for a long thin animal. Six body lengths is 2.9 m for the moray in a
+        // tank 0.8 m deep, so the largest height error the tank can physically hold commanded it
+        // 2.4° of pitch and it descended at half a centimetre a second. Its target was right, the
+        // field had stopped fighting it, and it still took half a minute to fall 12 cm — which on
+        // screen is an eel that never goes anywhere near the floor.
+        //
+        // Capped against the water actually available. A fish cannot be more wrong about its
+        // height than the column is deep, so a gain distance larger than the column describes a
+        // controller that can never leave its linear region. Ordinary fish are unaffected: six
+        // lengths is already within the cap for everything shorter than about 13 cm.
+        let column = max(bounds.ceilingY(atDepth: -fish.position.z) - bounds.floorY, 1e-3)
+        let climb = error / max(min(fish.length * 6, column * 0.75), 0.05) + fish.brain.pitchBias
         let wanted = min(max(climb, -fish.limits.maxPitch), fish.limits.maxPitch)
 
         // A fish threading a hull must not be shoved out of it by the same term that keeps every
         // other fish from swimming into one.
         let push = Avoidance.push(position: fish.position, length: fish.length,
-                                  bounds: bounds, surface: surface,
+                                  girth: fish.girth, bounds: bounds, surface: surface,
                                   avoidingProps: fish.brain.behavior != .transit)
         var desired = Steering.direction(yaw: fish.brain.targetYaw, pitch: wanted) + push
         // A push that exactly cancels the intent leaves nothing to steer by. Falling back to the

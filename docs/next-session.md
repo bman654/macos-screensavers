@@ -32,9 +32,15 @@ the stored settings** — it overrides the style and leaves the seed alone.
 
 The badge is a **SpriteKit overlay** (`SCNRenderer.overlaySKScene`), which is verified to
 composite over a manually-encoded `render(atTime:viewport:commandBuffer:passDescriptor:)` pass —
-so it is untouched by the water's fog, the camera's HDR tone mapping and the bloom. `showsSeed`
-defaults **on**, which is a deliberate choice worth revisiting before ship: default-off would
-leave the seed field addressing a number the user has no way to learn.
+so it is untouched by the water's fog, the camera's HDR tone mapping and the bloom.
+
+**`showsSeed` defaults on for now and must be flipped off before ship.** The user's instruction is
+that the badge stays in as a debugging tool and stops being the default once the tank has finished
+being debugged. It is on today because the two halves only work together while tuning: a seed you
+cannot see is a seed you cannot type back in. Flipping it is one line in
+`AquariumSettings.default` and nothing else has to change — the checkbox, `AQUARIUM_SHOW_SEED` and
+the field all keep working either way. It also costs 2.0 ms of GPU at 2056x1329, which is the
+other reason not to leave it on; see the overlay trap below.
 
 **It is installed and confirmed in System Settings.** Every option worked, the thumbnail
 changed on each selection, and full-screen Preview ran — so the sheet, the live preview inside
@@ -184,6 +190,8 @@ SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
     --screenshot /tmp/tank.png                             # frame and GPU timing
 tools/run-saver.swift Aquarium --configure --seconds 3 --screenshot /tmp/sheet.png
 AQUARIUM_SCHOOL_STATS=10 tools/run-saver.swift Aquarium --seconds 120 --screenshot /tmp/t.png
+AQUARIUM_PASSAGE_MARKERS=1 AQUARIUM_SEED=5 tools/run-saver.swift Aquarium --seconds 1 \
+    --screenshot /tmp/routes.png                           # a ball on every swim waypoint
 AQUARIUM_BUBBLER_RUSH=1 AQUARIUM_SEED=1 tools/run-saver.swift Aquarium --seconds 9 \
     --screenshot /tmp/bubbles.png                          # collapses the 11-26 s idle
 ```
@@ -346,7 +354,85 @@ rock_arch      radius 0.21   aquarium  8/14 = 57%   ocean 14/14 = 100%
 
 The eel fits all three in a glass tank, because the length cap shrinks it and girth scales with it.
 
-## OPEN — start here. Two behaviours are judged wrong on the installed build
+## The eel lies on the floor now, and fish thread the wreck
+
+Both of the open items below were real, and **neither had the cause the file guessed at**. One
+mechanism produced most of both: a clearance stated in body *lengths* for an animal twenty girths
+long. It had already been found and fixed once in `Tank`, and it was still live in three other
+places. Measured on `AQUARIUM_SEED=4`, aquarium, 120 s:
+
+```
+                      before          after
+lurker@ (column)      0.35 – 0.59     0.15 – 0.24     (target ~0.18)
+routes crossed        0               3 per 120 s
+waypoints reached     6               18
+transits ended by     timeout ×4      arrival ×3, timeout ×1
+```
+
+Five changes, and the first is the root cause of most of it:
+
+- **`Avoidance.push`'s vertical margin is stated in girths.** A ramped push settles a fish at
+  roughly the margin, so the vertical margin *is* the height the animal flies at. At `length *
+  2.4` it asked a length-capped moray for 1.17 m of water under a body 2.4 cm through — ten times
+  the 3 girths the decision layer may *name* as a target — so the eel was commanded down by its
+  brain and held up by the field for its whole life. Three girths now, which is exactly
+  `FishDecision.verticalSpan.low`: **the field must be neutral at the lowest height a behaviour
+  may aim at**, or the two systems fight forever. Ordinary fish do not move, because a fish of
+  ordinary proportions is about five girths long.
+- **The pitch controller's gain is capped against the water available.** Six body lengths is
+  2.9 m for the moray in a tank 0.8 m deep, so the largest height error the tank can hold
+  commanded 2.4° of pitch and it descended at half a centimetre a second. Its target was right,
+  the field had stopped fighting it, and it still took half a minute to fall 12 cm.
+- **A waypoint is reached by threading it, not by being near it.** The old sphere of
+  `max(radius * 0.9, length * 0.35)` is 17 cm against the wreck's 4.5 cm hole, so a fish flying
+  *over* the wreck ticked off the whole route without entering it — which is how the census
+  reported this feature working through a session in which nobody saw it. A waypoint now counts
+  when the fish is inside the route's declared clearance *of the route axis* and has crossed the
+  plane through the waypoint normal to it. That cannot be satisfied from above, which is what the
+  user's own diagnosis of the problem said it should not be.
+- **The spin is fixed, and it was a singularity.** `targetYaw` came from the *horizontal* part of
+  the offset to the waypoint, past a 0.1 mm guard. A fish a few centimetres above a waypoint has a
+  horizontal offset whose direction is noise, so the target swung across half a turn between
+  frames: measured on the moray, yaw ran -7.2 → -13.1 radians in four seconds while its distance
+  to the waypoint barely moved. It could not escape, because a transit may not be abandoned
+  partway. Close in, the fish is now handed the *route's* axis, which is the only direction inside
+  a passage that means anything.
+- **The transit timeout is per leg, and refreshed by progress.** As a flat ceiling on the whole
+  behaviour it also had to cover the approach, and the approach is the long part — the moray joins
+  a route from a metre away at 6 cm a second, so 15 of its 26 seconds were gone before the first
+  waypoint. This is what its own comment always claimed it was.
+
+`FishBrain.lurkerCeiling` is a real control again and is 0.18. At 0.32 it was within 3% of the
+0.33 cap in `Avoidance.margin` that was holding the eel up regardless, so **sweeping it could
+never have worked** — which is why the sweep this file asked for was not the thing to do.
+
+`AQUARIUM_SCHOOL_STATS` now reports **`waypoints`** (arrivals) and **`crossings`** (routes
+finished end to end) alongside the behaviour counts. A run whose `crossings` is zero while
+`transit` entries climb is exactly the failure that was live, and no other number here shows it.
+`AQUARIUM_PASSAGE_MARKERS=1` puts a coloured ball on every waypoint — green first, red last — and
+prints the route in reef space. Both are kept deliberately; see the traps below.
+
+### Still open: a passage can be correct and still read as a fish inside a rock
+
+The user's third report — fish clipping through the arch's apex and through the plank over the
+wreck's hole — is **half explained and not fixed**. Fish do now go through both props, and the
+render proves it: on `AQUARIUM_SEED=4` at t=38.6 s a clownfish is framed inside the wreck's ribs.
+
+But `AQUARIUM_SEED=5` shows the other half. Its rock arch draws a yaw that puts the passage
+*across* the frame, and the arch is a tunnel rather than a bridge — so the camera sees the
+tunnel's side wall, and a fish correctly inside the passage reads as a fish embedded in solid
+rock. That is almost certainly what was reported as clipping through the apex.
+
+**The obvious fix is wrong and was tried and reverted.** Turning every passable prop so its route
+runs across the frame is right for the arch and backwards for the wreck: the wreck's route runs
+port to starboard, so forcing that axis across the screen points the ship's keel at the camera and
+loses the broadside profile that makes it the best-looking prop in the library. The wreck is
+already legible from the side because its hull is open-topped. So **which orientation sells a
+passage is per-prop art, not a rule** — it is authoring data, and it belongs in the manifest
+beside `radius`, not in a hard-coded name list. Do this with a render open; the numbers cannot
+tell you whether a hole reads as a hole.
+
+## Superseded — kept for the reasoning. Two behaviours judged wrong on the installed build
 
 Both were reported by the user against the build installed at the end of this session, and neither
 is explained. **The instrumentation and the eye disagree, and the instrumentation has not earned
@@ -398,11 +484,17 @@ Known and unresolved:
 
 ## Next, in order
 
-1. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+1. **Turn the seed badge off by default**, once the tank has stopped being debugged. One line in
+   `AquariumSettings.default`. Listed first because it is the only thing here that ships a
+   debugging aid to a user, and it is trivial enough to be forgotten.
+2. **Make a passage's viewing angle authoring data.** See the open section above: a fish inside
+   the rock arch reads as a fish inside a rock, and the general fix is wrong because the wreck
+   wants the opposite orientation.
+3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
    last: the picture should be a frame of the finished tank, so shooting it before the
    caustics and the fish AI land means shooting it twice.
 
@@ -484,6 +576,37 @@ Known and unresolved:
 
 ## Traps that cost real time. Each is commented where it happens; this is the index
 
+- **A ramped avoidance push settles a fish at its own margin, so a margin is a position.** It
+  reads like a soft preference and behaves like a command: the equilibrium where the push cancels
+  the height controller sits at roughly the margin itself, and the behaviour layer contributes a
+  few percent. Stating that margin in body lengths therefore *placed* a moray in mid-water. Any
+  clearance that faces the floor is a girth question — `Tank.fishFloorClearance`,
+  `Avoidance.clamp`, `verticalSpan.low` and now `Avoidance.push` all agree, and the invariant tying
+  them together is that **the field must be neutral at the lowest height a behaviour may name**.
+- **A knob within a few percent of a cap upstream of it is not a knob.** `lurkerCeiling` was 0.32
+  of the column and `Avoidance.margin` capped the eel at 0.33 of it, so every value of the knob
+  produced the same animal. A sweep would have reported "no effect" and been believed. Before
+  tuning anything, check what else clamps the same quantity.
+- **A sphere test for arriving at a waypoint is satisfied from above.** `length * 0.35` is 17 cm
+  for a moray against a 4.5 cm hole, so a fish that never entered the wreck completed the route
+  through it, and every instrument agreed the feature worked. Arrival on a route has to be
+  measured against the route — lateral distance to the axis, plus the plane through the waypoint.
+- **`atan2` of a shrinking horizontal offset is a singularity, and the guard was 0.1 mm.** Steering
+  yaw at a point the fish is nearly on top of gives a direction made of noise, and the fish
+  pirouettes. It looks exactly like a behaviour bug — an animal "changing its mind" — and it is
+  arithmetic. Near a target, steer along the *path* rather than at the point.
+- **A timeout that also covers the approach is not a stall detector.** Most of a transit's budget
+  went on swimming to the route, so the clock ran out inside the hull. Refresh the patience on
+  progress, or the measurement is of the approach rather than of the crossing.
+- **A passage can be geometrically perfect and read as a fish inside a rock.** Whether a
+  swim-through is *visible* depends on the prop's yaw against the camera, and the right answer
+  differs per prop: an arch is a tunnel and must be entered toward the viewer, a wreck is
+  open-topped and is best broadside. A general rule fixes one and breaks the other.
+- **A SpriteKit overlay costs a full-screen pass whatever is on it.** The seed badge is a few
+  characters and measures 2.0 ms of GPU at 2056x1329 — 5.8 ms without it, 7.8 ms with. 60 fps is
+  unaffected and the energy is not free. If it ever matters, the cheap version is a quad parented
+  to the camera, at the price of having to fight fog, tone mapping and bloom, which is exactly
+  what the overlay avoids.
 - **A prop's silhouette is a constraint, and it fails at tank scale rather than in the studio.**
   Widening the wreck's hold to admit medium fish hit its clearance target exactly — 0.286 m
   measured against a 0.23 m declaration — by removing the garboard, the starboard sheer strake,

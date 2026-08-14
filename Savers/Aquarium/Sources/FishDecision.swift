@@ -93,8 +93,17 @@ struct BehaviorContext {
     var verticalSpan: (low: Float, high: Float) {
         let ground = surface.height(x: position.x, z: position.z)
         let ceiling = bounds.ceilingY(atDepth: -position.z) - bounds.floorY
-        let low = min(ground + girth * 3, ceiling * 0.5)
-        return (low, max(ceiling - length * 0.6, low + length))
+        // The highest a fish may be told to go, agreeing with `Avoidance.clamp` so that a
+        // behaviour cannot name a height the backstop will then take away.
+        //
+        // Both ends need this cap and the top one used to go without it: `low + length` for a
+        // long fish standing over a tall prop resolved *above* the water. The eel was the case —
+        // over the wreck its span came out (0.5, 0.89) of a column 1.0 deep, and the lurker
+        // clamp below, which takes a fraction of the span, then permitted it 0.69 of the column.
+        // A moray hovering over a hull was allowed higher than one in open water.
+        let top = max(ceiling - girth * 1.5, 0)
+        let low = min(ground + girth * 3, min(ceiling * 0.5, top))
+        return (low, max(min(max(ceiling - length * 0.6, low + length), top), low))
     }
 }
 
@@ -109,9 +118,28 @@ extension FishBrain {
     /// manoeuvre it commits to is indistinguishable from indecision.
     static let minimumCommitment: Float = 1.6
 
-    /// The highest a lurker will voluntarily go, as a fraction of the water available to it.
-    /// A transit is exempt: a route through a wreck goes where the wreck's hold is.
-    static let lurkerCeiling: Float = 0.32
+    /// The highest a lurker will voluntarily go, as a fraction of the water column measured from
+    /// the floor. A transit is exempt: a route through a wreck goes where the wreck's hold is.
+    ///
+    /// It used to be a fraction of `verticalSpan` and it used to be 0.32, and neither number
+    /// meant anything: 0.32 of the column is within 3% of the 0.33 cap in `Avoidance.margin`
+    /// that was holding the eel up regardless, so sweeping this knob could not have moved the
+    /// animal. With the field neutral near the gravel it is a real control again, and 0.18 is
+    /// the height a moray actually keeps to — a head in a hole, not a very long tang.
+    static let lurkerCeiling: Float = 0.18
+
+    /// How long a fish will keep trying to reach *one* waypoint before abandoning a route.
+    ///
+    /// **Per leg, not per route**, and `School` refreshes it every time a waypoint is reached.
+    /// It exists only so a fish that cannot make progress gives up instead of pressing against
+    /// geometry for the rest of the launch — which is what it always claimed to be, and was not:
+    /// as a flat ceiling on the whole behaviour it also had to cover the *approach*, and the
+    /// approach is the long part. A moray joins a route from up to a metre away and covers that
+    /// at 6 cm a second, so fifteen of its twenty-six seconds were spent before it reached the
+    /// first waypoint and it ran out inside the hull with two legs still to go. Measured on
+    /// `AQUARIUM_SEED=4`: every transit in a two-minute run ended in a timeout, none in an
+    /// arrival.
+    static func transitPatience(isLurker: Bool) -> Float { isLurker ? 26 : 15 }
 
     /// Picks the next behaviour and the intent that goes with it.
     ///
@@ -204,11 +232,7 @@ extension FishBrain {
             passageReversed = !atStart
             waypoint = 0
             transitElapsed = 0
-            // Long enough to cross the longest route at a dawdle. It is a ceiling rather than a
-            // duration — `School` ends the transit when the last waypoint is reached — and it
-            // exists only so a fish that cannot make progress gives up instead of pressing
-            // against geometry for the rest of the launch.
-            remaining = context.isLurker ? 26 : 15
+            remaining = FishBrain.transitPatience(isLurker: context.isLurker)
             // Deliberate and unhurried. A fish that darts through a hull reads as escaping it;
             // one that eases through reads as choosing it.
             targetSpeedFactor = rand.inRange(0.45, 0.75)
@@ -226,7 +250,8 @@ extension FishBrain {
         // range of some wall almost always, so the unconditional version re-decided about once a
         // second for its whole life. And the floor is long enough to complete a turn in.
         let push = Avoidance.push(position: context.position, length: context.length,
-                                  bounds: context.bounds, surface: context.surface)
+                                  girth: context.girth, bounds: context.bounds,
+                                  surface: context.surface)
         if behavior != .transit, simd_length(push) > 1.2 {
             let intent = SIMD3<Float>(cos(targetYaw), 0, -sin(targetYaw))
             if simd_dot(simd_normalize(push), intent) < -0.2 {
@@ -251,8 +276,15 @@ extension FishBrain {
         // applied to every decision here — after the switch, where nothing can miss it.
         if context.isLurker, behavior != .transit {
             let span = context.verticalSpan
+            // Measured from the **floor**, not from whatever the animal happens to be standing
+            // over, and against the whole column rather than against the span. Both were wrong
+            // in the same direction: a fraction of a span whose bottom rises with the reef gave
+            // an eel over the wreck a *higher* allowance than an eel in open water, which is the
+            // opposite of what a lurker is. Never below the lowest height it is legal to name.
+            let column = context.bounds.ceilingY(atDepth: -context.position.z)
+                - context.bounds.floorY
             targetHeight = min(targetHeight,
-                               span.low + (span.high - span.low) * FishBrain.lurkerCeiling)
+                               max(span.low, column * FishBrain.lurkerCeiling))
         }
 
         // Remember which way this decision asks the fish to turn, so the next one can prefer to
