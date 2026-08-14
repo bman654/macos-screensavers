@@ -208,7 +208,14 @@ extension WaterLook {
     /// tank shipped with, because that intensity is most of what over-lit the floor.
     static let deepOcean = WaterLook(
         tint: (0.043, 0.128, 0.205),
-        surface: (0.068, 0.196, 0.310),
+        // Much stronger than it was, and the reason is the shafts. Measured against a
+        // photograph of real god rays, the water in that picture falls to a fifth of its
+        // top-of-frame brightness by the horizon while this look's fell only to two thirds — so
+        // the shafts had nothing to emerge *from* and sat on flat water as bands. The gradient
+        // the eye reads as belonging to the ray mostly belongs to the water. This reaches 0.25
+        // against the photograph's 0.20, and it is the ramp doing it, so the fog still meets the
+        // background exactly at the horizon and the floor measurement barely moves: 0.59 to 0.56.
+        surface: (0.130, 0.374, 0.592),
         environment: (top: (0.105, 0.270, 0.420), bottom: (0.014, 0.038, 0.066),
                       intensity: 0.85),
         // The steepest of the three. Depth is sold by how fast things leave, not by how dark
@@ -229,7 +236,8 @@ extension WaterLook {
         // a long scattering path and this is the only look whose backdrop is dark enough for a
         // shaft to read against it — the same darkness that makes it the wrong place for
         // caustics makes it the right place for these.
-        godRays: GodRays(count: 9, brightness: 0.40, width: 0.62, sway: 0.9, swayPeriod: 34),
+        godRays: GodRays(count: 16, brightness: 0.46, width: 0.62, sourceHeight: 7.5,
+                         ripple: 0.55, period: 9...26),
         // A strong vignette makes the frame edges darker than the middle, which *adds* to the
         // shelf-and-cliff read rather than hiding it, and at the old 0.55 it swamped the
         // surface ramp completely.

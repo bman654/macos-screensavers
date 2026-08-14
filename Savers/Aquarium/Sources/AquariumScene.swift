@@ -45,7 +45,7 @@ final class AquariumScene {
     /// The shafts, held so they can be swayed each frame, and nil for a look with none. They sit
     /// under the root rather than under `seabed`, because they belong to the water column and
     /// must not follow the floor when the drawable reshapes.
-    private var godRays: SCNNode?
+    private var godRays: GodRayField?
 
     /// Width over height of the drawable. Every vertical extent in the tank is derived from
     /// this, and it is re-read each frame from `FrameContext` because a view can change shape
@@ -127,9 +127,9 @@ final class AquariumScene {
             // would be plausible, which is what makes that failure silent. Same discipline as
             // the style and the gravel palette.
             var rayRand = Rand(seed: seed ^ 0x9A_17_5A_4F_0B_2E)
-            let field = GodRayField.node(rays, look: style.water, tank: tank,
-                                         aspect: aspect, rand: &rayRand)
-            scene.rootNode.addChildNode(field)
+            let field = GodRayField(rays, look: style.water, tank: tank,
+                                    aspect: aspect, rand: &rayRand)
+            scene.rootNode.addChildNode(field.node)
             godRays = field
         }
 
@@ -180,20 +180,6 @@ final class AquariumScene {
         swayGodRays(time: frame.time)
     }
 
-    /// Wanders the shafts sideways.
-    ///
-    /// The whole field is translated rather than each shaft being moved on its own, which is
-    /// both cheaper and more correct: the shafts are made by one surface, so they drift with one
-    /// current. Two frequencies that do not divide into each other keep the wander from having
-    /// an obvious period — a single sine reads as a pendulum after about a minute, which is well
-    /// inside the time a screensaver is looked at.
-    private func swayGodRays(time: TimeInterval) {
-        guard let field = godRays, let rays = style.water.godRays else { return }
-        let phase = time / rays.swayPeriod * 2 * .pi
-        let offset = (sin(phase) + 0.42 * sin(phase * 2.7 + 1.1)) / 1.42
-        field.position = SCNVector3(rays.sway * Float(offset), 0, 0)
-    }
-
     /// Crawls the caustic net across the floor.
     ///
     /// Translating the gobo's texture transform rather than moving the light, because moving the
@@ -207,6 +193,16 @@ final class AquariumScene {
         guard let gobo = causticGobo, let caustics = style.water.caustics else { return }
         let t = CGFloat(time) * caustics.drift
         gobo.contentsTransform = SCNMatrix4MakeTranslation(t, t * 0.61, 0)
+    }
+
+    /// Advances each shaft's own fade and wander.
+    ///
+    /// The field used to be translated as a single node, which meant every shaft swayed in step —
+    /// and a set of parallel bands moving together reads as a curtain in a draught rather than as
+    /// light in water. Each shaft now carries its own clock; `GodRayField` owns that, and this is
+    /// only the tick.
+    private func swayGodRays(time: TimeInterval) {
+        godRays?.update(time: time)
     }
 
     /// Retunes the one thing in the tank that is measured in pixels, when the view moves to a

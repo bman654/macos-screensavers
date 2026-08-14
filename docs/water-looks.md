@@ -664,6 +664,43 @@ the edge and not the beam; many narrow ones read as one shaft broken up by the s
 shaft must be spent before it reaches the ground**, or it reads as a hanging curtain: the fading
 is the evidence that it is being scattered away.
 
+### The second pass, measured against a photograph
+
+The shafts as first shipped read as "strips of plastic film held in front of the tank". Putting a
+photograph of the real thing beside a render and measuring both is what sorted out which of the
+obvious explanations were real, and two of them were not the ones being reached for.
+
+| | reference photo | first version |
+|---|---|---|
+| lateral amplitude, as % of the local water brightness | ~36% at every height | 45–60% |
+| water's own falloff, top of frame → horizon | to **0.20** | to **0.64** |
+
+**Most of the vertical gradient belongs to the water, not to the ray.** That is the surprise. In
+the photograph the whole column falls away steeply with depth, so the shafts live inside a bright
+near-surface region and fade with it; here the water was nearly flat top to bottom, so the shafts
+had nothing to emerge *from* and sat on it as bands. The deep look's `surface` ramp is now much
+stronger for this reason alone, reaching 0.25 against the photograph's 0.20 — and because it is
+the ramp doing it, the fog still meets the background exactly at the horizon and the floor
+measurement moves only 0.59 → 0.56.
+
+The lateral contrast, meanwhile, was only about 1.3x too high — far less than it looked.
+
+Three further changes, all of them about *structure* rather than intensity:
+
+- **The shafts fan** from a virtual source a few metres overhead rather than running parallel.
+  Real sunlight arrives parallel and a perspective camera converges it — but at this saver's 22°
+  field of view it converges far too weakly to see, so parallel shafts read as ruled lines. The
+  source height is knowingly false and it is the number to reach for if the field ever looks like
+  a fence again.
+- **Each shaft lives and dies on its own clock.** They used to sway together because the whole
+  field was one translated node, which reads as a curtain in a draught. Each now fades in, wanders,
+  and fades out on a period of its own, drawn from a range — the range is the point, since a single
+  shared period makes the field pulse in unison. The fade is a *rectified* sine, so a shaft is
+  absent for about half its cycle and the field turns over instead of breathing.
+- **`SCNNode.opacity` does scale an additively-blended material**, exactly and linearly, which is
+  what makes the per-shaft fade possible at all — worth knowing precisely because
+  `SCNMaterial.multiply` does not.
+
 **The shallow reef was meant to have both and has no shafts at all.** It was tried from 0.20 down
 to 0.055 and the failure never changed character, only intensity — which is the tell that
 brightness was never the problem. An additive band on a backdrop that is both the brightest of the
