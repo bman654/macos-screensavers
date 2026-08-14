@@ -82,15 +82,17 @@ final class AquariumScene {
     /// Declared failable to match the host's expectations, and deliberately never nil: a tank
     /// with an unreadable library still renders fogged water, whereas returning nil renders an
     /// unrecoverable black screen. Every model that fails to load simply does not appear.
-    init?(modelURL: URL, isPreview: Bool, drawableSize: CGSize) {
+    init?(modelURL: URL, settings: AquariumSettings, isPreview: Bool, drawableSize: CGSize) {
         let directory = modelURL.deletingLastPathComponent()
         let library = ModelLibrary.load(from: directory)
         let cache = ModelCache(directory: directory)
-        rand = Rand(seed: AquariumScene.launchSeed())
+        let seed = AquariumScene.launchSeed()
+        rand = Rand(seed: seed)
 
         // Drawn first, and from the launch stream rather than a fork, because the ocean's own
-        // dimensions are part of the draw and everything below is measured against them.
-        style = TankStyle.draw(TankStyle.launchStyle(), rand: &rand)
+        // dimensions are part of the draw and everything below is measured against them. Which
+        // style it is comes from a stream of its own — see `AquariumSettings.styleName`.
+        style = TankStyle.draw(settings.styleName(seed: seed), rand: &rand)
         clearColor = MTLClearColor(red: style.water.tint.red, green: style.water.tint.green,
                                    blue: style.water.tint.blue, alpha: 1)
         aspect = Tank.aspect(of: drawableSize)
@@ -129,7 +131,7 @@ final class AquariumScene {
     /// layout against a reef that reshuffles on every build is guesswork, so `AQUARIUM_SEED`
     /// pins it. The environment is empty under `legacyScreenSaver`, so the override costs
     /// nothing in the only place that matters.
-    private static func launchSeed() -> UInt64 {
+    static func launchSeed() -> UInt64 {
         if let pinned = ProcessInfo.processInfo.environment["AQUARIUM_SEED"],
            let seed = UInt64(pinned) { return seed }
         return UInt64(bitPattern: Int64(Date().timeIntervalSince1970 * 1000)) ^ 0x5EA_F15

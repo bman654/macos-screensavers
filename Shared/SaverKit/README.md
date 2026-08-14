@@ -28,6 +28,7 @@ final class ExampleView: SaverView {
 tools/build-saver.sh Example        # build to build/Example.saver
 tools/build-saver.sh Example -i     # ...and install, killing legacyScreenSaver
 tools/run-saver.swift build/Example.saver --seconds 3 --screenshot /tmp/shot.png
+tools/run-saver.swift Example --configure --seconds 3 --screenshot /tmp/sheet.png
 ```
 
 Use `run-saver` for iteration. Driving development through System Settings is miserable,
@@ -47,6 +48,34 @@ window behind everything — so a low rate there proves nothing. GPU time per fr
 care who is in front: under 8.3 ms holds 120 Hz, under 16.7 ms holds 60. Give the run a few
 seconds before believing the first window; the opening frame carries shader compilation and
 asset upload and lands around 60 ms.
+
+### Settings
+
+A saver that has settings overrides `hasConfigureSheet` and `configureSheet`, and persists to
+`saverDefaults` — a `ScreenSaverDefaults` domain named after *this bundle's* identifier.
+`ScreenSaverDefaults(forModuleWithName: Bundle.main.bundleIdentifier)` is the trap: inside a
+screensaver that names the host appex, so the setting appears to save, is shared with every
+other saver on the machine, and is read back by none of them.
+
+Two things a settings sheet has to get right, both of which cost a debugging session in the
+aquarium's:
+
+- **The sheet must outlive its presentation.** The host asks for `configureSheet` on every
+  press of Options and presents whatever it is handed, so the window has to be retained by the
+  view and must have `isReleasedWhenClosed = false`. It must also re-read the stored settings
+  each time it is presented — a second visit that shows what the first one left behind after a
+  Cancel is showing a lie.
+- **Settings are read when the host is built**, so a running view keeps the settings it
+  launched with. `SaverView.reloadHost()` throws the host away and builds a fresh one, which is
+  what makes OK visibly take effect in the System Settings thumbnail the sheet was opened from.
+- **Nothing in a sheet may start rendering before the sheet is on screen.** `configureSheet` is
+  a property, and a host is free to read it and then not present what it got — the window it
+  returns has `isVisible == false`. Anything started in the getter therefore has no reliable
+  stop: tie it to the window's visibility instead. KVO on `isVisible` is the hook that works;
+  an ended sheet sends its delegate neither `windowWillClose` nor `windowDidEndSheet`.
+
+`tools/run-saver.swift --configure` opens the sheet on the harness window, so a sheet can be
+built and looked at without driving System Settings.
 
 ### Which host
 
@@ -84,7 +113,8 @@ not have to know about it.
 | `startAnimation`/`stopAnimation` must call `super` | `SaverView` |
 | The framework timer must still exist (`SSENeedsAnimationTimer`), but should not drive frames | `animationTimeInterval = 1.0`, `animateOneFrame` a no-op |
 | A display link in `.default` mode stops during event tracking — i.e. while the preview is being used | added in `.common` |
-| `Bundle.main` is `legacyScreenSaver.appex`, not the saver | `HostContext.bundle` |
+| `Bundle.main` is `legacyScreenSaver.appex`, not the saver | `HostContext.bundle`, `SaverView.saverBundle` |
+| A settings domain named from `Bundle.main` belongs to the host, not to this saver | `SaverView.saverDefaults` |
 | A post-process radius is in target *pixels*, so a look tuned at 1x arrives at half its apparent size on Retina | `RenderTargets.backingScale`, which the host multiplies in |
 | A host is created on the first layout, which routinely happens *before* the view is in a window — so the layer's scale is still 1 then, whatever display it is about to land on | scale is delivered with `RenderTargets`, never in `HostContext` |
 | A crash is an unrecoverable black screen | every failure path degrades instead of trapping |
@@ -132,6 +162,13 @@ Verified on macOS 26.5.1 / Apple Silicon / Swift 6.3.2, Command Line Tools only:
   the new scale, so a pixel-space radius follows it.
 - **Ten minutes of continuous rendering**, 62,254 frames across that reconfiguration, with
   GPU time flat at 4.0-5.5 ms throughout and no drift.
+- **A settings sheet**, driven by real clicks rather than by calling its own methods: each
+  radio rebuilds the live preview, OK persists and reloads the running view's host, Cancel
+  leaves the stored value untouched, and a reopened sheet shows what is stored.
+- **That sheet under real System Settings**, opened from its Options button in the sandboxed
+  host: every option applied, the picker's live thumbnail adopted each choice, and full-screen
+  Preview ran. A second `ScreenSaverView` rendering inside the sheet, alongside the thumbnail
+  already running in the same process, is therefore fine.
 
 Not verified, and worth knowing before trusting:
 

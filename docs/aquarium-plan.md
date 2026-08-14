@@ -92,11 +92,24 @@ fringing underwater.
   spaced by each model's manifest, so the tank is a different tank every time.
 - **`.saver` shell.** See below — independent of everything above.
 
-## 2a. Two tank styles
+## 2a. Three tank styles — the looks and their sheet, both done
 
-The tank ships two selectable looks, chosen in the screensaver's own settings sheet
-(`ScreenSaverView.configureSheet` with `ScreenSaverDefaults` for persistence — note that a
-legacy saver's defaults are keyed by bundle identifier, not by `Bundle.main`).
+The tank ships three selectable looks, chosen in the screensaver's own settings sheet:
+`AquariumSettingsSheet`, returned from `ScreenSaverView.configureSheet` and persisted to
+`ScreenSaverDefaults` keyed by the *saver bundle's* identifier — `SaverView.saverDefaults`,
+never `Bundle.main`, which inside `legacyScreenSaver` is the host appex.
+
+The sheet carries a live preview of the selected look, because the three differ in light,
+water colour and substrate and a name conveys none of that. A fourth option, "Surprise me",
+draws one of the three per launch. OK rebuilds the running view's host so the thumbnail the
+sheet was opened from adopts the new look immediately; Cancel leaves nothing behind.
+`tools/run-saver.swift --configure` opens the sheet outside System Settings, and the sheet has
+been confirmed working inside it.
+
+Selecting a look throws the preview away and builds a new tank, which measured 234–354 ms of
+blocked main thread per click — the model imports dominate. That is a hitch and not a freeze,
+and it is the reason the preview is not cached per style: three live tanks in a settings sheet
+is three copies of the library in memory to save a third of a second.
 
 - **Aquarium.** Reads like a lit glass tank: a bright, cool, fluorescent-blue key from
   directly overhead, water tinted a noticeably more saturated blue than the ocean look, and
@@ -108,13 +121,13 @@ legacy saver's defaults are keyed by bundle identifier, not by `Bundle.main`).
   block and the sand it has to agree with. `docs/water-looks.md` has all three, and the
   rule that keeps a substrate and its water coherent.
 
-The two differ only in lighting, water tint and substrate appearance. Geometry, placement,
+The three differ only in lighting, water tint and substrate appearance. Geometry, placement,
 population and fish behaviour are shared — the split must not reach past the surface into
 the scene's structure, or every later feature pays for it twice.
 
-Worth stating because the first render made it obvious: the current water is too dark and
-too green to read as an aquarium. That is correct for the ocean style and wrong for the
-other one, which is what motivated the split.
+The split was motivated by a render: the water as first written was too dark and too green to
+read as an aquarium, which was correct for the ocean and wrong for a lit glass tank. Both have
+since been art-directed; `docs/water-looks.md` is where the numbers and their reasons live.
 
 ## 3. The shell — retired
 

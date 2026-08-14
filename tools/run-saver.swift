@@ -24,12 +24,19 @@ struct Options {
     /// aquarium repositions its whole school — and it is otherwise unreachable from a
     /// harness that only ever renders one fixed size.
     var resizeTo: NSSize?
+
+    /// Open the saver's `configureSheet` on the host window.
+    ///
+    /// The alternative is driving System Settings, which is the workflow this tool exists to
+    /// avoid — and a settings sheet that can only be opened there is one that gets shipped
+    /// untested. With `--screenshot` the *sheet* is what is captured.
+    var configure = false
 }
 
 func usage(program: String) -> String {
     """
     usage: \(program) <Name|path-to.saver> [--preview] [--size WxH] [--seconds N]
-           [--resize WxH] [--screenshot out.png]
+           [--resize WxH] [--configure] [--screenshot out.png]
 
       Name                  opens build/Name.saver relative to the repository
       path-to.saver         opens that bundle directly
@@ -38,6 +45,8 @@ func usage(program: String) -> String {
       --seconds N           runs for N seconds (default: 2)
       --resize WxH          reshapes the view halfway through the run, to exercise a
                             saver's response to an aspect-ratio change
+      --configure           opens the saver's settings sheet; with --screenshot, the
+                            sheet is what gets captured
       --screenshot out.png  captures the view to PNG and exits
       --help                shows this help
     """
@@ -95,8 +104,16 @@ func parseArguments() -> Options {
             }
             options.seconds = seconds
             index += 2
+        case "--configure":
+            options.configure = true
+            index += 1
         case "--screenshot":
-            guard index + 1 < arguments.count, !arguments[index + 1].isEmpty else {
+            // The one option whose value is unconstrained, so it is also the one that will
+            // happily swallow the next flag: `--screenshot --configure` otherwise writes a PNG
+            // to a file named `--configure` and never enters configure mode. A path that really
+            // does begin with a dash can be written as `./-name`.
+            guard index + 1 < arguments.count, !arguments[index + 1].isEmpty,
+                  !arguments[index + 1].hasPrefix("-") else {
                 fail("--screenshot requires an output path", code: 2)
             }
             options.screenshotPath = arguments[index + 1]
@@ -258,6 +275,19 @@ guard let saverView = saverType.init(frame: frame, isPreview: options.isPreview)
     fail("\(declaredName).init(frame:isPreview:) returned nil")
 }
 
+// Resolved before anything is put on screen. Asking a saver that has no settings for its sheet
+// is a usage error, and a usage error must not first flash a window onto the developer's
+// display — least of all in the interactive mode, which takes focus.
+let configureSheet: NSWindow? = options.configure ? {
+    guard saverView.hasConfigureSheet else {
+        fail("\(declaredName).hasConfigureSheet is false — this saver has no settings sheet")
+    }
+    guard let sheet = saverView.configureSheet else {
+        fail("\(declaredName).configureSheet returned nil")
+    }
+    return sheet
+}() : nil
+
 // `.accessory` rather than `.regular`, and deliberately no `activate(ignoringOtherApps:)`.
 //
 // This tool is run in tight loops — often several times a minute while iterating on a saver,
@@ -298,6 +328,14 @@ if options.screenshotPath == nil {
 }
 saverView.startAnimation()
 
+// Presented only once the host window is on screen, and tracked because a sheet is its own
+// window: a capture aimed at the host would photograph the saver with a hole in it.
+var sheetWindow: NSWindow?
+if let sheet = configureSheet {
+    window.beginSheet(sheet)
+    sheetWindow = sheet
+}
+
 if let resizeTo = options.resizeTo {
     // Halfway through, so there is animated content both before and after the reshape.
     let resizeTimer = Timer(timeInterval: options.seconds / 2, repeats: false) { _ in
@@ -326,10 +364,25 @@ func settleCapture(_ body: () -> Void) {
     body()
 }
 
+/// `NSApplication.terminate` will not quit an app with a sheet attached — it defers, the
+/// process stays up, and a scripted run hangs after having done all its work. Ending the sheet
+/// first is what makes `--configure --screenshot` a one-shot command rather than a stall.
+@MainActor
+func endSheetIfOpen() {
+    guard let sheet = sheetWindow else { return }
+    sheetWindow = nil
+    // Only if it is still attached. In interactive mode the developer may have already
+    // dismissed it with OK or Cancel, and ending a sheet that is no longer on this window is
+    // asking AppKit to undo something it has already done.
+    guard window.attachedSheet === sheet else { return }
+    window.endSheet(sheet)
+}
+
 @MainActor
 func finish() {
     guard let path = options.screenshotPath else {
         saverView.stopAnimation()
+        endSheetIfOpen()
         application.terminate(nil)
         return
     }
@@ -343,11 +396,14 @@ func finish() {
     }
     RunLoop.main.add(watchdog, forMode: .common)
 
-    capturePNG(of: saverView, in: window, to: path) { result in
+    let captureWindow = sheetWindow ?? window
+    let captureView = captureWindow.contentView ?? saverView
+    capturePNG(of: captureView, in: captureWindow, to: path) { result in
         DispatchQueue.main.async {
             settleCapture {
                 watchdog.invalidate()
                 saverView.stopAnimation()
+                endSheetIfOpen()
                 switch result {
                 case .success(let output):
                     print("Wrote \(output.path)")

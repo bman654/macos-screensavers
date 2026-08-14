@@ -41,6 +41,25 @@ class SaverView: ScreenSaverView {
     /// The smallest real display this could run on is far wider than any preview.
     var previewWidthThreshold: CGFloat { 600 }
 
+    // MARK: Settings
+
+    /// The bundle this saver was loaded from.
+    ///
+    /// Never `Bundle.main` — inside `legacyScreenSaver` that is the host appex, so anything
+    /// resolved through it silently belongs to the host rather than to this saver.
+    var saverBundle: Bundle { Bundle(for: type(of: self)) }
+
+    /// Where a saver's settings persist, keyed by *this bundle's* identifier.
+    ///
+    /// `ScreenSaverDefaults(forModuleWithName:)` names a per-module defaults domain, and the
+    /// module is the saver. Handing it `Bundle.main.bundleIdentifier` writes into the host
+    /// appex's own domain instead — shared with every other saver on the machine, and read
+    /// back by none of them, so the setting appears to save and then does not take.
+    var saverDefaults: ScreenSaverDefaults? {
+        guard let identifier = saverBundle.bundleIdentifier else { return nil }
+        return ScreenSaverDefaults(forModuleWithName: identifier)
+    }
+
     // MARK: Stored state
 
     /// Nil only if Metal itself is unavailable, in which case the saver stays black.
@@ -170,7 +189,7 @@ class SaverView: ScreenSaverView {
               metalLayer.drawableSize.width > 0 else { return }
 
         let context = HostContext(device: metalDevice,
-                                  bundle: Bundle(for: type(of: self)),
+                                  bundle: saverBundle,
                                   isPreview: isPreviewSized,
                                   drawableSize: metalLayer.drawableSize)
 
@@ -181,6 +200,28 @@ class SaverView: ScreenSaverView {
         }
         host = created
         metalLayer.pixelFormat = created.colorPixelFormat
+    }
+
+    /// Throws away the current host and builds a fresh one from `makeHost(_:)`.
+    ///
+    /// What a settings sheet needs: a saver's settings are read when its host is built, so a
+    /// running view — the System Settings thumbnail, in practice — otherwise keeps whatever it
+    /// launched with and the sheet's OK button looks like it did nothing.
+    ///
+    /// Safe only because it is main-thread work between frames: `render` is driven by the
+    /// display link on the main thread and bails on a nil host, and any GPU work the old host
+    /// already submitted is retained by its own command buffer.
+    func reloadHost() {
+        host?.teardown()
+        host = nil
+        hostFailed = false
+        // Dropped rather than left in place: `rebuildAttachments` reallocates them for the new
+        // host anyway, but it returns early if the new host fails to build, and these are
+        // hundreds of megabytes at 5K that a view which has stopped drawing has no use for.
+        depthTexture = nil
+        msaaTexture = nil
+        ensureHost()
+        rebuildAttachments()
     }
 
     private func rebuildAttachments() {

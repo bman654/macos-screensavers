@@ -1,6 +1,7 @@
 // The Aquarium saver's entry point. Everything it does is hand a built tank to the shared
 // SceneKit host; the drawable, display link and resize handling all live in `SaverView`.
 
+import AppKit
 import Foundation
 import ScreenSaver
 
@@ -12,6 +13,17 @@ import ScreenSaver
 final class AquariumView: SaverView {
 
     private var aquarium: AquariumScene?
+
+    /// Held because the host asks for `configureSheet` on every press of Options, and presents
+    /// whatever it is handed without taking ownership of it.
+    private var settingsSheet: AquariumSettingsSheet?
+
+    /// Settings for this instance alone, in place of the saved ones.
+    ///
+    /// Exists for the sheet's live preview, which shows a choice the user has not made yet and
+    /// may cancel. Set it before the view is laid out — settings are read once, when the host
+    /// is built, which happens on the first layout with a usable size.
+    var settingsOverride: AquariumSettings?
 
     /// Half the rate of a ProMotion display, deliberately.
     ///
@@ -28,12 +40,29 @@ final class AquariumView: SaverView {
     /// the tank counts frames.
     override var preferredFPS: Int { 60 }
 
+    // MARK: Settings
+
+    override var hasConfigureSheet: Bool { true }
+
+    override var configureSheet: NSWindow? {
+        let sheet = settingsSheet ?? AquariumSettingsSheet(defaults: saverDefaults)
+        settingsSheet = sheet
+        // Adopting the new style immediately is what makes OK look like it did something: the
+        // thumbnail this sheet was opened from is a live view, and the style is read when the
+        // host is built, so without a rebuild it keeps the look it launched with.
+        sheet.onCommit = { [weak self] _ in self?.reloadHost() }
+        sheet.prepareForPresentation()
+        return sheet.window
+    }
+
     override func makeHost(_ context: HostContext) -> RenderHost? {
         // The drawable size, not the view's bounds: the tank's vertical extent is derived from
         // the aspect ratio the camera will actually project into, and the scene re-reads it
         // from every frame, so this only has to be right enough for the opening layout.
+        let settings = settingsOverride ?? AquariumSettings.forLaunch(defaults: saverDefaults)
         guard let modelURL = AquariumScene.modelURL(in: context.bundle),
-              let scene = AquariumScene(modelURL: modelURL, isPreview: context.isPreview,
+              let scene = AquariumScene(modelURL: modelURL, settings: settings,
+                                        isPreview: context.isPreview,
                                         drawableSize: context.drawableSize)
         else { return nil }
 

@@ -5,7 +5,7 @@ coherent. The numbers live in `Savers/Aquarium/Sources/WaterLook.swift` and
 `Savers/Aquarium/Sources/TankFloor.swift`; this file is why they are what they are.
 
 A look is one half of a tank style — `TankStyle` pairs it with the tank's dimensions, its prop
-density and the substrate the look is balanced against, and `AQUARIUM_STYLE` picks the pair.
+density and the substrate the look is balanced against, and the tank style picks the pair.
 The ocean is **two** looks over one set of dimensions: `shallowReef` and `deepOcean` draw the
 same volume of water and differ only in what that water is doing to the light in it.
 
@@ -16,9 +16,10 @@ tools/water-luminance.py /tmp/reef.png
 tools/water-luminance.py --entry-depth 2.25 /tmp/aquarium.png   # the aquarium's own tank
 ```
 
-`AQUARIUM_STYLE` is `aquarium`, `shallowReef` or `deepOcean`, defaulting to `shallowReef`; it
-is an environment override rather than a setting because the settings sheet in
-`aquarium-plan.md` §2a is a later phase's job.
+`AQUARIUM_STYLE` is `aquarium`, `shallowReef`, `deepOcean` or `random`, defaulting to
+`shallowReef`. It is the render loop's way in — the user's is the settings sheet, which
+persists the same names to `ScreenSaverDefaults` (`AquariumSettings`). The environment wins
+where both are present, and is empty under `legacyScreenSaver`.
 
 ## The rule: the ground may not out-brighten the water it is seen through
 

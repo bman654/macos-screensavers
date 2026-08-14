@@ -14,12 +14,20 @@ import simd
 
 // MARK: - The style
 
-/// Which of the looks a launch is wearing. The names are what the settings sheet will persist,
-/// so they are stable strings rather than an ordinal.
+/// Which of the looks a launch is wearing. The names are what the settings sheet persists —
+/// see `AquariumSettings` — so they are stable strings rather than an ordinal, and renaming a
+/// case silently resets every user who had chosen it.
 enum TankStyleName: String, CaseIterable {
     case aquarium
     case shallowReef
     case deepOcean
+
+    /// One of the three, uniformly. `next()` is a half-open [0, 1), and the clamp is for the
+    /// rounding at the top of that range rather than for the mathematics.
+    static func drawn(_ rand: inout Rand) -> TankStyleName {
+        let all = allCases
+        return all[min(Int(rand.next() * Float(all.count)), all.count - 1)]
+    }
 }
 
 struct TankStyle {
@@ -106,18 +114,5 @@ struct TankStyle {
         return Tank(fieldOfView: CGFloat(rand.inRange(17, 22.5)),
                     nearDepth: Tank.reference.nearDepth * reach,
                     farDepth: Tank.reference.farDepth * reach)
-    }
-
-    /// Which style a launch wears.
-    ///
-    /// The settings sheet is not built yet — `docs/aquarium-plan.md` §2a has it persisting to
-    /// `ScreenSaverDefaults` under the *bundle's* identifier — so until it exists the choice is
-    /// an environment override, matching `AQUARIUM_SEED`. The environment is empty under
-    /// `legacyScreenSaver`, so this costs nothing in the only place that matters.
-    static func launchStyle() -> TankStyleName {
-        guard let pinned = ProcessInfo.processInfo.environment["AQUARIUM_STYLE"],
-              let name = TankStyleName(rawValue: pinned)
-        else { return .shallowReef }
-        return name
     }
 }

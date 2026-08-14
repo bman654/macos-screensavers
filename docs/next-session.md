@@ -1,13 +1,24 @@
 # Where to pick up
 
 Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
-its three looks; extended the same day by the session that ran it on a Retina display.
+its three looks; extended the same day by the sessions that ran it on a Retina display and
+built its settings sheet.
 
 ## State
 
 **The aquarium renders as a tank.** A random assortment of fish and decorations is drawn per
 launch, placed on a substrate, lit by one of three art-directed looks, and every model is
 textured. Nothing is blocked.
+
+**A user can now choose the look.** `AquariumSettingsSheet` is the saver's `configureSheet`:
+three looks plus "Surprise me", each with a live preview of the tank it selects, persisted to
+`ScreenSaverDefaults` under the saver bundle's own identifier. OK reloads the running view's
+host so the thumbnail behind the sheet adopts the choice; Cancel leaves nothing behind.
+
+**It is installed and confirmed in System Settings.** Every option worked, the thumbnail
+changed on each selection, and full-screen Preview ran — so the sheet, the live preview inside
+it, `reloadHost` and the real full-screen path are all exercised in the host that matters, not
+just through `run-saver`.
 
 **It runs on Retina.** Full screen at 4112x2658 — a 2056x1329-point built-in display at 2x —
 all three styles render at 5.4 ms of GPU time per frame, and ten minutes of continuous running
@@ -43,10 +54,14 @@ tools/water-luminance.py /tmp/tank.png                     # floor-vs-water cohe
 tools/gallery.py --out /tmp/sheet.png --columns 4 'build/props/*/water_00_side.png'
 SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
     --screenshot /tmp/tank.png                             # frame and GPU timing
+tools/run-saver.swift Aquarium --configure --seconds 3 --screenshot /tmp/sheet.png
 ```
 
-`AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`. `AQUARIUM_SEED`
-pins the layout; without it every launch draws a different tank.
+`AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`, `random`, and
+overrides the saved setting. `AQUARIUM_SEED` pins the layout; without it every launch draws a
+different tank. The two are independent: which style is worn never touches the tank's stream —
+`random` draws from a stream of its own off the same seed — so every seeded render made before
+the settings sheet existed still names the same tank it always did.
 
 **Look at the PNG, at the size it will be seen.** This repo's hardest-won rule, and it held
 again all session: every art problem found this session was visible in an image and invisible
@@ -58,20 +73,29 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Next, in order
 
-1. **A settings sheet.** The three looks exist but **a real user cannot choose one** — the
-   style is selected by an environment variable, which is a developer affordance. This wants
-   `ScreenSaverView.configureSheet` with `ScreenSaverDefaults`, keyed by the *bundle's*
-   identifier rather than `Bundle.main`. It is also where the audio toggle belongs.
-2. **Caustics and god rays.** Deliberately held back so the lighting pass did not sprawl.
+1. **Caustics and god rays.** Deliberately held back so the lighting pass did not sprawl.
    The shallow reef is now good enough that dappled light on the sand would sell it hard;
    a ripple gobo is a spotlight cookie, not new infrastructure.
-3. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
+2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
    the tank a second kind of motion.
-4. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-5. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
+5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+   last: the picture should be a frame of the finished tank, so shooting it before the
+   caustics and the fish AI land means shooting it twice.
+
+   What is known, from what ships on this machine rather than from documentation: Apple's
+   `/System/Library/Screen Savers/Random.saver` carries `Contents/Resources/thumbnail.png` at
+   90x58 and `thumbnail@2x.png` at 180x116, and its `Info.plist` names neither — so it is a
+   filename convention, not a declared key. `FloatingMessage.saver` ships no thumbnail at all.
+   Unknown, and worth establishing first with a throwaway image: whether Tahoe's picker honours
+   those files for a third-party saver, and whether it will take an image larger than 90x58,
+   because the tiles in that list are much bigger than 90 points wide. `build-saver.sh` would
+   grow a step that copies them, and the frame itself should come from `run-saver --screenshot`
+   at the tile's aspect ratio so the picture is the saver rather than a painting of it.
 
 ## Known gaps, deliberately left
 
@@ -144,6 +168,23 @@ inside a rock and a white seam on the clam by looking at renders.
   points, corrected to scale 2 and 1800x1200 in the same millisecond. Anything scale-dependent
   must come from `RenderTargets`, which is why `HostContext` deliberately does not carry a
   scale. A value read at creation is wrong precisely where it matters.
+- **`NSApplication.terminate` does not terminate while a sheet is attached.** It defers, and
+  the process stays up having already done its work — `run-saver --configure --screenshot`
+  wrote its PNG and then hung for three minutes with a healthy render loop and an idle main
+  thread, which reads as a deadlock and is not one. End the sheet, then terminate.
+- **A saver's settings domain is named after the saver's bundle, not `Bundle.main`.** Inside
+  `legacyScreenSaver` the main bundle is the host appex, so
+  `ScreenSaverDefaults(forModuleWithName: Bundle.main.bundleIdentifier)` writes somewhere
+  shared with every other saver and read back by none of them. `SaverView.saverDefaults`.
+- **A settings sheet is asked for again on every press of Options.** The window must be
+  retained, must not release on close, and must re-read what is stored each time it is
+  presented — otherwise the second visit shows what the first one left behind after a Cancel.
+- **A sheet that is fetched is not a sheet that is shown.** `configureSheet` is a property,
+  and the window it hands back has `isVisible == false`; a host may read it and present
+  nothing. A live preview started in that getter therefore never stops, because `isVisible`
+  cannot fall from a value it never reached. Tie anything that renders to the window's
+  visibility — and use KVO for it, because an ended sheet sends its delegate neither
+  `windowWillClose` nor `windowDidEndSheet`. Both halves were measured.
 - **The capture harness must never surface.** `run-saver.swift` parks its window at desktop
   level during a screenshot: not activating is insufficient, because macOS gives the top window
   focus and this tool runs several times a minute across concurrent agents.
@@ -178,7 +219,8 @@ inside a rock and a white seam on the clam by looking at renders.
   audio play three times at once, and each screen gets its own MSAA attachments — about
   350 MB at 4112x2658. This machine *mirrors* rather than extends, so it presents one logical
   display; testing this means turning mirroring off first.
-- **The real `legacyScreenSaver` host at 2x.** Everything above was measured through
-  `run-saver`, which is the same view in an ordinary window. Installing and running it for
-  real is a minute's work and has not been done since the tank was populated.
+- **Long runs in the real host.** It is installed and confirmed working from System Settings —
+  the sheet, the thumbnail, and full-screen Preview — but the timing numbers above still come
+  from `run-saver`, which is the same view in an ordinary window. Nothing has yet been left
+  running for hours as an actual screensaver.
 - **The `default.metallib` path**, for lack of a Metal toolchain on this machine.
