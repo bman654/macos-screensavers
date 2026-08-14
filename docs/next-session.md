@@ -2,7 +2,8 @@
 
 Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
 its three looks; extended the same day by the sessions that ran it on a Retina display, built
-its settings sheet, and rebuilt the aquarium's substrate as real gravel.
+its settings sheet, rebuilt the aquarium's substrate as real gravel, and then relit the tank
+and gave it caustics and god rays.
 
 ## State
 
@@ -44,6 +45,25 @@ display — fixed, though see the trap below for why you cannot yet see it.
   and the fluorescent bag. Every tile is normalised so the look's floor-versus-water ratio holds
   whatever colour was drawn, and the correction for the tank's blue wash is made entirely in
   chroma, where the coherence rule has nothing to say.
+
+**The light moves now, and the tank is lit warm.** Three things landed together because they are
+one problem — `docs/water-looks.md` §"Caustics and god rays" and §"The relight for colour" argue
+all of it:
+
+- **A warm key and a warm accent lamp.** The gravel read dull whatever colour the bag was, and
+  the deficit was in the illuminant rather than the palette: red was 57% of blue in the light
+  actually landing on the bed. The key is the lever because of *where* it lands — at elevation 78
+  it hits the floor at N·L 0.98 and a flank at 0.21, so warming it warms the gravel five times as
+  hard as the fish. The near band went blue-dominant to red-dominant with flank chroma unmoved.
+  The accent is its complement, low and warm, for the things standing up in the tank.
+- **Caustics**, as a gobo on the key, in the reef and the aquarium. Deep ocean gets none: at
+  twenty metres the surface's focus has diffused away.
+- **God rays**, as additive shafts, in the deep ocean only. The complement of the caustics, not a
+  second helping — a caustic is the light still focused when it lands, a shaft is the light
+  scattered out on the way down, so they want opposite water.
+
+Everything holds its measurements: reef 0.68, deep ocean 0.59, aquarium 0.78 on river. GPU is
+4.4 ms at 3200x1800 and 60 fps is unchanged.
 
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
@@ -107,46 +127,17 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Next, in order
 
-1. **Caustics and god rays.** Deliberately held back so the lighting pass did not sprawl.
-   The shallow reef is now good enough that dappled light on the sand would sell it hard;
-   a ripple gobo is a spotlight cookie, not new infrastructure.
-
-   The substrate was done first on purpose, and it changed what this phase inherits. The floor
-   the gobo lands on is now a normal-mapped bed of stones rather than a flat wash, so a caustic
-   pattern has something to break over — and the aquarium has a *second* substrate surface, the
-   cross-section band, which faces the room rather than the lamp. Decide deliberately whether
-   caustics reach it: they should not, or barely, because the light making them is above the bed
-   and the band is a cut through it. `docs/water-looks.md` still holds the two warnings from
-   before — the deep look's key at 520 is faint for a gobo, the aquarium's 1350 from near
-   overhead is exactly the light a caustic belongs on — plus a new one: the substrate's crevice
-   shading is baked into the albedo and its directional shading deliberately is not, so a gobo
-   modulating the key is already correct and must not be compensated for twice.
-
-   **Carry one open note into this phase: the gravel still reads a little dull, and the
-   hypothesis is that it is the lamp's fault rather than the palette's.** That is the user's
-   read on the installed build, and the reasoning behind it is worth having: a home tank is lit
-   by *fluorescent* tubes, and dyed gravel under one of those is startlingly saturated — far
-   more so than the same bag in daylight. This tank's key is `0.86, 0.94, 1.0`, which is a cool
-   white, and every other thing lighting that floor (ambient, environment, fog) is frankly blue.
-   So the deficit is in the illuminant.
-
-   Fix it on the lamp, not on the albedo. `GravelPalette.chroma` is at 1.75 and could be pushed
-   further, but it is already the second correction stacked on the same problem and past here it
-   starts making the gravel look cut out and pasted into the tank rather than lit by it. A warmer
-   or broader aquarium key is the honest fix, it is what the brass has been waiting for too — see
-   the gap below — and it is cheap to try, because the substrate work made the floor measurement
-   insensitive to it: every palette is normalised to a delivered luminance, so relighting the
-   tank moves the colour without moving the floor ratio. **Re-judge the gravel after the lighting
-   lands and before touching `chroma` again**, and re-run the palette contact sheet rather than
-   one render — `river`, `quartz`, `neon` and `tangerine` are the four that show the difference.
-2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
+1. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
-   the tank a second kind of motion.
-3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+   the tank a second kind of motion. This is now the top of the list: caustics and god rays are
+   done, and the one open note carried into that phase — the dull gravel — was the lamp's fault
+   and is fixed.
+
+2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
    last: the picture should be a frame of the finished tank, so shooting it before the
    caustics and the fish AI land means shooting it twice.
 
@@ -172,16 +163,22 @@ inside a rock and a white seam on the clam by looking at renders.
   breaking the coherence rule. It is one curve over twenty-eight palettes and it will be wrong
   for some of them before it is wrong for the curve — prefer nudging a palette's declared
   colours over adding a per-palette override.
-- **The bright hues are still the hard ones.** There is no dark yellow that reads as yellow, and
-  the floor's luminance is capped by the water above it, so `sunflower` and `tangerine` sit at
-  the top of the brightness clamp and still read closer to gold and rust than to the bag. This is
-  a real constraint of the look rather than a tuning miss, and it is the same complaint as the
-  "a little dull" note under caustics above: three separate things in this file now point at the
-  aquarium's illuminant — the dull gravel, the bright hues, and the brass — and one warmer lamp
-  is the fix for all three. Do not chase any of them individually.
-- **Brass cannot glint in the aquarium.** Reflection is `baseColour x environment` and the
-  aquarium's environment is strongly blue, so a red-orange alloy has no red to return. A warm
-  accent lamp in that look is the fix; the shallow reef already has enough warmth.
+- **The bright hues are better and still not the bag.** The warm lamp did what was predicted of
+  it — `tangerine`'s near band went from a mauve brick to a real terracotta — but there is still
+  no dark yellow that reads as yellow, and the floor's luminance is still capped by the water
+  above it, so `sunflower` and `tangerine` sit at the top of the brightness clamp and read closer
+  to gold and rust than to the bag. What is left is a real constraint of the look rather than a
+  tuning miss, and the illuminant is no longer the thing to reach for: that lever has been pulled.
+- **`quartz` has less margin than anything else here — 0.92, and 0.96 before caustics.** The
+  brightest bed took the warm accent hardest, and it is the palette that would break the rule
+  first if anything else in that look gets brighter. Trimming the accent from 260 to about 200
+  restores it, at the cost of some of the warmth the lamp was added for; the shipped choice is to
+  keep the warmth. **Re-measure `quartz`, not `river`, after any change to the aquarium's lights.**
+- **Brass still cannot glint in the aquarium, but only for two reasons now instead of three.** The
+  warm accent lamp means there is finally red light in that tank for a red-orange alloy to return.
+  The remaining faults are both upstream in the bake — every baked material arrives
+  `metalness = 0`, and the suit's atlas has no warm texels at all — and neither can be fixed from
+  the saver's side. See `docs/water-looks.md` §"Unresolved: the brass never reaches SceneKit".
 - **No screen-space occlusion test in placement.** World spacing is respected, but a far
   anchor can still end up behind a near cluster.
 - **A live reshape keeps the layout it was born with.** Only the floor height follows;
@@ -198,6 +195,35 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Traps that cost real time. Each is commented where it happens; this is the index
 
+- **`SCNLight.gobo` works on a *directional* light**, though Apple documents it as applying to
+  spot lights. Worth knowing before anyone converts a key to a spot to get caustics and inherits
+  an attenuation they did not want. Measured: a flat lit plane went from sd 0.0000 to 0.1669.
+- **A gobo multiplies its light by the tile's own mean.** A 50/50 checker took a plane from
+  0.4000 to exactly 0.2000. So hanging any pattern on a light dims the whole scene by however
+  dark the pattern averages, and every floor measurement in this saver moves with it. Divide the
+  intensity back out — `Caustics.compensation(forMean:)`.
+- **SceneKit colour-manages a generated image by the image's own tag**, and neither of the two
+  obvious answers is right. Tagged sRGB, generic 2.2 or device RGB it is decoded through a 2.2
+  curve; tagged *linear* it arrives exactly as authored. And `NSImage.lockFocus`, which is what
+  the rest of this saver uses, produces a calibrated-space image that measured as gamma **1.8**.
+  Anything carrying a number rather than a picture goes through `LinearImage`.
+- **`SCNMaterial.multiply` is silently ignored once `blendMode` is `.add`.** Scaling the multiply
+  colour to zero still drew the god rays at full strength. It looks exactly like a mis-tuned
+  constant rather than a property with no effect, and it cost a tuning pass spent cutting a number
+  that was doing nothing. Bake colour and brightness into the texture.
+- **The near-floor measurement band is the substrate's cross-section, which is a vertical face**,
+  so lowering a light's elevation *raises* that reading instead of sparing it. The usual grazing
+  light intuition inverts. Dropping the aquarium's accent from 18° to 8° did not move the ratio.
+- **Mean-compensating a gobo preserves the mean and lowers the median, and the tool reports a
+  median.** A caustic is thin bright filaments over wide dark gaps, so its median sits in the
+  gaps: the reef fell 0.77 → 0.68 on adding caustics with the light budget provably unchanged.
+  Read a ratio drop after adding anything skewed as a distribution change, not a regression.
+- **A caustic's fold lines are true singularities, so one sample per texel makes them beaded.**
+  Supersample the pattern; blurring afterwards only blurs the beads.
+- **Four concurrent `run-saver` processes all fail to screenshot**, each with "no ScreenCaptureKit
+  callback arrived" after 10s. The capture path does not survive being asked for several windows
+  at once and the failure reads as a broken build rather than as contention. `tools/render-set.sh`
+  is serial for this reason.
 - **`scene_bounds` returns the box of a rotated box.** It transforms local bounding-box
   corners, so for anything rotated it is a superset. Right for framing a camera, wrong for any
   number that becomes a contract — a listing wreck exported hanging 0.65 m above the seabed.
@@ -268,8 +294,14 @@ inside a rock and a white seam on the clam by looking at renders.
   **The correction is currently invisible, and that is a fact about the tank, not the fix.**
   Doubling the radius moved the frame no more than two runs of the *same* build differ by:
   under 0.1% of a tank is above the 0.88-0.95 bloom threshold, so there is almost nothing to
-  glow. It will start to matter with the god rays. The radius itself is verified directly —
-  24 px at 2x against an authored 12 — because measuring it from the image cannot work.
+  glow. The radius itself is verified directly — 24 px at 2x against an authored 12 — because
+  measuring it from the image cannot work.
+  **"It will start to matter with the god rays" was written here and is wrong.** With the shafts
+  in, the deep ocean's brightest pixel is unchanged at Y 0.264 against its own 0.95 threshold.
+  Bloom is a no-op in two looks and nearly one in the third: shallow reef peaks at 0.800 under a
+  0.88 threshold and never crosses it, and the aquarium clears 0.90 on 0.0012% of the frame. The
+  thresholds sit above what these looks can produce, so making bloom do anything means lowering a
+  threshold rather than waiting for a brighter feature.
 - **A saver's own motion swamps an image diff.** Two captures of the same build at the same
   elapsed time differ by 62/255 in the brightest luminance band, because that band *is* the
   fish. An A/B of a subtle effect therefore needs the same-build noise floor beside it, or it

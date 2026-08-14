@@ -242,8 +242,9 @@ A lit glass tank, and the two things that make it one are the key and the fog.
 | surface ramp | `0.105, 0.350, 0.665` | Mild. A tank's backdrop is a lit panel, not a sky. |
 | fog | exponent 1.35; the tank gives **1.6 m to 6.5 m** | The shortest by a wide margin, because a tank has a back wall a few metres away rather than an infinite volume, and that is what the fog is standing in for. It comes out of the tank's own 2.0–6.2 m depth range rather than being stated: the look asked for 3.5–21 m against the old seascape-sized aquarium, and a number in metres is exactly what a reshaped tank invalidates. |
 | ambient | `0.46, 0.68, 0.94` @ **620** | The **brightest** fill of the three, which is the opposite of the obvious reading and was arrived at the hard way — see below. A small glass box is a bounce environment: every wall returns light, so a generous fill is what a tank actually has. |
-| **key** | `0.86, 0.94, 1.0` @ **1350**, elevation **78°**, azimuth 8° | Fluorescent blue-white instead of the old warm `1.0, 0.97, 0.88`, and near-vertical instead of 65.9°. A hood lamp has no warmth and all but no angle. |
+| **key** | `1.0, 0.95, 0.82` @ **1316**, elevation **78°**, azimuth 8° | **Warm**, and near-vertical instead of 65.9°. A hood lamp has all but no angle — but it is not the cool white it literally is, and see "The relight for colour" below for why. The intensity is the cool white's divided by this colour's own luminance, so the change between them is the light's colour and not how much of it there is. |
 | rim | `0.42, 0.68, 1.0` @ **430** | The *strongest* of the three, not the weakest. In a glass box the back and side walls really do throw light back at a fish's far flank, and this is what catches it. |
+| **accent** | `1.0, 0.72, 0.42` @ **260**, elevation **18°**, azimuth −38° | The only warm light in a tank whose water, ambient and environment are all blue, and the exact complement of the key: at 18° it grazes everything standing *up* in the tank and barely touches what it stands on. The two things that needed one are a fish's flank and a vertical brass helmet. |
 
 | camera | bloom 0.40 / 0.90, vignette 0.30 / 1.2 | Least vignette — glass and a lamp, not a diver's mask. |
 | snow | rate 8, alpha 0.14 | Nearly none. A maintained tank has a filter. |
@@ -259,6 +260,39 @@ side. The correction moves light out of the key and into everything that reaches
 rim 220 → 430, plus the lighting environment. Flank chroma went 0.022 → 0.047 and the floor
 ratio did not move. The tank still reads lit-from-above; it simply is not lit *only* from above,
 which was never true of a glass box anyway.
+
+**The relight for colour, and why the key was the lever.** The gravel read dull on a real
+display whatever colour the bag was, and three separate complaints — the dull gravel, the bright
+hues that would not read bright, and the brass that could not glint — turned out to be one
+problem in the illuminant. Adding up what actually lands on a horizontal bed settled it:
+
+```
+key   1.35 x 0.978 x (0.86, 0.94, 1.00)  =  (1.14, 1.24, 1.32)
+ambient        0.62 x (0.46, 0.68, 0.94)  =  (0.29, 0.42, 0.58)
+environment  ~1.25 x (0.17, 0.44, 0.76)   =  (0.21, 0.55, 0.95)
+                                    total    (1.63, 2.21, 2.85)   <- red at 57% of blue
+```
+
+**The key is the right lever because of where it lands, not because it is the biggest term.** At
+elevation 78 it strikes the floor at N·L 0.98 and a fish's flank at 0.21, so warming it warms the
+gravel about five times as hard as it warms the fish — which is the whole difficulty, since the
+fill that keeps the flanks vivid is also the blue that washes the floor. The measurement bore it
+out exactly: the near band went from blue-dominant `0.247, 0.302, 0.388` to red-dominant
+`0.333, 0.294, 0.282` while flank chroma held at 0.047 against 0.049.
+
+The accent then buys back what the key cannot reach. It costs floor ratio — river 0.74 → 0.81,
+and the brightest bed, `quartz`, 0.88 → **0.96** — which is the one number in this file with less
+margin than it had. Caustics bring quartz back to 0.92, and that is what ships.
+
+**A warning for anyone retuning the accent: lowering a light's elevation raises the near-floor
+reading rather than sparing it.** The usual intuition — a grazing light spends less on the ground
+— is inverted here because the band the tool measures is the substrate's *cross-section*, which
+is a vertical face. Dropping the accent from 18° to 8° did not move the ratio at all.
+
+And an honest limit: **the accent does not fix the brass**, because two upstream faults still
+stand — every baked material arrives `metalness = 0` and the suit's atlas has no warm texels at
+all. What it removes is the third one, so that when the bake is fixed there is finally something
+warm in the tank for a red-orange alloy to reflect.
 
 #### The gravel
 
@@ -455,6 +489,13 @@ aquarium look may need its warm accent to come from the lamp rather than from th
 is exactly the sort of thing the `BRASS`-versus-duller-alloy decision noted in `surfaces.py`
 should be revisited against, now that metals have something to reflect at all.
 
+**That third constraint is now lifted, and it changes nothing on its own.** The aquarium has a
+warm accent lamp — `1.0, 0.72, 0.42` at a low elevation, chosen partly for this — so there is
+finally warm light in the tank for a red-orange alloy to return. The suit still reads as rock,
+because the two faults above are upstream of the scene and neither has been touched. The value of
+having done it first is that when the bake *is* fixed, the fix will be visible immediately
+instead of landing in a tank that still had no red in it.
+
 None of the model or bake files were touched — fixing the bake is where this has to be fixed.
 
 ## Things worth knowing before changing any of this
@@ -515,13 +556,119 @@ aquarium, first    /tmp/v6-aquarium-s7.png     — the vertical-key pass whose f
 brass diagnostic   /tmp/crop-suit-before.png   /tmp/crop-suit-forced.png   /tmp/atlas-suit.png
 ```
 
-## Out of scope, and where these numbers touch it
+## Caustics and god rays
 
-Caustics and god rays are a later phase. Two of these values are the ones that phase will want
-to reopen: the deep look's key at 520 is low enough that an animated caustic gobo on it would be
-faint, and the aquarium's 1350 from near-overhead is precisely the light a caustic pattern
-belongs on. Neither look assumes caustics exist, and adding them will change the substrate
-balance — re-run `tools/water-luminance.py` afterwards rather than assuming the ratios hold.
+Both are the same lamp seen through the same surface, and they are **complements rather than two
+helpings of one thing**: a caustic is the part of the light still focused when it reaches the
+ground, a shaft is the part scattered out of the column on the way down. So they want opposite
+water, and that — not taste — is what decides which look gets which.
+
+| | caustics | god rays | why |
+|---|---|---|---|
+| deep ocean | none | **strongest**, 0.50 | Twenty metres diffuses the surface's focus away long before it lands, and it is the only backdrop dark enough for a shaft to stand against. |
+| shallow reef | **strongest**, 2.6 m / 0.45 | none | A few metres of sunlit water is exactly what focuses a net onto sand. It is also the brightest and smoothest backdrop, which is what defeated its shafts — see below. |
+| aquarium | 2.8 m / 0.45 | none | A tank has a rippled surface and a bright lamp. It has no shafts because it has nothing for them to light: this is the look whose marine snow is nearly zero, because a maintained tank has a filter. |
+
+### The caustics ride the key light
+
+The pattern is an `SCNLight.gobo` on the look's own key, which is the cheapest correct place for
+it — it then lands on the floor, on everything standing on the floor, and on the backs of the
+fish, from one texture and at no measurable frame cost (GPU held at 4.4 ms at 3200x1800).
+
+**Four facts about SceneKit's gobo had to be measured, and each contradicts the documentation or
+the obvious guess.** They are cheap to re-verify and expensive to assume:
+
+| | what you would assume | what it does |
+|---|---|---|
+| gobo on a `.directional` light | spot lights only, per Apple's docs | **works** — a flat lit plane went from sd 0.0000 to 0.1669 with no clipping |
+| what a gobo does to the light budget | masks it | **multiplies the light by the tile's own mean** — a 50/50 checker took a plane from 0.4000 to exactly 0.2000 |
+| how an 8-bit tile is decoded | raw, or as sRGB | **colour-managed by the image's own tag** — sRGB, generic 2.2 and device RGB all decode through 2.2; only a *linear* tag arrives as authored (implied gamma 1.01) |
+| tile size in the world | undocumented | **2.05 × `orthographicScale`** metres, linear from 0.1 to 2.0 |
+
+The second and third compound into a silent disaster. A tile normalised to mean 0.5 and tagged
+sRGB is delivered at 0.22, so the key would lose more than half its output and drag every floor
+measurement down with it — while looking merely like a look that needed retuning.
+`Caustics.compensation(forMean:)` divides the mean back out, which is what lets a look go on
+stating **the light it delivers** rather than the light it would deliver if the gobo were white.
+Verified end to end with a real tile at 1.0002.
+
+`LinearImage` is where the tag lives, and everything generated in this saver that carries a
+*number* rather than a picture must go through it. Note that `NSImage.lockFocus` — what the rest
+of the saver uses — produces a calibrated-space image that measured as gamma **1.8**, which is
+neither of the two answers anyone would guess.
+
+**The pattern is a refraction Jacobian, not a noise function.** Light crossing a wavy surface is
+bent by the surface's slope, so a patch of surface maps to a patch of ground of a different size
+and its brightness is the reciprocal of how much it stretched; where neighbouring rays cross, the
+patch collapses and the brightness diverges. That fold *is* the filament, and it is the part cell
+noise cannot fake, because nothing in cell noise is diverging. The surface is a sum of plane waves
+with **integer** wave vectors, which makes the tile exactly periodic by construction rather than
+by tuning — a seam would draw a hard grid across the whole floor — and the blur that softens it
+wraps for the same reason. Supersampling is not optional: the folds are true singularities, so one
+sample per texel makes the filaments come out beaded rather than continuous, and blurring
+afterwards only blurs the beads.
+
+Two tuning results worth keeping:
+
+- **The reef takes a tighter, stronger net than the aquarium**, which is the opposite of what the
+  two water surfaces suggest and is a fact about their *floors*. The aquarium's bed is gravel — a
+  field of resolved stones with its own light and shade at exactly the scale a tight net lands on
+  — and a first pass at 1.1 m cells vanished into it, the two patterns competing until the result
+  read as noise. What carries the caustics in that look is the rock and coral standing in them.
+  The reef's sand has no such problem.
+- **Caustics reach the aquarium's cross-section band barely, and it required no work.** The
+  question was whether to suppress them there deliberately; the geometry answered it. The band is
+  a near-vertical face taking about 21% of the near-vertical key and dominated by the accent
+  instead, so the net lands on the receding bed and stops at the band on its own.
+
+### The shafts are additive quads, and the reef could not have them
+
+Two properties of this saver make that cheap: **the camera never moves**, so a quad that faces it
+once faces it forever and no billboard constraint is needed; and the shafts are genuinely parallel
+in world space, so the perspective camera converges them without anything fanning them by hand.
+
+**`SCNMaterial.multiply` is silently ignored once `blendMode` is `.add`.** With the multiply
+colour scaled all the way to zero the shafts still drew at full strength — a failure that reads
+exactly like a mis-tuned constant rather than like a property having no effect, and it cost a
+whole tuning pass spent cutting a number that was doing nothing. Colour and brightness are baked
+into the texture instead.
+
+Two more that only a render shows. **Width was wrong by about three times at first** — wide shafts
+do not read as light, they read as bands laid over the frame, because at that size the eye reads
+the edge and not the beam; many narrow ones read as one shaft broken up by the surface. And **a
+shaft must be spent before it reaches the ground**, or it reads as a hanging curtain: the fading
+is the evidence that it is being scattered away.
+
+**The shallow reef was meant to have both and has no shafts at all.** It was tried from 0.20 down
+to 0.055 and the failure never changed character, only intensity — which is the tell that
+brightness was never the problem. An additive band on a backdrop that is both the brightest of the
+three *and* the smoothest shows its own edge however softly that edge is drawn, so the shafts read
+as hard diagonal stripes ruled across the reef at every setting bright enough to see at all. Which
+is the same fact that gives that look the strongest caustics, read the other way round.
+
+### What both did to the measurements
+
+| | before | after | why |
+|---|---|---|---|
+| shallow reef | 0.77 | **0.68** | caustics |
+| deep ocean | 0.78 | **0.59** | god rays |
+| aquarium, river | 0.81 | **0.78** | caustics |
+| aquarium, quartz | 0.96 | **0.92** | caustics |
+
+**Caustics lower the reported ratio without changing the light budget at all**, and the reason is
+worth knowing before anyone reads it as a regression: the compensation preserves the *mean*, and
+this tool reports a **median**. A caustic is a strongly skewed distribution — thin bright filaments
+over wide dark gaps — so the median sits in the gaps. God rays lower it for a different and more
+straightforward reason: they brighten the water the floor is measured *against*, not the floor,
+which is the right direction for the rule the measurement exists to enforce.
+
+**A prediction recorded here previously turned out to be wrong: the god rays did *not* give the
+bloom anything to bite.** The deep ocean's brightest pixel is unchanged at Y 0.264 against its own
+0.95 threshold. In fact bloom is currently a no-op in two looks and nearly one in the third —
+shallow reef peaks at 0.800 against a 0.88 threshold and never crosses it at all; the aquarium
+clears its 0.90 on 0.0012% of the frame. The thresholds are set above what these looks can
+produce, so anyone who wants bloom to do something must lower a threshold rather than wait for a
+brighter feature.
 
 The tank's dimensions were reworked in parallel with these values, and the prediction made here
 about what that would cost held: everything stated in metres had to move, and everything
