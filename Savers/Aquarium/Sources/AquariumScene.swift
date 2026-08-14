@@ -11,6 +11,7 @@ import AppKit
 import Foundation
 import Metal
 import SceneKit
+import SpriteKit
 import simd
 
 final class AquariumScene {
@@ -21,6 +22,11 @@ final class AquariumScene {
     /// with the scene background so the two can never disagree. An instance property because
     /// the water's colour belongs to the style, and the style is drawn at launch.
     let clearColor: MTLClearColor
+
+    /// The seed badge, or nil when the user has it switched off. Handed to the renderer by
+    /// `AquariumView`, because the overlay is the *renderer's* property rather than the scene's
+    /// — there is nowhere on an `SCNScene` to hang one.
+    private(set) var overlay: SKScene?
 
     /// What kind of tank this launch is, and therefore how big it is, how densely it is
     /// decorated, what its floor is made of and how it is lit.
@@ -94,8 +100,14 @@ final class AquariumScene {
         let directory = modelURL.deletingLastPathComponent()
         let library = ModelLibrary.load(from: directory)
         let cache = ModelCache(directory: directory)
-        let seed = AquariumScene.launchSeed()
+        let seed = AquariumScene.launchSeed(pinned: settings.seed)
         rand = Rand(seed: seed)
+        // Never in the thumbnail. It is 384x216 in the settings sheet and smaller again in the
+        // Screen Saver list, where the badge would be either illegible or — sized to stay
+        // legible — a caption across a picture of a tank.
+        if settings.showsSeed && !isPreview {
+            overlay = SeedBadge.overlay(seed: seed, drawableSize: drawableSize)
+        }
 
         // Drawn first, and from the launch stream rather than a fork, because the ocean's own
         // dimensions are part of the draw and everything below is measured against them. Which
@@ -174,14 +186,29 @@ final class AquariumScene {
     }
 
     /// A different tank every launch, which is the whole point of drawing one — but tuning a
-    /// layout against a reef that reshuffles on every build is guesswork, so `AQUARIUM_SEED`
-    /// pins it. The environment is empty under `legacyScreenSaver`, so the override costs
-    /// nothing in the only place that matters.
-    static func launchSeed() -> UInt64 {
-        if let pinned = ProcessInfo.processInfo.environment["AQUARIUM_SEED"],
-           let seed = UInt64(pinned) { return seed }
-        return UInt64(bitPattern: Int64(Date().timeIntervalSince1970 * 1000)) ^ 0x5EA_F15
+    /// layout against a reef that reshuffles on every build is guesswork, so it can be pinned:
+    /// by `AQUARIUM_SEED` for this repo's render loop, and by the settings sheet for a user
+    /// watching the real screensaver. The environment wins, and is empty under
+    /// `legacyScreenSaver`, so the override costs nothing in the only place that matters.
+    static func launchSeed(pinned: UInt64? = nil) -> UInt64 {
+        if let fromEnvironment = ProcessInfo.processInfo.environment["AQUARIUM_SEED"],
+           let seed = UInt64(fromEnvironment) { return seed }
+        if let pinned { return pinned }
+        return UInt64.random(in: AquariumScene.drawnSeeds)
     }
+
+    /// Six digits, and drawn rather than derived from the clock.
+    ///
+    /// Both halves are for the human in the loop. A seed exists to be *transcribed* — read off
+    /// the corner of a tank onto paper and typed back into the settings sheet — and the old
+    /// millisecond-clock value was thirteen digits, which is a number people copy wrongly. A
+    /// million tanks is far more than anyone will ever draw. Deriving it from the clock was
+    /// also quietly wrong on a multi-display machine, where every screen instantiates its own
+    /// saver within the same millisecond and would draw the same tank.
+    ///
+    /// Nothing downstream cares about the range: `AQUARIUM_SEED` still accepts any `UInt64`,
+    /// so every seeded render on record — `42`, `4` — still names the tank it always did.
+    private static let drawnSeeds: ClosedRange<UInt64> = 100_000...999_999
 
     // MARK: Per-frame update
 
@@ -189,6 +216,7 @@ final class AquariumScene {
         // Mutating nodes here is only safe because `SceneKitHost` suppresses implicit
         // animation around this call — see the comment there.
         adoptAspect(Tank.aspect(of: frame.drawableSize))
+        if let overlay { SeedBadge.resize(overlay, to: frame.drawableSize) }
         school?.update(time: frame.time, dt: Float(frame.deltaTime))
         bubblers.forEach { $0.update(dt: Float(frame.deltaTime)) }
         driftCaustics(time: frame.time)

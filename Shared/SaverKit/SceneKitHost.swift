@@ -114,5 +114,9 @@ final class SceneKitHost: RenderHost {
         onUpdate = nil
         onResize = nil
         renderer.scene = nil
+        // An overlay is a live SpriteKit scene with its own renderer attached, so it is exactly
+        // the kind of thing the leaked-view bug dragged along — dropped here for the same reason
+        // the scene is.
+        renderer.overlaySKScene = nil
     }
 }

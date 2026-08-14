@@ -56,6 +56,8 @@ final class AquariumSettingsSheet: NSObject {
     /// to leave no trace, including on the running saver.
     private var pending: AquariumSettings
     private var buttons: [NSButton] = []
+    private let seedField = NSTextField()
+    private let showSeedButton = NSButton()
     private let previewContainer = NSView()
     private var previewView: AquariumView?
     private let previewNote = NSTextField(labelWithString: "")
@@ -145,7 +147,39 @@ final class AquariumSettingsSheet: NSObject {
         rebuildPreview()
     }
 
+    @objc private func seedChanged(_ sender: Any?) {
+        readSeedField()
+        rebuildPreview()
+    }
+
+    @objc private func showSeedChanged(_ sender: NSButton) {
+        pending.showsSeed = sender.state == .on
+        // No preview rebuild: the thumbnail never draws the badge, so there would be nothing
+        // to see and it would cost a whole tank — see `AquariumScene.init`.
+    }
+
+    /// Takes whatever is in the field and turns it into a pinned seed, or into none.
+    ///
+    /// Anything that is not a plain unsigned integer is rejected by putting the last accepted
+    /// value back, rather than by an alert: the failure is one keystroke away from being
+    /// corrected and the field is a box for a number people are copying off a screen.
+    private func readSeedField() {
+        let typed = seedField.stringValue.trimmingCharacters(in: .whitespaces)
+        if typed.isEmpty {
+            pending.seed = nil
+        } else if let seed = UInt64(typed) {
+            pending.seed = seed
+        }
+        syncSeedControls()
+    }
+
     @objc private func commit(_ sender: Any?) {
+        // Read again rather than trusting the field's action to have fired. Clicking OK ends
+        // editing and normally does fire it, but a sheet dismissed by its default key
+        // equivalent while the field is first responder is one path where the last thing typed
+        // would otherwise be dropped — silently, and into a feature whose entire purpose is
+        // getting one exact number out of the user's head and into the tank.
+        readSeedField()
         pending.write(to: defaults)
         onCommit?(pending)
         dismiss()
@@ -188,8 +222,13 @@ final class AquariumSettingsSheet: NSObject {
         let frame = NSRect(origin: .zero, size: AquariumSettingsSheet.previewSize)
         guard let view = AquariumView(frame: frame, isPreview: true) else { return }
         // The one instance whose settings do not come from disk: it is showing a choice that
-        // has not been made yet, and may never be.
-        view.settingsOverride = AquariumSettings(style: .fixed(showing))
+        // has not been made yet, and may never be. It carries the pending seed as well as the
+        // pending style, so typing a seed shows the tank it names — with the caveat that a
+        // thumbnail draws fewer props and fewer fish, so it is that seed's *look* and gravel
+        // rather than a small copy of the reef the full tank will build.
+        var override = pending
+        override.style = .fixed(showing)
+        view.settingsOverride = override
         view.autoresizingMask = [.width, .height]
         previewContainer.addSubview(view)
         view.startAnimation()
@@ -208,6 +247,12 @@ final class AquariumSettingsSheet: NSObject {
         for (index, option) in AquariumSettingsSheet.options.enumerated() {
             buttons[index].state = option.preference == pending.style ? .on : .off
         }
+        syncSeedControls()
+    }
+
+    private func syncSeedControls() {
+        seedField.stringValue = pending.seed.map(String.init) ?? ""
+        showSeedButton.state = pending.showsSeed ? .on : .off
     }
 
     private func buildInterface() {
@@ -251,7 +296,9 @@ final class AquariumSettingsSheet: NSObject {
         actions.orientation = .horizontal
         actions.spacing = 12
 
-        for view in [title, subtitle, choices, previewContainer, previewNote, actions] {
+        let seed = seedSection()
+
+        for view in [title, subtitle, choices, seed, previewContainer, previewNote, actions] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -267,6 +314,10 @@ final class AquariumSettingsSheet: NSObject {
             choices.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
             choices.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             choices.widthAnchor.constraint(equalToConstant: 260),
+
+            seed.topAnchor.constraint(equalTo: choices.bottomAnchor, constant: 18),
+            seed.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            seed.widthAnchor.constraint(equalTo: choices.widthAnchor),
 
             previewContainer.topAnchor.constraint(equalTo: choices.topAnchor),
             previewContainer.leadingAnchor.constraint(equalTo: choices.trailingAnchor,
@@ -285,7 +336,7 @@ final class AquariumSettingsSheet: NSObject {
             previewNote.heightAnchor.constraint(equalToConstant: 30),
 
             // Whichever column is taller sets the height, so the buttons stay clear of both.
-            actions.topAnchor.constraint(greaterThanOrEqualTo: choices.bottomAnchor,
+            actions.topAnchor.constraint(greaterThanOrEqualTo: seed.bottomAnchor,
                                          constant: 20),
             actions.topAnchor.constraint(greaterThanOrEqualTo: previewNote.bottomAnchor,
                                          constant: 20),
@@ -296,6 +347,61 @@ final class AquariumSettingsSheet: NSObject {
 
         syncButtons()
         window.setContentSize(content.fittingSize)
+    }
+
+    /// The seed field and the badge switch, which are one control in two parts.
+    ///
+    /// They are grouped and captioned together because neither is usable alone: the number to
+    /// type into the field can only be learned by reading it off a running tank, and the badge
+    /// is only worth showing to somebody who has somewhere to type the number back.
+    private func seedSection() -> NSView {
+        let heading = label("Seed", font: .systemFont(ofSize: 12, weight: .semibold),
+                            colour: .labelColor)
+
+        seedField.placeholderString = "Random"
+        seedField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        seedField.alignment = .left
+        seedField.target = self
+        seedField.action = #selector(seedChanged(_:))
+        // Commits on focus loss as well as on Return. Without it a user who types a seed and
+        // clicks OK gets the tank they had before, which reads as the field not working.
+        seedField.isContinuous = false
+
+        let caption = label("Draws the same tank every time. Leave it empty for a new tank on "
+                            + "every launch.",
+                            font: .systemFont(ofSize: 11), colour: .secondaryLabelColor)
+        caption.preferredMaxLayoutWidth = 240
+
+        showSeedButton.setButtonType(.switch)
+        showSeedButton.title = "Show the seed on screen"
+        showSeedButton.target = self
+        showSeedButton.action = #selector(showSeedChanged(_:))
+
+        let section = NSView()
+        for view in [heading, seedField, caption, showSeedButton] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            section.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heading.topAnchor.constraint(equalTo: section.topAnchor),
+            heading.leadingAnchor.constraint(equalTo: section.leadingAnchor),
+
+            seedField.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
+            seedField.leadingAnchor.constraint(equalTo: section.leadingAnchor),
+            // Wide enough for the longest thing that can go in it. Launch seeds are six
+            // digits, but `AQUARIUM_SEED` accepts any `UInt64` and a render tuned under one
+            // has to be reproducible from the sheet too.
+            seedField.widthAnchor.constraint(equalToConstant: 170),
+
+            caption.topAnchor.constraint(equalTo: seedField.bottomAnchor, constant: 4),
+            caption.leadingAnchor.constraint(equalTo: section.leadingAnchor),
+            caption.trailingAnchor.constraint(equalTo: section.trailingAnchor),
+
+            showSeedButton.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 10),
+            showSeedButton.leadingAnchor.constraint(equalTo: section.leadingAnchor),
+            showSeedButton.bottomAnchor.constraint(equalTo: section.bottomAnchor),
+        ])
+        return section
     }
 
     private func optionRow(_ option: Option, index: Int) -> NSView {

@@ -16,6 +16,26 @@ three looks plus "Surprise me", each with a live preview of the tank it selects,
 `ScreenSaverDefaults` under the saver bundle's own identifier. OK reloads the running view's
 host so the thumbnail behind the sheet adopts the choice; Cancel leaves nothing behind.
 
+**And a user can now pin a seed, because the tank tells them what it is.** The sheet has a Seed
+field (empty means a fresh tank every launch) and a "Show the seed on screen" switch, and
+`SeedBadge` prints the seed faintly in the top-left corner of the full-size tank — never in the
+thumbnail, which is too small to carry it. The two halves are one feature: read the number off a
+tank you liked, type it back in, get that tank. `AQUARIUM_SEED` still wins over the stored value,
+and `AQUARIUM_SHOW_SEED=0` turns the badge off so a doc screenshot does not carry one.
+
+Two things changed underneath it. **Launch seeds are now six digits, drawn rather than derived
+from the clock** — the old value was thirteen digits of milliseconds, which is a number people
+transcribe wrongly, and on a multi-display machine every screen drew the *same* tank because they
+all launch within the same millisecond. Any `UInt64` is still accepted, so `AQUARIUM_SEED=42` and
+`=4` name exactly the tanks they always did. And **`AQUARIUM_STYLE` no longer discards the rest of
+the stored settings** — it overrides the style and leaves the seed alone.
+
+The badge is a **SpriteKit overlay** (`SCNRenderer.overlaySKScene`), which is verified to
+composite over a manually-encoded `render(atTime:viewport:commandBuffer:passDescriptor:)` pass —
+so it is untouched by the water's fog, the camera's HDR tone mapping and the bloom. `showsSeed`
+defaults **on**, which is a deliberate choice worth revisiting before ship: default-off would
+leave the seed field addressing a number the user has no way to learn.
+
 **It is installed and confirmed in System Settings.** Every option worked, the thumbnail
 changed on each selection, and full-screen Preview ran — so the sheet, the live preview inside
 it, `reloadHost` and the real full-screen path are all exercised in the host that matters, not
@@ -186,7 +206,8 @@ uv pip install --python .venv/bin/python numpy scipy pillow
 ```
 
 `AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`, `random`, and
-overrides the saved setting. `AQUARIUM_GRAVEL` pins which of the twenty-eight gravel palettes the
+overrides the saved style, leaving the rest of the saved settings alone. `AQUARIUM_SHOW_SEED`
+forces the corner seed badge on or off regardless of what the sheet has stored. `AQUARIUM_GRAVEL` pins which of the twenty-eight gravel palettes the
 aquarium wears — `river`, `neon`, `monochrome`, `arctic`, … see `GravelPalette.all` — and an
 unknown name falls back to the draw rather than failing. `AQUARIUM_SEED` pins the layout; without
 it every launch draws a different tank.
