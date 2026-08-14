@@ -26,12 +26,25 @@ struct Tank {
     let nearDepth: Float
     let farDepth: Float
 
+    /// How much of the frame's height the substrate fills *in section*, pressed against the
+    /// front pane. Nil for open water, which has no pane and no section.
+    ///
+    /// This is the one number that says the viewer is standing outside a glass box rather than
+    /// swimming in the tank, and it is what puts the band of cut gravel across the bottom of an
+    /// aquarium photograph. Stated as a fraction of the frame because that is what it is: see
+    /// `glassDepth` for why the metres it works out to are a consequence rather than a choice.
+    let substrateBand: Float?
+
     let halfFOVTangent: Float
 
-    init(fieldOfView: CGFloat, nearDepth: Float, farDepth: Float) {
+    init(fieldOfView: CGFloat, nearDepth: Float, farDepth: Float, substrateBand: Float? = nil) {
         self.fieldOfView = fieldOfView
         self.nearDepth = nearDepth
         self.farDepth = max(farDepth, nearDepth + 0.5)
+        // A band of half the frame or more would put the glass at infinity, and one deep enough
+        // to reach the fish is a composition problem rather than an arithmetic one — see
+        // `glassDepth`.
+        self.substrateBand = substrateBand.map { min(max($0, 0), 0.3) }
         halfFOVTangent = Float(tan(fieldOfView * .pi / 180 / 2))
     }
 
@@ -59,6 +72,28 @@ struct Tank {
     /// Past `fogEnd`, so the far edge of the sand is fully fogged out and there is no rim where
     /// the floor simply stops. The same reason the background and the fog colour must agree.
     var floorFarDepth: Float { farDepth * 1.36 }
+
+    /// Where the front pane of glass stands. Nil for open water.
+    ///
+    /// It is a *consequence* of `substrateBand`, not an independent number, and the derivation
+    /// is the whole reason a cross-section can exist at all. The floor meets the bottom of the
+    /// frame at `floorEntryDepth` and everything nearer is below the frame — which is why a
+    /// camera sitting on the glass, as this one always did, can never see the bed in section
+    /// however deep the bed is. Standing the viewer *back* from the pane is what brings the cut
+    /// into shot: at depth `d` the substrate's surface lands at NDC y = `-floorEntryDepth / d`,
+    /// so a pane at `floorEntryDepth / (1 - 2f)` leaves exactly `f` of the frame's height below
+    /// it for the section to fill, in any tank at any drawable shape.
+    ///
+    /// The floor is then drawn only from here outward. Everything nearer is behind the viewer's
+    /// side of the glass and must not be drawn at all, or it paints over the section it is
+    /// supposed to be sitting behind.
+    var glassDepth: Float? {
+        substrateBand.map { floorEntryDepth / max(0.4, 1 - 2 * $0) }
+    }
+
+    /// The nearest the substrate's *surface* is drawn. The glass where there is one, and the
+    /// camera itself where there is not.
+    var floorNearDepth: Float { glassDepth ?? 0 }
 
     /// The far end of the depth band the reef is scattered through.
     ///
@@ -186,8 +221,12 @@ struct Tank {
     /// prop, and the fixed limit applies only once that is satisfied. The height a prop needs
     /// scales with `propScale` for the same reason the prop does — otherwise a shrunken tank
     /// would push its reef away for clearance it no longer needs.
+    /// A prop may never stand nearer than the glass either. Nothing on this floor is on the
+    /// viewer's side of the pane, and a prop that were would stand on floor that is not drawn
+    /// and read as hovering over the cross-section band.
     func reefNearDepth(aspect: Float) -> Float {
-        max(floorEntryDepth * 0.887, 0.45 * propScale * aspect / halfFOVTangent)
+        max(floorNearDepth,
+            max(floorEntryDepth * 0.887, 0.45 * propScale * aspect / halfFOVTangent))
     }
 
     // MARK: Frustum

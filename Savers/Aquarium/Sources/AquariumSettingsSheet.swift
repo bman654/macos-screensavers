@@ -31,8 +31,9 @@ final class AquariumSettingsSheet: NSObject {
                caption: "Twenty metres down. Cold blue-white light, dark sand, and haze that "
                       + "takes the reef within a few metres."),
         Option(preference: .fixed(.aquarium), title: "Aquarium",
-               caption: "A lit glass tank. Fluorescent blue-white from a hood lamp, saturated "
-                      + "blue water, coloured gravel, and crowded with ornaments."),
+               caption: "A lit glass tank, seen through the front pane. Fluorescent blue-white "
+                      + "from a hood lamp, saturated blue water, crowded with ornaments, and a "
+                      + "different colour of gravel every launch."),
         Option(preference: .random, title: "Surprise me",
                caption: "One of the three, drawn fresh every time the screensaver starts."),
     ]

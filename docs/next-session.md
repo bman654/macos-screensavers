@@ -1,8 +1,8 @@
 # Where to pick up
 
 Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
-its three looks; extended the same day by the sessions that ran it on a Retina display and
-built its settings sheet.
+its three looks; extended the same day by the sessions that ran it on a Retina display, built
+its settings sheet, and rebuilt the aquarium's substrate as real gravel.
 
 ## State
 
@@ -30,12 +30,29 @@ Two things came out of that testing. `SAVERKIT_STATS` now reports frame and GPU 
 run. And the bloom radius was in pixels, so every look lost half its glow width on a Retina
 display — fixed, though see the trap below for why you cannot yet see it.
 
+**The aquarium's floor is gravel now, and it is seen through the glass.** Three changes, and
+`docs/water-looks.md` §"The gravel" is where they are argued:
+
+- The bed is a packed field of separate stones splatted through a height buffer, with a normal
+  map the tank's lamp actually lights. The old floor was flat-shaded ellipses, which no palette
+  could rescue.
+- The bottom 11% of the frame is the bed **in section**, pressed against the front pane, the way
+  the bottom of an aquarium photograph is. This needed a camera move rather than a texture: the
+  viewer now stands outside the glass, because a camera sitting on the pane can never see a bed
+  in section however deep the bed is.
+- Twenty-eight palettes, drawn per launch — naturals, single-hue beds, two-tone contrast mixes,
+  and the fluorescent bag. Every tile is normalised so the look's floor-versus-water ratio holds
+  whatever colour was drawn, and the correction for the tank's blue wash is made entirely in
+  chroma, where the coherence rule has nothing to say.
+
 ```
 14 fish species        Savers/Aquarium/Models/species/<name>.py
 16 props               Savers/Aquarium/Models/props/<name>.py
    the library build   tools/build-library.py      -> Savers/Aquarium/Assets/ (36.8 MB)
    the tank            Savers/Aquarium/Sources/*.swift
    the three looks     docs/water-looks.md
+   the substrate       Substrate.swift, GravelPalette.swift, SubstrateTexture.swift,
+                       TankFloor.swift
 ```
 
 **The generated library is not tracked.** Models are code; the `.usdz` and `.json` under
@@ -51,17 +68,34 @@ tools/build-saver.sh Aquarium
 AQUARIUM_STYLE=aquarium AQUARIUM_SEED=42 tools/run-saver.swift Aquarium \
     --size 1600x900 --seconds 4 --screenshot /tmp/tank.png
 tools/water-luminance.py /tmp/tank.png                     # floor-vs-water coherence
+tools/crop.py /tmp/tank.png --out /tmp/band.png --band     # the substrate, at 1:1
 tools/gallery.py --out /tmp/sheet.png --columns 4 'build/props/*/water_00_side.png'
 SAVERKIT_STATS=5 tools/run-saver.swift Aquarium --size 2056x1329 --seconds 30 \
     --screenshot /tmp/tank.png                             # frame and GPU timing
 tools/run-saver.swift Aquarium --configure --seconds 3 --screenshot /tmp/sheet.png
 ```
 
+**The Python tools need an interpreter this repo does not track.** `water-luminance.py`,
+`crop.py` and `build-library.py` want numpy, scipy and Pillow, and the machine's `python3` has
+none of them — the failure is a bare `ModuleNotFoundError` that reads like a broken tool:
+
+```bash
+uv venv --python 3.14.3 .venv
+uv pip install --python .venv/bin/python numpy scipy pillow
+.venv/bin/python tools/water-luminance.py /tmp/tank.png
+```
+
 `AQUARIUM_STYLE` is one of `shallowReef` (default), `deepOcean`, `aquarium`, `random`, and
-overrides the saved setting. `AQUARIUM_SEED` pins the layout; without it every launch draws a
-different tank. The two are independent: which style is worn never touches the tank's stream —
-`random` draws from a stream of its own off the same seed — so every seeded render made before
-the settings sheet existed still names the same tank it always did.
+overrides the saved setting. `AQUARIUM_GRAVEL` pins which of the twenty-eight gravel palettes the
+aquarium wears — `river`, `neon`, `monochrome`, `arctic`, … see `GravelPalette.all` — and an
+unknown name falls back to the draw rather than failing. `AQUARIUM_SEED` pins the layout; without
+it every launch draws a different tank.
+
+All three are independent of the tank's own stream: the style, the gravel and the layout each
+take a stream of their own off the same seed, so every seeded render made before any of them
+existed still names the same tank it always did. **Anything else drawn per launch must be added
+the same way** — a draw taken from the launch stream reshuffles everything drawn after it, and
+the failure is silent because both tanks are plausible.
 
 **Look at the PNG, at the size it will be seen.** This repo's hardest-won rule, and it held
 again all session: every art problem found this session was visible in an image and invisible
@@ -76,6 +110,17 @@ inside a rock and a white seam on the clam by looking at renders.
 1. **Caustics and god rays.** Deliberately held back so the lighting pass did not sprawl.
    The shallow reef is now good enough that dappled light on the sand would sell it hard;
    a ripple gobo is a spotlight cookie, not new infrastructure.
+
+   The substrate was done first on purpose, and it changed what this phase inherits. The floor
+   the gobo lands on is now a normal-mapped bed of stones rather than a flat wash, so a caustic
+   pattern has something to break over — and the aquarium has a *second* substrate surface, the
+   cross-section band, which faces the room rather than the lamp. Decide deliberately whether
+   caustics reach it: they should not, or barely, because the light making them is above the bed
+   and the band is a cut through it. `docs/water-looks.md` still holds the two warnings from
+   before — the deep look's key at 520 is faint for a gobo, the aquarium's 1350 from near
+   overhead is exactly the light a caustic belongs on — plus a new one: the substrate's crevice
+   shading is baked into the albedo and its directional shading deliberately is not, so a gobo
+   modulating the key is already correct and must not be compensated for twice.
 2. **Fish AI and depth lanes**, including the clownfish's anemone affinity — see
    `docs/aquarium-plan.md` §2. Site-attached fish are *cheaper* than crossing fish, and give
    the tank a second kind of motion.
@@ -99,6 +144,21 @@ inside a rock and a white seam on the clam by looking at renders.
 
 ## Known gaps, deliberately left
 
+- **The gravel palette is not in the settings sheet.** It is drawn per launch and pinnable from
+  the environment, which is what the tank needed; letting a user *choose* their gravel is a
+  different feature and a fourth control on a sheet that currently asks one question. If it is
+  ever added, note that the sheet rebuilds a whole tank per click at 234–354 ms, so a
+  twenty-eight-item picker with a live preview is not the shape it should take.
+- **A palette's brightness is derived from the bag, not authored.** `GravelPalette.brightness`
+  compresses the in-air luminance so a white bed reads white and a black bed reads black without
+  breaking the coherence rule. It is one curve over twenty-eight palettes and it will be wrong
+  for some of them before it is wrong for the curve — prefer nudging a palette's declared
+  colours over adding a per-palette override.
+- **The bright hues are still the hard ones.** There is no dark yellow that reads as yellow, and
+  the floor's luminance is capped by the water above it, so `sunflower` and `tangerine` sit at
+  the top of the brightness clamp and still read closer to gold and rust than to the bag. This is
+  a real constraint of the look rather than a tuning miss; the fix, if it is ever wanted, is a
+  warmer accent lamp in the aquarium — which is the same fix the brass needs.
 - **Brass cannot glint in the aquarium.** Reflection is `baseColour x environment` and the
   aquarium's environment is strongly blue, so a red-orange alloy has no red to return. A warm
   accent lamp in that look is the fix; the shallow reef already has enough warmth.
@@ -149,6 +209,37 @@ inside a rock and a white seam on the clam by looking at renders.
   "fix" it — the asymmetry is what makes a small tank read as a tank.
 - **A texture tuned for one floor depth is wrong at another.** Gravel tiled for a floor
   entering at 6.2 m read as boulders at 2.25 m.
+- **A ground plane is seen almost edge-on, so isotropic mip selection erases its texture.** The
+  near floor keeps its full width on screen and is squashed to a fraction of its height, so one
+  mip level has to serve both axes and the blurrier one wins. A whole bed of stones and its
+  normal map arrived as horizontal smears, and the tile looked like the bug. `maxAnisotropy = 16`
+  on both the diffuse and the normal is the entire fix, and it cost 0.35 ms at 4112x2658.
+- **A camera sitting on the glass can never see a substrate in section.** The floor meets the
+  bottom of the frame at `floorEntryDepth` and everything nearer is below the frame, so no amount
+  of bed depth puts the cut in shot. The band across the bottom of every aquarium photograph is a
+  statement about where the *viewer* is standing, not about the gravel — `Tank.glassDepth`. The
+  same reasoning applies to anything else the tank might press against its front pane.
+- **A crest on that band may only rise, never dip.** Every part of the floor that is drawn at all
+  projects above the band's nominal top line, so a dip exposes open water behind it. A rise is
+  gravel heaped against the pane, which is what it is.
+- **Normalising every palette to one luminance makes white and black gravel identical.** It is
+  the obvious way to keep the floor-versus-water rule safe for any colour, and a contact sheet of
+  all twenty-eight beds is the only thing that shows what it costs: a quartz bed and a basalt bed
+  normalise to the same number and arrive as the same mid-grey. Brightness has to follow the bag,
+  compressed enough that the rule still holds — see `GravelPalette.brightness`.
+- **Warming a whole colour turns neutrals olive.** The blue wash on the near floor is corrected by
+  warming the stones, and applied to the colour it also warms the tiny bias in an off-white stone
+  and then amplifies it: the quartz bed came out mustard. Warm the *tint* — what is left after
+  the colour's own grey is subtracted — and a neutral stays exactly neutral.
+- **A luminance cap says nothing about chroma, and chroma is where the room is.** The floor is
+  pinned at about 0.7 of the water above it and there is no brightness available at all, which is
+  what made every previous gravel read blue-grey. Pushing the stones away from grey at *constant
+  luminance* cannot move the floor measurement however far it is taken. Reach for it before
+  reaching for the brightness.
+- **The repository's Python tools have no interpreter in the repository.** `water-luminance.py`
+  and `crop.py` import numpy, scipy and Pillow and the machine's `python3` has none of them, so
+  the measuring tools fail with a bare `ModuleNotFoundError` that reads like a broken tool at
+  exactly the moment you reached for them. The venv line is in Loops above.
 - **`SCNCamera.bloomBlurRadius` is documented in points and applied in render-target pixels.**
   One emissive quad of fixed frame fraction, rendered at 512, 1024 and 2048 px, glowed the
   same 24 px at all three — so a look tuned on a 1x display loses half its glow width on a

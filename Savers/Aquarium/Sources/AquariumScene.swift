@@ -92,7 +92,7 @@ final class AquariumScene {
         // Drawn first, and from the launch stream rather than a fork, because the ocean's own
         // dimensions are part of the draw and everything below is measured against them. Which
         // style it is comes from a stream of its own — see `AquariumSettings.styleName`.
-        style = TankStyle.draw(settings.styleName(seed: seed), rand: &rand)
+        style = TankStyle.draw(settings.styleName(seed: seed), seed: seed, rand: &rand)
         clearColor = MTLClearColor(red: style.water.tint.red, green: style.water.tint.green,
                                    blue: style.water.tint.blue, alpha: 1)
         aspect = Tank.aspect(of: drawableSize)

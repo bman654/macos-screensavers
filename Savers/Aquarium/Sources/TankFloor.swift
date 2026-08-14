@@ -1,119 +1,44 @@
-// The substrate: the floor every prop stands on.
+// The substrate's geometry: the floor every prop stands on, and — where the tank has a front
+// pane — the band of it you see in section through the glass.
 //
-// Flat, and deliberately so. `build_prop.py` seats a prop's lowest vertex on z = 0, so a
-// dune under the reef would leave every prop hovering or half-buried by the dune's amplitude
-// unless the placement pass sampled the height field — and at these distances a 5 cm error is
-// visible. Relief comes from the props and from the texture instead.
+// Flat, and deliberately so. `build_prop.py` seats a prop's lowest vertex on z = 0, so a dune
+// under the reef would leave every prop hovering or half-buried by the dune's amplitude unless
+// the placement pass sampled the height field — and at these distances a 5 cm error is visible.
+// Relief comes from the props and from the texture instead.
 //
-// The floor's geometry, extent and height are properties of the tank and are the same whatever
-// it is made of; only the surface is a look. `Substrate` is that seam, and it holds every
-// number the appearance depends on, so choosing sand or gravel is a value handed in by
-// `TankStyle` rather than an edit through this file.
+// What the floor is *made of* lives in `Substrate`, and what that looks like in
+// `SubstrateTexture`; the extent and height here are properties of the tank and are the same
+// whatever it is made of.
 
 import AppKit
 import Foundation
 import SceneKit
 
-/// What the floor is made of.
-struct Substrate {
-    /// Diffuse colour of the ground between the grains.
-    let base: (red: CGFloat, green: CGFloat, blue: CGFloat)
-    /// Colours the grains themselves are drawn in. Empty means "the same material as the ground
-    /// between them", which is what sand is; a list is what makes aquarium gravel read as
-    /// separate stones of different minerals rather than as one stone in shadow.
-    let grainTints: [(red: CGFloat, green: CGFloat, blue: CGFloat)]
-    /// Half-width of the per-grain shade offset either side of the grain's own colour. The blue
-    /// channel takes 80% of it, which is what makes a grain read as a grain of the same
-    /// material rather than as a fleck of a different one.
-    let grainContrast: CGFloat
-    /// Grain radius in texels of a 256² tile.
-    let grainRadius: ClosedRange<CGFloat>
-    let grainCount: Int
-    /// Metres per tile. Small enough that the grain reads at the near edge of the floor, large
-    /// enough that the far floor is not a shimmer of aliased tiles.
-    let tileSize: CGFloat
-    let roughness: CGFloat
-
-    /// Sand is bright, but a seabed lit through fifteen metres of water is not. Rendered at the
-    /// obvious 0.6 the near sand came out as a lit beach that the fog then had to drag all the
-    /// way down to the water colour in about eight metres — a hard horizon across the frame,
-    /// with the far reef apparently floating above it. The floor has to start close enough to
-    /// the water it dissolves into that the fog has somewhere gentle to go.
-    ///
-    /// Deep water takes that further, and the reason is not artistic: the same daylight budget
-    /// lights this floor and fills the water above it. If the backdrop is a dark blue, a floor
-    /// that reads brighter than the backdrop is reflecting more light than the whole water
-    /// column scatters, and the eye reads the mismatch immediately — as a lit shelf with an
-    /// abyss beyond it. Deep sand is therefore darker *and* blue-shifted, because the red end
-    /// of what reaches it has already been absorbed. Its grain contrast comes down with it: at
-    /// this light level the sand's own 0.105 read as noise rather than as grain.
-    static let deepSand = Substrate(base: (0.168, 0.170, 0.163),
-                                    grainTints: [],
-                                    grainContrast: 0.055,
-                                    grainRadius: 0.6...2.0,
-                                    grainCount: 2600,
-                                    tileSize: 0.70,
-                                    roughness: 0.92)
-
-    /// The same sand a few metres under the surface, where there is enough light for it to keep
-    /// its warmth. Brighter than `deepSand` in absolute terms and still darker than the
-    /// turquoise water it is seen through, because that relationship is what makes it read as
-    /// ground rather than as a light source.
-    static let reefSand = Substrate(base: (0.330, 0.296, 0.236),
-                                    grainTints: [],
-                                    grainContrast: 0.090,
-                                    grainRadius: 0.6...2.0,
-                                    grainCount: 2600,
-                                    tileSize: 0.70,
-                                    roughness: 0.92)
-
-    /// Aquarium gravel: separate coloured stones, not a granular surface.
-    ///
-    /// Three things distinguish it from sand and all three had to be pushed much further than
-    /// the obvious values before any of them read.
-    ///
-    /// **Coverage.** At 520 grains the stones were isolated bright dots on a darker ground, and
-    /// isolated dots at this scale are the definition of confetti. 1300 grains at this radius is
-    /// about 1.4x overdraw — a complete mosaic, where the ground between the stones barely shows
-    /// and the surface reads as *a bed of stones* rather than as speckle on dirt.
-    ///
-    /// **Size.** Real aquarium gravel is 3–6 mm, and at 3 mm a stone is under two pixels even in
-    /// a tank seen from two metres — the near floor came back as coloured static. What the eye
-    /// needs is a grain it can resolve, so this is pebble gravel: 0.55 m per 256² tile makes a
-    /// 3–6.5 texel grain about 13–28 mm across, which is a size a large display tank plausibly
-    /// uses and which survives the mip chain instead of shimmering through it. The tile is sized
-    /// against the *aquarium* tank's two-metre reach; the same stones in an ocean tank would be
-    /// too small to resolve, which is one more reason gravel is not a seabed.
-    ///
-    /// **Palette, in luminance and in hue.** A first pass spanned cream 0.33 down to basalt
-    /// 0.075 — a four-to-one luminance range — and that is what first made it confetti rather
-    /// than gravel. Compressing it to about two-to-one was not enough on its own: five tints
-    /// spread round the wheel still read as rainbow speckle at full frame, because it is the
-    /// *number of distinct hues* the eye counts, not their intensity. Real aquarium gravel is
-    /// two or three tints plus naturals, so this is one blue family in two values, one warm
-    /// accent, and two naturals. The warm accent is what keeps it from looking like blue sand;
-    /// a second one is what made it confetti. Everything is muted well below what a bag of
-    /// gravel looks like in air, because it is seen through saturated blue water under a hard
-    /// overhead lamp.
-    static let gravel = Substrate(base: (0.135, 0.150, 0.185),
-                                  grainTints: [(0.098, 0.145, 0.300),   // cobalt
-                                               (0.120, 0.190, 0.265),   // pale cobalt
-                                               (0.205, 0.160, 0.150),   // terracotta
-                                               (0.215, 0.215, 0.205),   // pale natural
-                                               (0.105, 0.112, 0.125)],  // basalt
-                                  grainContrast: 0.030,
-                                  grainRadius: 3.0...6.5,
-                                  grainCount: 1300,
-                                  tileSize: 0.55,
-                                  roughness: 0.62)
-}
-
 enum TankFloor {
-    /// A plane in the XZ plane at the seabed node's own origin, running from the camera out
-    /// past the fog. Its parent carries the height, which is where the drawable's aspect ratio
-    /// gets into it — see `Tank.floorY(aspect:)`.
+    /// The substrate, as one node: the surface, plus its cross-section where the tank has a
+    /// front pane to press it against.
+    ///
+    /// Both sit in the seabed node's own space, whose origin is the top of the bed — the parent
+    /// carries the height, which is where the drawable's aspect ratio gets into it. See
+    /// `Tank.floorY(aspect:)`.
     static func node(_ substrate: Substrate, tank: Tank) -> SCNNode {
-        let depth = CGFloat(tank.floorFarDepth)
+        let maps = SubstrateTexture.maps(substrate)
+        let node = SCNNode()
+        node.addChildNode(surface(substrate, maps: maps, tank: tank))
+        if let glassDepth = tank.glassDepth {
+            node.addChildNode(section(substrate, tank: tank, glassDepth: glassDepth))
+        }
+        return node
+    }
+
+    // MARK: - The surface
+
+    /// A plane in the XZ plane running from the front pane — or from the camera, in open water
+    /// — out past the fog.
+    private static func surface(_ substrate: Substrate, maps: SubstrateTexture.Maps,
+                                tank: Tank) -> SCNNode {
+        let near = CGFloat(tank.floorNearDepth)
+        let depth = CGFloat(tank.floorFarDepth) - near
         // Comfortably wider than the frustum is at the floor's far edge, so the floor never
         // ends inside the frame — on any drawable shape, since a wider one only makes the
         // frustum shorter. Derived rather than fixed because a two-metre tank given the
@@ -128,15 +53,9 @@ enum TankFloor {
         plane.heightSegmentCount = 24
 
         let material = plane.firstMaterial ?? SCNMaterial()
-        material.lightingModel = .physicallyBased
-        material.diffuse.contents = tile(substrate)
-        material.diffuse.wrapS = .repeat
-        material.diffuse.wrapT = .repeat
-        material.diffuse.mipFilter = .linear
-        material.diffuse.contentsTransform = SCNMatrix4MakeScale(
-            width / substrate.tileSize, depth / substrate.tileSize, 1)
+        apply(maps, to: material, tiles: (width / substrate.tileSize,
+                                         depth / substrate.tileSize))
         material.roughness.contents = substrate.roughness
-        material.metalness.contents = 0.0
         // The floor is lit from above and never from behind; a back face would only ever be
         // seen through it by a bug, and culling it halves the fill for the largest surface in
         // the tank.
@@ -145,68 +64,152 @@ enum TankFloor {
 
         let node = SCNNode(geometry: plane)
         // The plane is authored in XY; -π/2 about X lays it down with its own +Y running into
-        // the screen, so offsetting by half its depth puts its near edge under the camera.
+        // the screen, so offsetting by half its depth puts its near edge at the pane.
         node.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
-        node.position = SCNVector3(0, 0, -Float(depth) / 2)
+        node.position = SCNVector3(0, 0, -Float(near + depth / 2))
         return node
     }
 
-    /// A seamless tile of grain.
+    // MARK: - The cross-section
+
+    /// The bed in section, standing against the front pane.
     ///
-    /// Generated rather than shipped for the same reason the marine snow sprite is: an asset
-    /// that has to stay in the bundle and in step with the code is a second thing to get wrong,
-    /// and this one is a few thousand ellipses.
+    /// This is the detail that says "aquarium" faster than anything else in the tank: in a
+    /// photograph of a real one, the bottom of the frame is not the *top* of the gravel but a
+    /// band of it cut open where it meets the glass. `Tank.glassDepth` explains why it needs the
+    /// viewer to stand back from the pane; this is what fills the gap that leaves.
     ///
-    /// Grain only, and deliberately no broad mottling. Blotches wider than a few texels are the
-    /// frequency the eye locks onto, and this tile repeats about twenty-five times across the
-    /// floor: a first pass with 20–50 px blotches drew unmistakable stripes converging into the
-    /// distance. Anything low-frequency the floor wants has to come from geometry or from a
-    /// second, unrepeated layer — never from inside the tile.
-    private static func tile(_ substrate: Substrate, size: CGFloat = 256) -> NSImage {
-        var rand = Rand(seed: 0x5A_4D_10)
-        let image = NSImage(size: CGSize(width: size, height: size))
-        image.lockFocus()
+    /// Its own geometry rather than a textured plane, for the crest. A dead-straight top edge
+    /// reads as a printed strip laid across the frame — the one thing a bed of loose stones
+    /// never has — and the crest can only ever rise, never dip. A dip would expose the water
+    /// behind it, because every part of the surface that is drawn at all projects *above* this
+    /// line; a rise is just gravel heaped against the pane, which is what it is.
+    private static func section(_ substrate: Substrate, tank: Tank,
+                                glassDepth: Float) -> SCNNode {
+        let maps = SubstrateTexture.maps(substrate, face: .crossSection)
+        let width = CGFloat(2.5 * tank.halfWidth(atDepth: glassDepth))
+        let height: CGFloat = CGFloat(sectionHeight(tank: tank, glassDepth: glassDepth))
+        // About one stone. Enough that the top edge is loose gravel rather than a ruled line,
+        // and no more — the crest eats the band it sits on top of, and at twice this it cost a
+        // fifth of the band's height and started to read as a scalloped border.
+        let crestCeiling: CGFloat = substrate.tileSize * 0.025
+        let crest: CGFloat = min(height * 0.1, crestCeiling)
 
-        NSColor(calibratedRed: substrate.base.red, green: substrate.base.green,
-                blue: substrate.base.blue, alpha: 1).setFill()
-        NSRect(x: 0, y: 0, width: size, height: size).fill()
+        let geometry = strip(width: width, height: height, crest: crest)
+        let material = geometry.firstMaterial ?? SCNMaterial()
+        apply(maps, to: material, tiles: (width / substrate.tileSize,
+                                         height / substrate.tileSize))
+        // Stones against wet glass are the glossiest surface in the tank's lower half, and the
+        // small amount of specular this buys is most of what stops the band reading as a matte
+        // painted skirting board.
+        material.roughness.contents = substrate.roughness * 0.78
+        material.isDoubleSided = false
+        geometry.materials = [material]
 
-        for _ in 0..<substrate.grainCount {
-            let radius = CGFloat(rand.inRange(Float(substrate.grainRadius.lowerBound),
-                                              Float(substrate.grainRadius.upperBound)))
-            let shade = CGFloat(rand.inRange(Float(-substrate.grainContrast),
-                                             Float(substrate.grainContrast)))
-            grain(&rand, substrate, size: size, radius: radius, shade: shade)
-        }
-
-        image.unlockFocus()
-        return image
+        let node = SCNNode(geometry: geometry)
+        // Leaned back a little. A bed does slump where it meets the glass, and — the reason it
+        // is worth doing — this look's key is within twelve degrees of vertical, so a truly
+        // vertical face would take almost none of it and the band would go to a black bar.
+        node.eulerAngles = SCNVector3(sectionLean, 0, 0)
+        node.position = SCNVector3(0, 0, -glassDepth)
+        return node
     }
 
-    /// Draws one grain, repeated across whichever edges of the tile it overlaps.
+    /// Enough to lift the face out of the key's shadow without turning the cut into a ramp. A
+    /// bed does slump where it meets the glass, so some of this is real; past about twenty
+    /// degrees it stops reading as a section through gravel and starts reading as a bank of it.
+    private static let sectionLean: Float = 16 * .pi / 180
+
+    /// How far down the band has to reach.
     ///
-    /// Without the wrap the tile's own edges clip every grain that crosses them, and because the
-    /// texture repeats about twenty-five times across the floor the clipped edges line up into a
-    /// visible grid — the one artefact that gives a tiled ground plane away instantly.
-    private static func grain(_ rand: inout Rand, _ substrate: Substrate, size: CGFloat,
-                              radius: CGFloat, shade: CGFloat) {
-        let x = CGFloat(rand.next()) * size
-        let y = CGFloat(rand.next()) * size
-        let tint = substrate.grainTints.isEmpty
-            ? substrate.base
-            : substrate.grainTints[min(substrate.grainTints.count - 1,
-                                       Int(rand.next() * Float(substrate.grainTints.count)))]
-        // A gravel stone is opaque; a sand grain is a shade of the ground it sits in, so it is
-        // laid down short of opaque and allowed to blend with it.
-        let alpha: CGFloat = substrate.grainTints.isEmpty ? 0.8 : 1.0
-        NSColor(calibratedRed: max(0, tint.red + shade),
-                green: max(0, tint.green + shade),
-                blue: max(0, tint.blue + shade * 0.8), alpha: alpha).setFill()
-        for dx in [-size, 0, size] where abs(x + dx - size / 2) < size / 2 + radius {
-            for dy in [-size, 0, size] where abs(y + dy - size / 2) < size / 2 + radius {
-                NSBezierPath(ovalIn: NSRect(x: x + dx - radius, y: y + dy - radius,
-                                            width: radius * 2, height: radius * 2)).fill()
+    /// It has to clear the bottom of the frame, and where that is depends on the drawable's
+    /// shape: a *narrower* drawable has a taller frustum and needs more of it. The height is
+    /// therefore sized for a drawable far taller than any this will meet, because the
+    /// alternative is rebuilding this geometry on every reshape — and everything below the
+    /// frame is outside the frustum and costs nothing to carry.
+    private static func sectionHeight(tank: Tank, glassDepth: Float) -> Float {
+        let drop = (glassDepth - tank.floorEntryDepth) * tank.halfFOVTangent
+        return drop / 0.55 / cos(sectionLean)
+    }
+
+    /// A quad with a lumpy top edge, authored with its top at y = 0 so the node's own rotation
+    /// leans it about that edge rather than about its middle.
+    private static func strip(width: CGFloat, height: CGFloat, crest: CGFloat) -> SCNGeometry {
+        var rand = Rand(seed: 0x6C_3E_A1)
+        // Enough columns that the crest is a lumpy edge rather than a scalloped one. Only about
+        // a quarter of the width is ever on screen, so this is finer than it looks.
+        let columns = 160
+        // Incommensurable wavelengths, so the crest does not repeat across the visible width
+        // and give the strip away as a waveform.
+        let waves = (0..<4).map { index in
+            (frequency: Float(2.3 + 3.1 * Float(index) + rand.inRange(0, 1.7)),
+             phase: rand.inRange(0, 2 * .pi),
+             amplitude: rand.inRange(0.35, 1.0) / Float(index + 1))
+        }
+        let total = waves.reduce(Float(0)) { $0 + $1.amplitude }
+
+        var vertices: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var uvs: [CGPoint] = []
+        var indices: [Int32] = []
+        for column in 0...columns {
+            let along = Float(column) / Float(columns)
+            var wave: Float = 0
+            for entry in waves {
+                wave += entry.amplitude * sin(entry.frequency * along * 2 * .pi + entry.phase)
+            }
+            // Mapped to [0, 1] and never below it, plus a little per-column noise so the edge
+            // is grainy rather than smooth. Only up: see the note on `section`.
+            let lift = min(max((wave / total + 1) * 0.5, 0), 1)
+                * (1 - 0.35 * rand.next())
+            let x = Float(width) * (along - 0.5)
+            let top = Float(crest) * lift
+            vertices.append(SCNVector3(x, top, 0))
+            vertices.append(SCNVector3(x, -Float(height), 0))
+            normals.append(SCNVector3(0, 0, 1))
+            normals.append(SCNVector3(0, 0, 1))
+            // v runs 0 at the nominal top to 1 at the bottom, so once the material's tiling is
+            // applied the stones are anchored to the bed rather than stretched by the crest.
+            uvs.append(CGPoint(x: CGFloat(along), y: CGFloat(-top / Float(height))))
+            uvs.append(CGPoint(x: CGFloat(along), y: 1))
+            if column < columns {
+                let base = Int32(column * 2)
+                indices += [base, base + 1, base + 2, base + 2, base + 1, base + 3]
             }
         }
+
+        return SCNGeometry(sources: [SCNGeometrySource(vertices: vertices),
+                                     SCNGeometrySource(normals: normals),
+                                     SCNGeometrySource(textureCoordinates: uvs)],
+                           elements: [SCNGeometryElement(indices: indices,
+                                                         primitiveType: .triangles)])
+    }
+
+    // MARK: - Materials
+
+    /// Wires a generated surface onto a material, tiled so its stones come out the size the
+    /// substrate says they are whatever the geometry's own extent happens to be.
+    private static func apply(_ maps: SubstrateTexture.Maps, to material: SCNMaterial,
+                              tiles: (across: CGFloat, along: CGFloat)) {
+        let transform = SCNMatrix4MakeScale(tiles.across, tiles.along, 1)
+        material.lightingModel = .physicallyBased
+        tile(material.diffuse, with: maps.diffuse, transform: transform)
+        if let normal = maps.normal { tile(material.normal, with: normal, transform: transform) }
+        material.metalness.contents = 0.0
+    }
+
+    /// The floor is seen almost edge-on, so its texture is compressed to a fraction of its
+    /// height on screen while keeping its full width. Isotropic mip selection has to pick one
+    /// level for both axes and picks the blurrier one, which erased the near gravel completely:
+    /// the stones the tile went to such lengths to draw arrived as horizontal smears. This is
+    /// the single line that decides whether any of that work is visible.
+    private static func tile(_ property: SCNMaterialProperty, with contents: NSImage,
+                             transform: SCNMatrix4) {
+        property.contents = contents
+        property.wrapS = .repeat
+        property.wrapT = .repeat
+        property.mipFilter = .linear
+        property.maxAnisotropy = 16
+        property.contentsTransform = transform
     }
 }

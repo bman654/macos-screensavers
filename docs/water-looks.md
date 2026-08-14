@@ -14,6 +14,16 @@ AQUARIUM_STYLE=shallowReef AQUARIUM_SEED=7 \
   tools/run-saver.swift Aquarium --size 1600x900 --seconds 4 --screenshot /tmp/reef.png
 tools/water-luminance.py /tmp/reef.png
 tools/water-luminance.py --entry-depth 2.25 /tmp/aquarium.png   # the aquarium's own tank
+AQUARIUM_STYLE=aquarium AQUARIUM_GRAVEL=neon AQUARIUM_SEED=42 \
+  tools/run-saver.swift Aquarium --size 1600x900 --seconds 3 --screenshot /tmp/tank.png
+tools/crop.py /tmp/tank.png --out /tmp/band.png --band     # the substrate, at 1:1
+```
+
+Both Python tools want the repository's own interpreter, which is not tracked:
+
+```bash
+uv venv --python 3.14.3 .venv
+uv pip install --python .venv/bin/python numpy scipy pillow
 ```
 
 `AQUARIUM_STYLE` is `aquarium`, `shallowReef`, `deepOcean` or `random`, defaulting to
@@ -252,47 +262,142 @@ which was never true of a glass box anyway.
 
 #### The gravel
 
-`Substrate` gained a `grainTints` palette, because one base colour plus a monochrome shade
-offset can only make a *material*, and coloured gravel is several materials at once. An empty
-list means "the grains are the same stuff as the ground between them", which is what sand is,
-so the two ocean looks are unaffected.
+The aquarium is the only look seen from **outside**, through a pane of glass, and the substrate
+is where that has consequences. It is drawn by three files the ocean barely touches:
+`Substrate` selects the surface, `GravelPalette` is the catalogue of colours,
+`SubstrateTexture` draws the tiles, and `TankFloor` builds both faces of the bed.
 
 ```
-base                 0.135, 0.150, 0.185
-tints  cobalt        0.098, 0.145, 0.300
-       pale cobalt   0.120, 0.190, 0.265
-       terracotta    0.205, 0.160, 0.150
-       pale natural  0.215, 0.215, 0.205
-       basalt        0.105, 0.112, 0.125
-grainContrast 0.030   grainRadius 3.0...6.5   grainCount 1300
-tileSize 0.55 m        roughness 0.62
+tileSize 0.55 m   grainRadius 6...13 texels of 512   grainCount 2200   relief 0.62
+grainContrast 0.30 (multiplicative)                  roughness 0.55
+targetLuminance 0.0348 linear    chroma 1.75    warmth 1.30, 1.03, 0.86
+substrateBand 0.11 of the frame's height  -> glass at 1.282 x floorEntryDepth = 2.89 m
+section exposure 3.30x   lean 16 deg   crest 0.0138 m
 ```
 
-Four things had to be pushed much further than the obvious values before it stopped reading as
-coloured static, and all four are worth keeping if these numbers are ever revisited:
+**The bed is stones, not speckle, and the difference is a height buffer.** Each stone is
+splatted as an irregular flattened dome into a 512² height field and only wins the texels where
+it stands *above* what is already there, so overlapping stones occlude each other the way stones
+in a bag do. Three consequences worth keeping:
 
-1. **Coverage, which mattered most.** At 520 grains the stones were isolated bright dots on a
-   darker ground, and isolated dots at this scale are the definition of confetti. 1300 grains at
-   this radius is about 1.4x overdraw — a complete mosaic, where the ground between the stones
-   barely shows and the surface reads as *a bed of stones* rather than as speckle on dirt.
-2. **Size, which is the one number the tank rework moved.** Real aquarium gravel is 3–6 mm, and
-   at 3 mm a stone is under two pixels — the floor comes back as coloured static. What the eye
-   needs is a grain it can resolve, so this is pebble gravel. It was 1.25 m per 256² tile, a
-   27–58 mm stone, against an aquarium framed like a seascape; the tank now stands its floor at
-   2.25 m rather than 6.2 m, which is 2.3x closer, and the same stones read as boulders. 0.55 m
-   per tile puts a 13–28 mm stone back at the *on-screen* size the palette was tuned against,
-   and closer to what a large display tank actually holds. It still survives the mip chain
-   instead of shimmering through it. Unlike everything else here this is not scale-free: it is
-   the aquarium's tank the tile is sized against, which is one more reason gravel is not seabed.
-3. **Compress the luminance range.** The first palette ran cream 0.33 down to basalt 0.075,
-   four to one, and that range is what the eye first read as noise. Compressed to about two to
-   one, the same hues read as different stones.
-4. **Compress the hue spread too.** Compressing luminance was not enough on its own: five tints
-   spread round the wheel — cobalt, teal, cream, terracotta, basalt — still read as rainbow
-   speckle at full frame, because what the eye counts is the *number of distinct hues*, not
-   their intensity. Real aquarium gravel is two or three tints plus naturals, so this is one
-   blue family in two values, one warm accent, and two naturals. The warm accent is what keeps
-   it from looking like blue sand; a second one is what made it confetti.
+- **Coverage past 1x now buys packing rather than noise.** The old tile painted each grain over
+  the last, so more grains only meant later grains winning; 2200 stones is about 2.2x overdraw
+  and produces a closed bed with shadow down the gaps.
+- **The height field becomes a normal map**, which is the single change that made any palette
+  work. Nothing else in the tile responds to the lamp at all. The first gravel was flat-shaded
+  ellipses and no amount of colour tuning could make a flat disc read as a pebble.
+- **Crevice shading is baked into the albedo; directional shading is not.** Curvature — how far
+  a texel sits below its own neighbourhood — does not depend on where the lamp is, so it is safe
+  to bake and stays right when a caustic gobo starts modulating the key. Bake the directional
+  half and a floor lit from a new angle carries the old angle's shadows.
+
+**Size is the one number that is not scale-free.** Real aquarium gravel is 3–6 mm and at 3 mm a
+stone is under two pixels — the floor comes back as coloured static. 0.55 m per tile makes a
+13–28 mm stone, which is a size a large display tank plausibly uses and which the eye can
+resolve. It is sized against *the aquarium's* 2.25 m floor entry; the same stones on open seabed
+would be too small to see, which is one more reason gravel is not a substitute for sand.
+
+##### The cross-section, and the camera move it needed
+
+In a photograph of a real tank the bottom of the frame is not the top of the gravel — it is a
+band of gravel **cut open** where the bed meets the glass. Reproducing it turned out to need one
+change to the tank rather than a texture: **the viewer has to stand back from the pane.**
+
+The floor meets the bottom of the frame at `floorEntryDepth` and everything nearer is below the
+frame, so a camera sitting on the glass — as this one always did — can never see the bed in
+section however deep the bed is. `Tank.substrateBand` states how much of the frame's height the
+section should fill, and `Tank.glassDepth` turns that into where the pane stands: substrate at
+depth *d* lands at NDC y = `-floorEntryDepth / d`, so a pane at `floorEntryDepth / (1 - 2f)`
+leaves exactly *f* of the frame below it. It is aspect-invariant for the same reason every other
+number here is, and 32:9 and 16:9 renders show the same band.
+
+Three things follow, and all three are load-bearing:
+
+- **The floor is drawn only from the pane outward.** Floor nearer than the glass is on the
+  viewer's side of it and paints over the section it is supposed to sit behind.
+- **The reef's near edge moves to the pane too.** `reefNearDepth` takes the glass as a floor.
+  That cost the aquarium a quarter of its reef area, so `propDensity` went 1.7 → 2.3 to hold the
+  tank as full as it was — density is per unit of floor, so less floor means asking for more.
+- **The crest may only rise, never dip.** The section's top edge is lumpy geometry rather than a
+  ruled line, because a bed of loose stones does not have a straight edge. But every part of the
+  surface that is drawn projects *above* that line, so a dip would expose open water behind it.
+
+**11% of the frame is also close to the ceiling.** The lowest a fish is ever placed is 0.62 of
+the frame's half-height plus a 0.07 bob, so a band past about 15% would start putting fish in
+front of gravel they are supposed to be swimming behind.
+
+##### The palettes, and the two rules that make them safe
+
+Twenty-eight of them, drawn per launch off a stream of its own and pinnable with
+`AQUARIUM_GRAVEL`, grouped by the colour scheme each commits to: naturals, single-hue beds,
+two-tone contrast mixes (achromatic, complementary, analogous), and multi-hue — ending with the
+fluorescent bag, which is the one place the hue-count rule is broken on purpose.
+
+- **Value is governed, hue is free, and the governing is of the finished tile.** Every tile is
+  scaled so its mean *linear* luminance lands on `targetLuminance` times the palette's own
+  `brightness`. Contrast within a palette is untouched — it is one scalar over the whole buffer.
+  Normalising the *palette* instead is not good enough: the crevice shading and the coverage
+  darken a tile by amounts that depend on the stone size and the packing, so the delivered floor
+  would land wherever those happened to put it.
+
+  `brightness` was not in the first design and its absence is only visible on a contact sheet of
+  all twenty-eight beds: pinning every palette to *one* mean makes a white-quartz bed and a
+  black-basalt bed normalise to the same number and arrive as the same mid-grey, which is absurd
+  — a bag of white gravel is brighter than a bag of black gravel and that is the difference
+  between them. It costs the bright hues too, because there is no dark yellow that reads as
+  yellow. So the bed's brightness follows the bag's own in-air luminance, compressed to the 0.35
+  power and clamped to 0.55–1.20. A 120:1 spread of bags becomes barely 2:1 on the floor, and the
+  clamp is what the catalogue's coherence rests on: `quartz` and `sunflower` reach it and measure
+  0.88 and 0.84 against `river`'s 0.72 and `obsidian`'s 0.47. At an upper clamp of 1.40 the white
+  bed measured 0.99 and was one rounding away from out-brightening its own water.
+- **The correction for the blue wash is made entirely in chroma.** The near floor is the darkest
+  surface in the tank and on top of it sit the look's blue ambient, its blue lighting environment
+  and about a sixth of the way to fog — all additive, none of which care what the stones are. A
+  bed painted at a real bag's saturation arrives washed: fluorescent pink measured out as dull
+  maroon, neon yellow as olive. Brightness is not the lever, because the coherence rule has that
+  one — but it says nothing whatever about chroma. So `chroma` pushes each stone away from its
+  own grey at constant luminance, and `warmth` puts back the red end first, since blue is what
+  the wash is made of. Neither can move the floor measurement however far they are pushed.
+
+  Two details in `styled()` that both cost a rendered catalogue to find. The push works on the
+  colour's **tint** — what is left after its own grey — and never on the grey itself, because
+  warming a whole colour also warms the slight bias in an off-white stone and then amplifies it,
+  and the quartz bed came out mustard. And the push is **capped at the gamut** rather than
+  clamped after it: clamping a channel to zero rescales a colour unevenly, which is a hue change,
+  and it turned every orange bed into a red one — `tangerine`, `ember` and `harbour` all arrived
+  looking like `cherry`. Scaling the tint by whatever factor keeps every channel in gamut
+  preserves the hue exactly, and says the right thing besides: a colour already at the edge of
+  the gamut cannot be made more saturated, while the naturals — where the wash actually does its
+  damage — still take the full 1.75.
+
+##### Results
+
+Aquarium, seed 42 at 1600x900, against the palette this replaced:
+
+| | near band Y | surface Y | backdrop Y | ratio | near band sRGB |
+|---|---|---|---|---|---|
+| before | 0.0732 | 0.0743 | 0.0987 | 0.74 | 0.196, 0.290, 0.529 |
+| river | 0.0727 | 0.0683 | 0.1006 | **0.72** | 0.247, 0.302, 0.388 |
+| neon | 0.0762 | 0.0696 | 0.1006 | 0.76 | 0.255, 0.318, 0.322 |
+| quartz | | | | 0.88 | |
+| sunflower | | | | 0.84 | |
+| obsidian | | | | 0.47 | |
+
+The ratio is measuring a different surface than it used to — the 1.05–1.29x entry band is now the
+*section*, because that is what occupies the bottom of the frame. What the sRGB column shows is
+the whole point of the chroma work: the river bed delivers a warm neutral where every previous
+gravel delivered blue-grey.
+
+**`monochrome` reports 0.20 and is fine.** A two-to-one mix of black and white stones is bimodal,
+and the band's *median* lands in the black. It is the same class of false reading as deep ocean's
+seed 7, and the same rule applies: a single failing number is a reason to look at the render.
+
+The two ocean looks were re-measured and are unchanged: deep ocean 0.78, shallow reef 0.77–0.82,
+and deep ocean's seed 7 still reports 1.84 for the brain-coral reason recorded above. The sand
+path is byte-for-byte the one they were signed off on, and it is kept separate from the stone
+path on purpose — sand is a *material* whose grains are never resolved, and running it through
+the height-buffer splat would resolve every grain as an object, which is precisely what sand is
+not.
 
 ## Unresolved: the brass never reaches SceneKit
 
@@ -359,10 +464,20 @@ None of the model or bake files were touched — fixing the bake is where this h
   through single levels across tens of rows in the dark blues. It is present in the original
   renders at the same magnitude (blue 34 → 23 across the frame) and is a property of an 8-bit
   drawable, not of these values. Raising the water levels made it slightly *less* visible.
-- **Judge at full frame.** Every problem found here — the seam, the confetti gravel, the grey
-  sand, the vignette eating the ramp — was invisible in the parameters and obvious in a
-  full-frame PNG. The measurements caught none of them; they only confirmed the one thing they
-  were built to check.
+- **Judge at full frame — and then again at 1:1.** Every problem found here — the seam, the
+  confetti gravel, the grey sand, the vignette eating the ramp — was invisible in the parameters
+  and obvious in a full-frame PNG. The measurements caught none of them; they only confirmed the
+  one thing they were built to check. The substrate then added the opposite failure: whether a
+  floor reads as gravel or as coloured static is a question about texels, and a 4K frame shown at
+  2000 px wide has already thrown it away. `tools/crop.py` cuts the region out at 1:1, and states
+  its regions as fractions of the frame for the same reason `water-luminance.py` states its bands
+  as multiples of the entry depth.
+- **The floor is seen almost edge-on, so isotropic mip selection erases it.** The near substrate
+  keeps its full width on screen and is compressed to a fraction of its height, so one mip level
+  has to serve both axes and the blurrier one wins: the stones the tile went to such lengths to
+  draw arrived as horizontal smears, and the whole normal map with them. `maxAnisotropy = 16` on
+  both the diffuse and the normal is the single line that decides whether any of that work is
+  visible. It cost 0.35 ms of GPU time at 4112x2658, which is the cheapest thing in this file.
 - **A measurement calibrated against one tank is not calibrated against another.** Both halves
   of `water-luminance.py` had a size baked into them, and both broke silently when the tank was
   resized rather than reporting anything wrong: the luminance bands were stated in metres

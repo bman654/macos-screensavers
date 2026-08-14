@@ -52,7 +52,13 @@ struct TankStyle {
     let water: WaterLook
 
     /// Draws the style. The ocean's dimensions are part of the draw — see `oceanTank`.
-    static func draw(_ name: TankStyleName, rand: inout Rand) -> TankStyle {
+    ///
+    /// `seed` is the launch's, and is *not* the same thing as `rand`: it is there for the draws
+    /// that must not consume from the launch stream, which is every draw that did not exist when
+    /// the seeded renders in `docs/water-looks.md` were made. Taking a number from `rand` here
+    /// would leave `AQUARIUM_SEED=7` naming a different layout and a different school than it
+    /// named before — silently, because both are plausible tanks.
+    static func draw(_ name: TankStyleName, seed: UInt64, rand: inout Rand) -> TankStyle {
         switch name {
         case .aquarium:
             return TankStyle(
@@ -61,11 +67,23 @@ struct TankStyle {
                 // seascape. An ocean view has decorations receding into the distance; a glass
                 // tank has a back wall two metres away. The wider field of view is the other
                 // half of that — you stand close to an aquarium, not across a reef from it.
-                tank: Tank(fieldOfView: 26, nearDepth: 2.0, farDepth: 6.2),
+                //
+                // The band is the one thing here the ocean cannot have: this is the only look
+                // seen from *outside*, through a pane, so it is the only one where the gravel
+                // is cut open across the bottom of the frame. Eleven percent is a real bed
+                // seen from a real distance, and it is also as deep as it can go — the lowest a
+                // fish is ever placed is 0.69 of the frame's half-height, and a band past about
+                // 15% would start taking fish in front of gravel they are supposed to be
+                // swimming behind.
+                tank: Tank(fieldOfView: 26, nearDepth: 2.0, farDepth: 6.2,
+                           substrateBand: 0.11),
                 // Nobody keeps a sparse aquarium. Less depth, more density is the whole brief:
                 // the reef band is a third of the metres across, and it holds nearly twice the
                 // ornaments — which is affordable only because `propScale` shrank them all.
-                propDensity: 1.7,
+                // Raised from 1.7 when the pane pushed the reef's near edge back to the glass:
+                // the band it stands in lost a quarter of its area, and density is per unit of
+                // floor, so holding the tank as full as it was means asking for more of it.
+                propDensity: 2.3,
                 // One showpiece and a crowd around it. Three anchors — the wreck, the arch and
                 // the pillars together — fill a tank this size on their own, and every small
                 // prop drawn afterwards then fails to find room.
@@ -78,7 +96,8 @@ struct TankStyle {
                 // distinct imports than the ocean does. It is the one place the load budget is
                 // spent on a look, and it is deliberate.
                 distinctProps: 11,
-                substrate: .gravel,
+                // Which gravel, drawn per launch, off a stream of its own — see `draw`.
+                substrate: .gravel(GravelPalette.forLaunch(seed: seed)),
                 water: .aquarium)
         case .shallowReef, .deepOcean:
             // The two ocean styles are one tank seen at two depths: same dimensions, same

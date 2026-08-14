@@ -113,7 +113,12 @@ is three copies of the library in memory to save a third of a second.
 
 - **Aquarium.** Reads like a lit glass tank: a bright, cool, fluorescent-blue key from
   directly overhead, water tinted a noticeably more saturated blue than the ocean look, and
-  **coloured aquarium gravel** underfoot instead of sand.
+  **coloured aquarium gravel** underfoot instead of sand — a packed bed of separate stones with
+  real relief, in one of twenty-eight palettes drawn per launch, and cut open in section across
+  the bottom of the frame where it meets the front pane. That last part is the one place a style
+  reaches into the tank's geometry rather than its surface, and it is unavoidable: seeing a bed
+  in section requires the viewer to stand *outside* the glass, which is a camera fact rather
+  than a texture one. `Tank.substrateBand` is the whole of the reach, and the ocean passes nil.
 - **Real ocean.** What exists today: sand, muted blue-green water, daylight filtering down
   from the surface. This became **two** styles once it was art-directed — `shallowReef` and
   `deepOcean` — because the depth the water is seen from changes everything about it and

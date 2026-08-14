@@ -20,3 +20,7 @@ spikes/**/out/
 
 # Agent worktrees are scratch, not source
 .claude/worktrees/
+
+# The image-inspection tools' interpreter. `uv venv --python 3.14.3 .venv` then
+# `uv pip install --python .venv/bin/python numpy scipy pillow`.
+.venv/
