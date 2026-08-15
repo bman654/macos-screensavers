@@ -34,13 +34,12 @@ The badge is a **SpriteKit overlay** (`SCNRenderer.overlaySKScene`), which is ve
 composite over a manually-encoded `render(atTime:viewport:commandBuffer:passDescriptor:)` pass —
 so it is untouched by the water's fog, the camera's HDR tone mapping and the bloom.
 
-**`showsSeed` defaults on for now and must be flipped off before ship.** The user's instruction is
-that the badge stays in as a debugging tool and stops being the default once the tank has finished
-being debugged. It is on today because the two halves only work together while tuning: a seed you
-cannot see is a seed you cannot type back in. Flipping it is one line in
-`AquariumSettings.default` and nothing else has to change — the checkbox, `AQUARIUM_SHOW_SEED` and
-the field all keep working either way. It also costs 2.0 ms of GPU at 2056x1329, which is the
-other reason not to leave it on; see the overlay trap below.
+**`showsSeed` defaults on, and that is settled — it ships as an option rather than as a debugging
+aid to be removed.** Judged by the user: "it's an option, if people want to see it they can, it
+costs a millisecond or two out of the budget, and if they don't want to see it they can turn it off
+and save the budget for other things." The measured cost is 2.0 ms of GPU at 2056x1329 with 60 fps
+unaffected — see the overlay trap below — and turning the switch off removes all of it, because the
+overlay is not built at all when it is off.
 
 **It is installed and confirmed in System Settings.** Every option worked, the thumbnail
 changed on each selection, and full-screen Preview ran — so the sheet, the live preview inside
@@ -412,6 +411,54 @@ finished end to end) alongside the behaviour counts. A run whose `crossings` is 
 `AQUARIUM_PASSAGE_MARKERS=1` puts a coloured ball on every waypoint — green first, red last — and
 prints the route in reef space. Both are kept deliberately; see the traps below.
 
+### The exit twirl: a fish is released at the passage's mouth, not asked to arrive at it
+
+Judged on the installed build: the arch "works fairly well", fish and the eel both go through it,
+and the wreck is "pretty reliable". The fault left was at the *end* of a crossing — a fish would
+come out of the wreck's breach, turn around, start back in, turn again, and spin like that for a
+couple of seconds before being released and wandering off. The eel did a smaller version at the
+arch and clipped the rock on the 180.
+
+Two causes, both at the last waypoint:
+
+- **The last waypoint was arrived at rather than left by.** It is an approach point in open water,
+  not a hole, and the arrival test asked the fish to come within a distance of it — so a fish that
+  had already swum clear had to turn round and go back for it, overshoot, and turn again. Crossing
+  the *plane* through it is enough now, with no lateral condition: the only way to satisfy that is
+  to keep going forward, so the exit can never ask for a reversal however far off-axis the fish
+  drifted on the way out.
+- **A fresh decision knows nothing about the wreck the fish is standing in the mouth of.** Ending a
+  transit dropped straight into `choose`, and about half of its headings pointed the animal back
+  the way it came. Prop avoidance does not rescue it either — the term that would push it clear is
+  cut to 15% for a passable prop, deliberately, so that fish can get near enough to use the hole.
+  A completed route now hands the fish the route's own exit heading and 1.8–3.0 s of commitment to
+  it. A timed-out one does not: that fish is pressed against geometry, and driving it further along
+  a line it has already failed to follow is the wrong instinct.
+
+Measured over 145 s, total yaw turned in the three seconds after a crossing, and the straightness
+of the path in that window:
+
+```
+                    before                          after
+aquarium/5     159, 107, 10, 4, 4 deg          17, 6, 6, 5, 4, 4 deg
+               straightness 0.81 – 0.98        straightness 0.98 – 0.99
+```
+
+Two of the five exits before were half-turns, and two more covered 2 and 6 cm in three seconds —
+a fish that had effectively stopped. None of that survives.
+
+**Crossings per launch fall on some layouts, and that is the fix working rather than a
+regression.** shallowReef/42 went from three crossings to one — but the census shows three
+transits *entered* before and one after, so completion is 100% both ways. A fish that leaves
+properly ends up further from the prop and comes back into range less often, which is exactly the
+"wander off and go somewhere" that was asked for. The completion rate is the number to watch here,
+not the count.
+
+**Known and accepted:** fish still ride high through the wreck and clip the plank over the breach,
+and sometimes clip the collapsed deck on the way out. Judged as liveable — "can't make this
+perfect". The cause is the wreck's route climbing 15 cm over 29 cm of run while the height
+controller lags; the arch, whose route is level, does not show it.
+
 ### A fish threading a hole may still clip it, and the margin is bought at admission
 
 The user's third report was **a large fish whose belly went through the crown of the rock arch,
@@ -505,18 +552,15 @@ Known and unresolved:
 
 ## Next, in order
 
-1. **Turn the seed badge off by default**, once the tank has stopped being debugged. One line in
-   `AquariumSettings.default`. Listed first because it is the only thing here that ships a
-   debugging aid to a user, and it is trivial enough to be forgotten.
-2. **Judge the passages on the installed build.** The eel and the crossings are measured and
+1. **Judge the passages on the installed build.** The eel and the crossings are measured and
    rendered but not yet seen by the user at full screen. `SwimPassage.fitMargin` (0.7) is the knob
    if a fish still clips: raising it refuses more species, lowering it admits more and risks the
    belly through the crown again.
-3. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-4. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-5. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
+4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
    last: the picture should be a frame of the finished tank, so shooting it before the
    caustics and the fish AI land means shooting it twice.
 
@@ -626,6 +670,14 @@ Known and unresolved:
   crossed the rock arch with its belly through the crown. Buy the margin at admission — tightening
   the *arrival* test instead is worse, because a fish that cannot tick off a waypoint does not
   leave, it sits in the hole until the transit times out.
+- **The last waypoint of a route must be left by, not arrived at.** Asking a fish to reach a point
+  it has already swum past is asking it to turn round, and a transit cannot be abandoned partway,
+  so it turns round, overshoots, and repeats until the timeout. Any waypoint with nothing beyond it
+  wants a plane test, not a distance test.
+- **A fresh decision taken in a doorway does not know it is in a doorway.** `choose` has no term
+  for "just came out of a wreck", so half its headings sent the fish back in — and the prop
+  repulsion that would have prevented it is deliberately cut to 15% on exactly the props that have
+  holes. A behaviour that ends somewhere specific has to hand the next one an intent.
 - **A lookahead stated in body lengths silently disables pure pursuit.** Half a body length is
   24 cm for the moray against route legs 7 cm long, so the carrot clamped to the far end of every
   segment and the follower quietly became the thing it replaced — aiming straight at the waypoint.

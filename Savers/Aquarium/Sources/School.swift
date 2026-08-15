@@ -358,13 +358,17 @@ final class School {
                 let routeActive = advanceTransit(fish, bounds: bounds)
                 if !routeActive || fish.brain.remaining <= 0 {
                     // Finished, as opposed to given up on. `advanceTransit` returns false both
-                    // ways, and the difference between them is the whole measurement.
+                    // ways, and the difference between them is the whole measurement — and it
+                    // decides whether the fish is sent on out of the passage or simply released.
+                    var leaving: Float?
                     if !routeActive, let index = fish.brain.passage,
                        passages.indices.contains(index),
                        fish.brain.waypoint >= passages[index].waypoints.count {
                         routesCrossed += 1
+                        leaving = exitYaw(of: passages[index],
+                                          reversed: fish.brain.passageReversed)
                     }
-                    endTransit(fish)
+                    endTransit(fish, leaving: leaving)
                 }
             }
             if fish.brain.remaining <= 0 {
@@ -433,9 +437,6 @@ final class School {
         let fromWaypoint = -offset
         let along = simd_dot(fromWaypoint, axis)
         let lateral = simd_length(fromWaypoint - axis * along)
-        // The last waypoint is an approach point in open water rather than a hole, so a fish is
-        // allowed to simply touch it — otherwise leaving the route depends on overshooting a
-        // point that has nothing beyond it to aim at.
         // Deliberately the full radius rather than `radius - girth`, though the fish is not a
         // point and that subtraction is what containment really means. Held to `radius - girth`
         // the eel could not satisfy it at all — crossings on `AQUARIUM_SEED=4` went from three per
@@ -444,9 +445,21 @@ final class School {
         // until the transit times out. The body margin is bought at admission instead, where it
         // costs a species the route rather than costing every route its fish — see
         // `SwimPassage.admits`.
+        //
+        // **The last waypoint is left by, not arrived at, and that is the whole of the twirl.**
+        // It is an approach point in open water rather than a hole, and asking a fish to come
+        // within a distance of it means a fish that has already swum clear of the prop must turn
+        // round and go back for it — then overshoot, turn again, and repeat until the timeout
+        // releases it. Reported as fish emerging from the wreck's breach and spinning through a
+        // full circle for several seconds before wandering off, with the eel doing the same at the
+        // arch and clipping the rock on the way round. Crossing the plane through it is enough:
+        // the only way to satisfy that is to keep going forward, so the exit cannot ask for a
+        // reversal however far off-axis the fish drifted on the way out.
         let isExit = fish.brain.waypoint == count - 1
-        if (lateral < route.radius && along > 0)
-            || simd_length(offset) < (isExit ? max(route.radius, fish.girth * 2) : route.radius) {
+        let reached = isExit
+            ? along > 0 || simd_length(offset) < max(route.radius, fish.girth * 2)
+            : (lateral < route.radius && along > 0) || simd_length(offset) < route.radius
+        if reached {
             waypointsReached += 1
             fish.brain.waypoint += 1
             if fish.brain.waypoint >= count { return false }
@@ -556,7 +569,9 @@ final class School {
         return length > 1e-5 ? direction / length : SIMD3<Float>(0, 1, 0)
     }
 
-    private func endTransit(_ fish: Fish) {
+    /// - Parameter leaving: the heading the route was travelling as the fish came off the end of
+    ///   it, or nil if the transit was abandoned rather than finished.
+    private func endTransit(_ fish: Fish, leaving exitYaw: Float?) {
         fish.brain.passage = nil
         fish.brain.waypoint = 0
         fish.brain.transitElapsed = 0
@@ -565,7 +580,48 @@ final class School {
         fish.brain.passageCooldown = fish.isLurker
             ? rand.inRange(7, 18)
             : rand.inRange(35, 80)
-        fish.brain.remaining = 0
+
+        // **A fish that has just come out of a hull has to be told to keep going.**
+        //
+        // Ending a transit used to drop straight into a fresh decision, and a fresh decision knows
+        // nothing about the wreck the animal is standing in the mouth of — so about half of them
+        // pointed it back the way it came. Prop avoidance does not save it either: the term that
+        // would push it clear is cut to 15% for a passable prop, precisely so that fish can get
+        // near enough to use the hole. The result was the second half of the twirl, and the eel
+        // clipping the arch on a 180 it should never have been allowed to start.
+        //
+        // Continuing along the route's own exit direction for a couple of seconds is the cheapest
+        // honest answer, and it is what the animal would do: something that has committed to
+        // swimming through a wreck does not change its mind in the doorway. Only on a route
+        // actually completed — a transit that timed out has a fish pressed against geometry, and
+        // driving it further along a line it has already failed to follow is the wrong instinct.
+        if let exitYaw {
+            fish.brain.behavior = .cruise
+            fish.brain.targetYaw = exitYaw
+            fish.brain.targetHeight = fish.position.y - tank.floorY(aspect: aspect)
+            fish.brain.pitchBias = 0
+            fish.brain.remaining = rand.inRange(1.8, 3.0)
+            // Committed rather than merely aimed: a heading with no time on it is overwritten by
+            // the next decision on the next frame, which is the behaviour being fixed.
+            fish.brain.turnSign = 0
+        } else {
+            fish.brain.remaining = 0
+        }
+    }
+
+    /// The direction a completed route was travelling as the fish left it, as a yaw.
+    ///
+    /// Taken from the last two waypoints in *traversal* order, so it points out of the passage
+    /// whichever end the fish went in.
+    private func exitYaw(of route: SwimPassage, reversed: Bool) -> Float? {
+        let count = route.waypoints.count
+        guard count >= 2 else { return nil }
+        let last = reversed ? 0 : count - 1
+        let before = reversed ? 1 : count - 2
+        let direction = route.waypoints[last] - route.waypoints[before]
+        let horizontal = SIMD2<Float>(direction.x, direction.z)
+        guard simd_length(horizontal) > 1e-5 else { return nil }
+        return atan2(-horizontal.y, horizontal.x)
     }
 
     /// Turns the brain's intent into a heading, subject to the walls and to what the animal can
