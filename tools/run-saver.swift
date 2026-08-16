@@ -25,6 +25,18 @@ struct Options {
     /// harness that only ever renders one fixed size.
     var resizeTo: NSSize?
 
+    /// How many independent saver views to instantiate in this one process.
+    ///
+    /// macOS builds a saver per display, and this machine mirrors rather than extends, so a
+    /// second live instance is otherwise unreachable here. The extra views are companions:
+    /// they render and animate in their own windows but are never captured, so a screenshot of
+    /// the first one shows whatever process-wide state the saver keeps.
+    ///
+    /// It is an approximation — the real case is one `legacyScreenSaver` per screen with
+    /// different sizes and backing scales — but it is enough to catch anything a saver does
+    /// that assumes it is alone in its process, which is the class of bug audio sits in.
+    var instances = 1
+
     /// Open the saver's `configureSheet` on the host window.
     ///
     /// The alternative is driving System Settings, which is the workflow this tool exists to
@@ -36,12 +48,15 @@ struct Options {
 func usage(program: String) -> String {
     """
     usage: \(program) <Name|path-to.saver> [--preview] [--size WxH] [--seconds N]
-           [--resize WxH] [--configure] [--screenshot out.png]
+           [--resize WxH] [--instances N] [--configure] [--screenshot out.png]
 
       Name                  opens build/Name.saver relative to the repository
       path-to.saver         opens that bundle directly
       --preview             uses a small window and passes isPreview=true
       --size WxH            sets the view size in points
+      --instances N         instantiates the saver N times in one process, to stand in
+                            for the one-instance-per-display case; only the first is
+                            captured
       --seconds N           runs for N seconds (default: 2)
       --resize WxH          reshapes the view halfway through the run, to exercise a
                             saver's response to an aspect-ratio change
@@ -103,6 +118,13 @@ func parseArguments() -> Options {
                 fail("--seconds requires a non-negative number", code: 2)
             }
             options.seconds = seconds
+            index += 2
+        case "--instances":
+            guard index + 1 < arguments.count,
+                  let count = Int(arguments[index + 1]), count >= 1, count <= 8 else {
+                fail("--instances requires a count between 1 and 8", code: 2)
+            }
+            options.instances = count
             index += 2
         case "--configure":
             options.configure = true
@@ -328,6 +350,36 @@ if options.screenshotPath == nil {
 }
 saverView.startAnimation()
 
+// Companion instances for `--instances`. Retained for the life of the process, because a
+// saver view released while still animating is retained by the run loop anyway and goes on
+// drawing invisibly — the leak documented in `Shared/SaverKit/README.md`. Keeping them in an
+// array and stopping them in `finish()` is the same discipline a real host owes them.
+//
+// Never key and never activated, for the reason the capture window is not: this tool runs in
+// tight loops and must not take focus from whatever the developer is typing into.
+let companions: [(view: ScreenSaverView, window: NSWindow)] =
+    (1..<max(1, options.instances)).map { offset in
+        guard let companion = saverType.init(frame: frame, isPreview: options.isPreview) else {
+            fail("\(declaredName).init(frame:isPreview:) returned nil for instance \(offset + 1)")
+        }
+        let companionWindow = NSWindow(contentRect: frame, styleMask: style,
+                                       backing: .buffered, defer: false)
+        companionWindow.isReleasedWhenClosed = false
+        companionWindow.title = "\(declaredName) \(offset + 1)"
+        companionWindow.contentView = companion
+        // Cascaded so an interactive run can see them all; a capture run reads one window's
+        // own content through `SCContentFilter(desktopIndependentWindow:)` and is indifferent.
+        companionWindow.setFrameOrigin(
+            NSPoint(x: window.frame.minX + CGFloat(offset) * 24,
+                    y: max(0, window.frame.minY - CGFloat(offset) * 24)))
+        companionWindow.level = options.screenshotPath == nil
+            ? window.level
+            : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
+        companionWindow.orderFrontRegardless()
+        companion.startAnimation()
+        return (companion, companionWindow)
+    }
+
 // Presented only once the host window is on screen, and tracked because a sheet is its own
 // window: a capture aimed at the host would photograph the saver with a hole in it.
 var sheetWindow: NSWindow?
@@ -378,10 +430,24 @@ func endSheetIfOpen() {
     window.endSheet(sheet)
 }
 
+/// Stops every instance, not just the captured one. A companion left animating keeps the run
+/// loop's strong reference to it and goes on drawing — harmless in a process about to exit,
+/// but the harness should not model the mistake it exists to help find.
+///
+/// A closure rather than a global function: a global one referenced from the capture
+/// completion is a concurrency diagnostic the rest of this file does not carry.
+@MainActor
+let stopAllViews = {
+    saverView.stopAnimation()
+    for companion in companions {
+        companion.view.stopAnimation()
+    }
+}
+
 @MainActor
 func finish() {
     guard let path = options.screenshotPath else {
-        saverView.stopAnimation()
+        stopAllViews()
         endSheetIfOpen()
         application.terminate(nil)
         return
@@ -402,7 +468,7 @@ func finish() {
         DispatchQueue.main.async {
             settleCapture {
                 watchdog.invalidate()
-                saverView.stopAnimation()
+                stopAllViews()
                 endSheetIfOpen()
                 switch result {
                 case .success(let output):

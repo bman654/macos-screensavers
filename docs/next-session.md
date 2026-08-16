@@ -536,11 +536,34 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 ## Next, in order
 
-1. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
-   direction and the three hazards that will not be obvious later.
-2. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+1. ~~**The audio spike.**~~ **Done — a screensaver can make a sound.** Read
+   `spikes/006-saver-audio/README.md` before writing any audio; it is mostly a list of things
+   that look like they work and do not. The headline: **gate audio on the screensaver session,
+   never on the view.** No property of a saver view separates the real screensaver from the
+   picker's thumbnail, because the tile is a *full-screen* view with `isPreview == false`, and an
+   abandoned view renders at 60 fps forever with `window=shown` and `animating=true`. The signal
+   is `com.apple.screensaver.didstart`/`willstop`/`didstop`, registered `.deliverImmediately`
+   (the default withholds them from a process that is never "active"), seeded at startup and
+   allowed to settle, because `didstart` is posted before the host process exists.
+
+   **The finding that is not about audio: `isPreview` is wrong in the picker, for every saver.**
+   The tile is 2056x1329 on a 2056-point screen, so both `ScreenSaverView.isPreview` and
+   SaverKit's width threshold call it a full-screen saver — and the aquarium has therefore been
+   rendering five lights, caustics, god rays, bloom and MSAA into a two-inch thumbnail, several
+   alive at once in the settings pane. This is its own piece of work, wants the aquarium in front
+   of the user, and **the session notification is not the fix for it**: a thumbnail should render
+   cheaply whether or not the screensaver is running. Nothing in SaverKit has been changed yet.
+
+2. **Phase 1 of the audio track: the bubble bed.** Synthesised rather than sampled — a bubble in
+   water is a Minnaert resonator whose frequency follows its radius alone (f·r ≈ 3260 Hz·mm), so
+   the authoring loop is the one this repo already has: edit a Python script, render a WAV, look
+   at it, adjust numbers. The `audio-lens` skill reads a WAV as a spectrogram and numbers, which
+   is how it gets checked without hearing it — but the user is the ear, exactly as they are the
+   eye for the tank. Bake short grains and schedule them stochastically off the launch seed
+   rather than shipping a loop; that answers the bundle-weight hazard outright.
+3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-3. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held
+4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held
    until the tank looked finished so the picture would not have to be shot twice — the caustics,
    the god rays and the fish behaviour have all landed and been signed off, so **that condition is
    now met** and this is only last because it is the smallest. Shoot it with
