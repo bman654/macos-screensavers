@@ -5,6 +5,13 @@ its three looks; extended the same day by the sessions that ran it on a Retina d
 its settings sheet, rebuilt the aquarium's substrate as real gravel, and then relit the tank
 and gave it caustics and god rays.
 
+Extended 2026-08-15 by the session that added seed pinning and the on-screen seed badge, and
+then fixed the fish behaviour the user had judged wrong on the installed build: the eel that
+would not go near the floor, the swim-throughs that were counted but never seen, a wide fish
+clipping the arch it was passing through, and the twirl at the mouth of a passage. **All four
+are fixed and signed off by the user on the installed build.** Start at "The eel lies on the
+floor now" if you are touching the school; the section after it is the one open art question.
+
 ## State
 
 **The aquarium renders as a tank.** A random assortment of fish and decorations is drawn per
@@ -316,9 +323,14 @@ is right: a fish high in the column is not eligible for it.
 
 ## Fish route through the arch and the wreck now
 
+> **Written before the fixes below it.** The design is still the design, but several numbers in
+> this section were superseded on 2026-08-15 — each is marked. Read "The eel lies on the floor now"
+> for what is true.
+
 `SwimPassage` reads the `swim_` waypoints out of the placed reef, and a `transit` behaviour walks
-them. Verified: 4 transits per 120 s in a glass tank, 7 in open water, none stuck. Four things in
-it exist because of specific failure modes, and none is decoration:
+them. ~~Verified: 4 transits per 120 s in a glass tank, 7 in open water, none stuck.~~ **That
+number counted transits *entered*, and every one of them was in fact failing** — see below. Four
+things in it exist because of specific failure modes, and none is decoration:
 
 - **Fit is decided by girth, never by length**, measured from the mesh cross-section —
   `ModelCache.LoadedModel.girth`. The moray is 1.5 m end to end and *thinner through the body*
@@ -331,12 +343,16 @@ it exist because of specific failure modes, and none is decoration:
 - **Prop avoidance is suppressed during a transit**, and this one would have been silent: the
   wreck is a prop, so the term that stops fish swimming into hulls is the same term that shoves
   one out of the hole it is aiming at. The route's declared clearance is what keeps it off the
-  geometry instead, which is what the declaration is for.
+  geometry instead, which is what the declaration is for. *(Not on its own, it turns out — the
+  clearance has to exceed the fish's own body by a margin, or it threads the hole and clips it
+  anyway. `SwimPassage.fitMargin`.)*
 - **A timeout as well as an arrival test**, so a fish that cannot make progress gives up and takes
-  the cooldown rather than pressing against geometry for the rest of the launch.
+  the cooldown rather than pressing against geometry for the rest of the launch. *(Per leg now,
+  and refreshed by progress; as a flat ceiling it mostly measured the approach.)*
 
 Cooldowns are 35–80 s ordinarily and 7–18 s for a lurker; the eel also gets 2.6x the attraction
-range, a 5.0 weight against 1.2, and keeps to the bottom 30% of the column. An eel that wanders
+range, a 5.0 weight against 1.2, and keeps to the bottom ~~30%~~ **18%** of the column
+(`FishBrain.lurkerCeiling`, and it is measured from the floor now rather than from a span). An eel that wanders
 the whole tank is a very long tang, and an aquarium with a wreck in it always has something living
 inside the wreck.
 
@@ -352,6 +368,11 @@ rock_arch      radius 0.21   aquarium  8/14 = 57%   ocean 14/14 = 100%
 ```
 
 The eel fits all three in a glass tank, because the length cap shrinks it and girth scales with it.
+
+**Those counts are now optimistic and have not been re-measured.** They were taken under `girth <=
+radius`, and admission is `girth <= radius * 0.7` since a fish threading a hole with no margin
+clips it — so every figure above is an upper bound. Re-measuring means printing each loaded
+species' girth against each placed route's radius; there is no standing tool for it.
 
 ## The eel lies on the floor now, and fish thread the wreck
 
@@ -500,69 +521,30 @@ it is backwards for the wreck, whose route runs port to starboard, so forcing th
 screen points the ship's keel at the camera and loses the profile that makes it the best-looking
 prop in the library. **The user's direct observation beat the render every time this session.**
 
-## Superseded — kept for the reasoning. Two behaviours judged wrong on the installed build
+## Superseded
 
-Both were reported by the user against the build installed at the end of this session, and neither
-is explained. **The instrumentation and the eye disagree, and the instrumentation has not earned
-the benefit of the doubt** — three separate metrics already lied in this repo's god-rays session,
-and one lied again in this one (see the census trap below).
+This file used to carry two open items — "no transit is ever seen" and "the eel still does not
+behave" — with a list of suspected causes. **Both are fixed and none of the suspicions was
+right**, so the list has been removed rather than left where a fresh reader could act on it. The
+sections above hold what actually happened and the numbers behind it; the trap index holds the
+mistakes worth not repeating. Two facts from it are still true and still needed:
 
-### 1. No transit is ever *seen*, though the census says they happen
-
-The user watched for a long time across many launches and never saw a fish swim through the arch
-or the wreck. The census disagrees: 4–8 `transit` entries per 90–120 s, and fish caught *in*
-transit at sample instants (`transit 1`, `transit 2`, `transit 3`). Both observations are real and
-they have not been reconciled. Candidates, roughly in order of suspicion:
-
-- **A `transit` entry is not a swim-through.** It only means the behaviour was chosen. `School`
-  gives a transit 15 s (26 for a lurker) to finish, and a fish that never reaches its first
-  waypoint simply times out — which looks like nothing at all. **Instrument what actually
-  happens**: count waypoints *reached*, not transits started. That is the same mistake as counting
-  dart occupancy, one level up, and it is the single most likely explanation.
-- **The route may be geometrically wrong.** `SwimPassage.passages` converts each `swim_` node with
-  `convertPosition(_:to: reefNode)`. That is believed correct but has never been checked against a
-  render — nobody has drawn a marker at the computed waypoint positions and looked. Do that first
-  if the counter above says fish are reaching waypoints.
-- **The prop may not be drawn.** Arch, pillars and wreck are three models among many, with
-  `maxPerScene` caps, so a given launch may place none of them. Log which passable props were
-  actually placed.
-- **It may be happening and reading as nothing.** In a glass tank only the six smallest species
-  fit, and a 7 cm damselfish threading a 4 cm hole at the back of the tank is a very quiet event.
-  If this is the answer, the feature needs the *eel* to sell it, which is issue 2.
-
-### 2. The eel still does not behave
-
-Improved this session and still wrong. It was structurally pinned at mid-height — see the girth
-trap below — and now ranges 0.34–0.53 of the water column against a target of about 0.18, on
-`AQUARIUM_SEED=4`. It does not settle into the wreck, which is the entire point of `isLurker`.
-
-Known and unresolved:
-
-- Its *target* is low but it does not get there. A long body with a low pitch rate takes a long
-  time to descend, and `SwimLimits.authority` cuts its turning further at the low speeds it
-  prefers. It may simply never arrive.
-- `transit` is deliberately exempt from the low-bias, because a route through a wreck goes where
-  the hold is. If the eel spends much of its time transiting, the exemption is fighting the
-  preference.
-- `FishBrain.lurkerCeiling` (0.32) is the blunt knob and has not been swept.
-- **The eel is rare.** Manifest weight 0.2; of seeds 1–26 only **seed 4** draws one in the
-  aquarium. Pin `AQUARIUM_SEED=4` or nothing will be reproducible.
-- `AQUARIUM_SCHOOL_STATS` prints `lurker@<fraction of column>` for every lurker, which is how the
-  numbers above were taken.
+- **The eel is rare.** Manifest weight 0.2, and of seeds 1–26 only **seed 4** draws one in the
+  aquarium. Pin `AQUARIUM_SEED=4` or nothing about lurking behaviour will reproduce.
+- **`AQUARIUM_SCHOOL_STATS` prints `lurker@<fraction of column>`** for every lurker, which is the
+  measurement every eel number in this file was taken with.
 
 ## Next, in order
 
-1. **Judge the passages on the installed build.** The eel and the crossings are measured and
-   rendered but not yet seen by the user at full screen. `SwimPassage.fitMargin` (0.7) is the knob
-   if a fish still clips: raising it refuses more species, lowering it admits more and risks the
-   belly through the crown again.
-2. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
+1. **The audio spike.** `spikes/006-saver-audio/`. See `docs/saver-backlog.md` for the
    direction and the three hazards that will not be obvious later.
-3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+2. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. Deliberately
-   last: the picture should be a frame of the finished tank, so shooting it before the
-   caustics and the fish AI land means shooting it twice.
+3. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held
+   until the tank looked finished so the picture would not have to be shot twice — the caustics,
+   the god rays and the fish behaviour have all landed and been signed off, so **that condition is
+   now met** and this is only last because it is the smallest. Shoot it with
+   `AQUARIUM_SHOW_SEED=0`, or the tile carries a seed badge.
 
    What is known, from what ships on this machine rather than from documentation: Apple's
    `/System/Library/Screen Savers/Random.saver` carries `Contents/Resources/thumbnail.png` at
@@ -576,6 +558,12 @@ Known and unresolved:
 
 ## Known gaps, deliberately left
 
+- **Fish ride high through the wreck and clip the plank over the breach**, and sometimes clip the
+  collapsed deck on the way out. Judged by the user on the installed build and accepted — "can't
+  make this perfect". The cause is the wreck's route climbing 15 cm over 29 cm of run while the
+  height controller lags behind it; the rock arch, whose route is level, does not show it. The
+  honest fix is either more waypoints on the climb or a feed-forward term on the height
+  controller, and neither is worth it for a prop that already reads correctly.
 - **The pectoral fins never move.** User-reported, and deliberately deferred. It did not matter
   while every fish did nothing but cruise; now that fish slow, stop, hover and forage it is very
   noticeable, because holding station is exactly what a real fish does *with* its pectorals. The
