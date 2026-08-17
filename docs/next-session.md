@@ -20,6 +20,50 @@ floor now" if you are touching the school; the section after it is the one open 
 
 ## State
 
+**The tank has a voice, it is off by default, and the sound is signed off.** Phase 1 of the
+audio track landed: a bubble bed and a swish when a fish works. Judged by the user on the
+rendered preview — *"the aq-4-tank sample now sounds pretty realistic. The bubbles are nice and
+I can hear the occasional swish sound of fish moving around."* `docs/tank-sound.md` is where all
+of it is argued; read that before touching any of it, and `spikes/006-saver-audio/README.md`
+before touching the plumbing.
+
+**It took three passes and the first two were rejected outright**, both for the same verdict —
+"sounds completely like it's in the air". That history is kept in `tank-sound.md` rather than
+deleted, because each pass was a plausible piece of reasoning that only measurement refuted.
+The three things that actually mattered:
+
+- **What a hydrophone in a tank mostly hears is not bubbles, it is the cloud.** A bubbly liquid
+  carries the water's inertia on the gas's compressibility, so sound speed collapses and a plume
+  a few centimetres across gets a *collective* resonance in the low hundreds of hertz. The
+  reference recording peaks at 160–320 Hz, where nothing an aerator makes could possibly ring —
+  so no adjustment of the radius distribution could ever have produced it. `soundlib/plume.py`.
+- **A fish moving water is a burst of bubbles, not a whoosh.** Two attempts at a swept band of
+  noise were rejected; the user supplied three "underwater movement bubble motion" samples and
+  the fix was to rebuild `swish.py` as a scheduler over `bubble.ping`. A swept band cannot be
+  granular at any centre frequency.
+- **Nothing continuous.** An earlier build had a stationary noise layer and a fixed-frequency
+  resonator, and the verdict was "a steady background hum or bass bed... I don't know what
+  that's supposed to represent". Nothing was the honest answer. The bed is *only* arrivals now,
+  and the collective mode is noise-excited rather than struck, so it has no pitch.
+
+The rest of the shape:
+
+- **Sounds are code, the same as models.** `tools/build-audio.py` bakes a grain library from
+  `Savers/Aquarium/Sounds/*.py` into `Assets/audio/` — untracked build output, 25 files, 1.9 MB.
+- **The library is short because a resample is the *correct* transform, not a cheap one.**
+  Radiation damping is independent of bubble radius, so ring-down time is exactly inversely
+  proportional to frequency — playing a baked 1.5 mm bubble 20% fast *is* a 1.25 mm bubble. A
+  fish's movement is a pure time-scale too, by construction, so one reference fish covers all.
+- **There is no loop.** What repeats is the statistics.
+- **It follows the tank.** Bed density is the declared birth rate of whichever emitters are
+  emitting this frame; a swish comes from a fish exceeding its effort *or* lateral-acceleration
+  threshold.
+- **`tools/audio-match.py` is the scoreboard**, and it is the thing that turned this from
+  guesswork into a loop: it scores any WAV band-by-band against the reference recording
+  (`--target bed`) or the movement samples (`--target dart`). The first pass was only ever
+  checked against *itself* — saver against preview — and the two agreed perfectly while both
+  were wrong.
+
 **The aquarium renders as a tank.** A random assortment of fish and decorations is drawn per
 launch, placed on a substrate, lit by one of three art-directed looks, and every model is
 textured. Nothing is blocked.
@@ -560,40 +604,36 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    of the user, and **the session notification is not the fix for it**: a thumbnail should render
    cheaply whether or not the screensaver is running. Nothing in SaverKit has been changed yet.
 
-2. **Phase 1 of the audio track: the bubble bed. This is what the next session is for.**
+2. ~~**Phase 1 of the audio track: the bubble bed.**~~ **Done and signed off.** The sound is
+   judged good — see the State section. What is left on this track is small and optional:
 
-   **Sounds are code, the same way models are.** A bubble in water is a Minnaert resonator: a
-   decaying sine whose frequency is set by its radius alone (f·r ≈ 3260 Hz·mm — a 1 mm bubble is
-   3.3 kHz, a 3 mm bubble 1.1 kHz), with a slight upward chirp as it collapses. So a bubble
-   stream is a radius distribution and an arrival rate, which are the same kind of numbers as the
-   ones in `Savers/Aquarium/Models/`. A water swish is a noise burst through a moving band-pass;
-   the filter hum is filtered brown noise. None of it wants a sample library, and committing
-   binaries as the source of truth would break this repo's one rule about assets.
+   - **The fine fizz is thin.** Measured, the bed sits 18–27 dB under the reference above
+     2.5 kHz. In a real tank that top comes from hundreds of tiny bubbles a second; here they
+     arrive a dozen a second. **Do not fix it with a noise layer** — that is exactly what was
+     removed as "a steady background hum". If it is fixed at all, it is fixed with more
+     arrivals: a second, much faster stream of very small radii.
+   - **The swish rate has never been judged deliberately.** It is one every ~3.5 s of tank
+     time, and the user's only comment was that they "can hear the occasional swish", which
+     reads as acceptable rather than as tuned. `TURN_SHARE` has a cliff in it — 0.9 gives 30
+     per 90 s, 1.3 gives 2 — so small changes are large.
+   - **Two spike items are still open and neither belongs to this feature**: the login window,
+     and two real displays.
 
-   **The authoring loop is the one that already exists**, with the render step swapped: edit a
-   Python script → write a WAV (`numpy` plus stdlib `wave`, in the same `.venv` the other tools
-   use) → *inspect it* → adjust numbers. Inspection is the `audio-lens` skill, which reports
-   RMS, peak, clipping, spectral centroid and writes a spectrogram PNG — that is how an agent
-   checks a sound without hearing it, and it was used in this spike to prove a fade landed where
-   it was supposed to. **But the user is the ear, exactly as they are the eye for the tank.**
-   `afplay` is the other half of the loop and there is no substitute for it.
+   To hear any of it without building anything:
 
-   **Ship grains, not a loop.** Bake a small library of one-shots — bubbles across a radius
-   range, a few swishes, a short bed — and schedule them stochastically at runtime off the launch
-   seed, through one `AVAudioUnitReverb`. Perhaps 1–2 MB against the model library's 35 MB, and
-   it answers the bundle-weight hazard outright: there is no loop to become repetitive. It also
-   opens the thing that makes it *this* tank rather than aquarium noise — the `Bubbler` prop
-   already has declared emitters and cycles, and the fish have real velocities, so sound can be
-   triggered by what is on screen instead of played over it.
+   ```bash
+   .venv/bin/python tools/audio-preview.py --seconds 90 && afplay /tmp/aquarium.wav
+   .venv/bin/python tools/audio-preview.py --grains      && afplay /tmp/aquarium.wav
+   .venv/bin/python tools/audio-match.py /tmp/aquarium.wav          # score it
+   ```
 
-   **Do not re-derive the plumbing.** `spikes/006-saver-audio/README.md` §"What the real feature
-   should take from this" is six rules with measurements behind each. In particular: start the
-   engine once and ride a gain ramp (a start costs 470 ms, a fade is instant), ramp every gate
-   change or it clicks, and fade out on `willstop` rather than `didstop`.
+   And from the saver itself, which is the ground truth:
 
-   **Settled by the user and not to be relitigated:** ambient sound only, toggleable, and
-   **defaulting to off**. A screensaver starts because the user walked away, so unrequested sound
-   plays to an empty room, or into a meeting they just walked into, or at 2am.
+   ```bash
+   AQUARIUM_SOUND=1 AQUARIUM_AUDIO_STATS=30 AQUARIUM_AUDIO_RECORD=/tmp/tank.wav \
+       tools/run-saver.swift Aquarium --size 1200x700 --seconds 95 --screenshot /tmp/t.png
+   ```
+
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
 4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held
@@ -613,6 +653,24 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    at the tile's aspect ratio so the picture is the saver rather than a painting of it.
 
 ## Known gaps, deliberately left
+
+- **The sound's one-owner rule is process-local.** `AquariumSound.owner` is a static, so two
+  views in one host correctly share one voice, and a stalled owner can now be taken over from
+  (it holds a heartbeat, and an owner that has not drawn a frame for 0.75 s is not eligible).
+  Two *hosts* would each start an engine. The picker alone provably spawns two, and the session
+  gate keeps both silent there — but two real displays are untested on this machine, which
+  mirrors rather than extends. If they ever do play at once, the arbiter has to move to
+  something cross-process, and the cheapest candidate is a lock file in the container both
+  hosts already share.
+- **Nothing fades on the way out of `stop()`.** The ramp that matters is the session's, and it
+  has normally already run by the time a host tears a view down, because `willstop` arrives
+  before the screen comes back. `stop()` sets the gate to zero and stops the engine in the same
+  breath, so a host that discards a view *without* the session having ended — which is the
+  harness path rather than the screensaver path — would cut rather than fade.
+- **`AQUARIUM_AUDIO_RECORD` installs a tap that writes on the audio callback's thread.** It is a
+  diagnostic reachable only through an environment variable, and the environment is empty under
+  `legacyScreenSaver`, so it cannot fire where it would matter. It is still file I/O near a
+  real-time thread and should not grow into anything shipped.
 
 - **Fish ride high through the wreck and clip the plank over the breach**, and sometimes clip the
   collapsed deck on the way out. Judged by the user on the installed build and accepted — "can't
@@ -685,6 +743,29 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 - **`SceneKitProbe` frames on X extent**, so it crops a tall prop to its middle.
 
 ## Traps that cost real time. Each is commented where it happens; this is the index
+
+- **The saver reads `manifest.json` out of the *built bundle*, so editing it under `Assets/`
+  changes nothing until you rebuild.** `build-saver.sh` `ditto`s `Assets/` into `Resources/`.
+  This ate a whole parameter sweep: three configurations were patched into the source manifest,
+  three runs were made, and all three measured the value that happened to be in the bundle —
+  two of them returned *identical* counts, which is the only reason it was caught. A sweep must
+  rebuild, or patch the bundle's copy.
+- **A measurement whose limiter is a cooldown is a measurement of the cooldown.** The fish
+  swish was tuned three times against a count per ninety seconds, and for two of those the
+  number was set by the per-tank cooldown refusing half the offers rather than by the trigger.
+  The `refused` counter beside the `swishes` counter exists so that this is visible; when it is
+  comparable to the count, the knob under test is not the one being measured.
+- **A throwaway `AVAudioEngine()` used only to read its output format crashes.** `AVAudioEngine()
+  .outputNode.outputFormat(forBus: 0)` deallocates the engine before the node is used, and the
+  dangling node fails a pointer-authentication check — `EXC_BAD_ACCESS`/`SIGKILL`, with a stack
+  in `AVAudioIONodeImpl::AUI()` and no message. The device's rate is only knowable from an engine
+  you are keeping.
+- **`AVAudioFile(forWriting:settings:)` given a mixer's own `format.settings` writes 32-bit
+  float in a `WAVE_FORMAT_EXTENSIBLE` container**, which `afplay` plays and which Python's
+  `wave` module and the `audio-lens` skill both refuse to open. A recording nothing can measure
+  is not a diagnostic. Ask for 16-bit PCM explicitly; `AVAudioFile` converts on write. And the
+  header is only finalised when the file object is released — `tools/run-saver.swift` calls
+  `stopAnimation()` before it captures, which is what closes it.
 
 - **A ramped avoidance push settles a fish at its own margin, so a margin is a position.** It
   reads like a soft preference and behaves like a command: the equilibrium where the push cancels

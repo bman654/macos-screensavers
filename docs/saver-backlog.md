@@ -160,40 +160,35 @@ own instance, and a shared world across displays is much harder than independent
 
 ## Ambient audio
 
-Wanted, and settled in direction if not in mechanism: **ambient sound only, toggleable,
-defaulting to off.** The aquarium gets a low bubbling bed. Other savers may borrow the hum
-from the orrery estate's living calendar — "the air" — which lives outside this repo, so
-whoever implements it should ask for the source rather than invent one.
+**Phase 1 is built: the aquarium has a bubble bed and a swish when a fish works.** See
+`docs/tank-sound.md` for the design and `spikes/006-saver-audio/README.md` for the plumbing;
+neither is repeated here. What this section still owns is the direction, which has not changed:
+**ambient sound only, toggleable, defaulting to off.**
 
 Default-off is not timidity. A screensaver starts *because* the user walked away, so
 unrequested sound plays to an empty room, or into a meeting they just walked into, or at
 2am. Opted-in ambience is charming; the same audio uninvited is why people uninstall
 screensavers.
 
-**Proven, and the mechanism is settled — see `spikes/006-saver-audio/README.md`.** Audio does
-reach the output device from inside the sandboxed `legacyScreenSaver`, confirmed by ear on the
-installed build. The three hazards below were all real, and two of them had causes that could
-not have been reasoned out; read the spike before writing any of this.
+The one rule the spike produced, and the reason there is a `SoundSession.swift` at all:
+**gate audio on the screensaver session, never on the view.** No property of a saver view
+distinguishes the real screensaver from the picker's thumbnail — the tile is a *full-screen*
+view with `isPreview == false`, and an abandoned view goes on rendering at 60 fps forever.
 
-The one rule it produced: **gate audio on the screensaver session, never on the view.** No
-property of a saver view distinguishes the real screensaver from the picker's thumbnail — the
-tile is a *full-screen* view with `isPreview == false`, and an abandoned view goes on rendering
-at 60 fps forever. `com.apple.screensaver.didstart` / `willstop` / `didstop` are the signal,
-registered `.deliverImmediately`, seeded at startup because `didstart` is posted before the host
-process exists.
+The three hazards, and where they stand:
 
-Hazards, now measured rather than guessed:
+- **One instance per display.** Fixed within a process by a static owner that is never taken
+  from an eligible holder. Across processes it is unfixed and untested; the picker alone spawns
+  two hosts, and two real displays remain untested on this machine, which mirrors.
+- **The System Settings thumbnail plays**, and no size test prevents it. Handled for audio by
+  the session gate. It is still a *rendering* bug for every saver — `HostContext.isPreview` is
+  false for that tile, so the aquarium has been drawing full-fat tanks into a two-inch
+  thumbnail — and that half is its own item, below.
+- **The login window runs savers too**, still untested, and still the most likely thing to
+  differ, since the gate depends on a distributed notification posted in a session context.
 
-- **One instance per display.** Confirmed within a process — three instances play three voices
-  — and a `static` owner fixes it there. Across processes it is unfixed and untested: the picker
-  alone spawns two hosts. Two real displays remain untested on this machine, which mirrors.
-- **The System Settings thumbnail plays**, and no size test prevents it. This is also a
-  *rendering* bug for every saver: `HostContext.isPreview` is false for that tile, so the
-  aquarium has been drawing full-fat tanks into a two-inch thumbnail. Its own item, below.
-- **The login window runs savers too**, still untested, and now the most likely thing to differ
-  since the audio gate depends on a distributed notification posted in a session context.
-- **Every asset ships in the bundle**, since the saver is sandboxed with no network. A loop
-  long enough not to feel repetitive is real bundle weight; the model library is already
-  ~35 MB. The spike's recommendation is to bake short grains and schedule them stochastically
-  rather than ship a loop — a bubble is a Minnaert resonator whose frequency follows its radius
-  alone, so an aquarium bed is genuinely parametric in the way this repo's models are.
+**Bundle weight turned out not to be a hazard.** The worry was that a loop long enough not to
+feel repetitive is real weight against a ~35 MB model library. There is no loop: a bubble's
+pitch follows from its radius alone, so the bed is scheduled from 1.7 MB of baked grains and
+what repeats is the statistics. Other savers that want a hum should ask for the orrery estate's
+"the air" rather than invent one; it lives outside this repo.

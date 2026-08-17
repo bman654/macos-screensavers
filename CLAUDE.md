@@ -13,6 +13,9 @@
   from rediscovering them.
 - `spikes/002-saver-shell/README.md` — what the `.saver` shell and raw Metal host proved,
   including why shaders ship as source rather than as a compiled library.
+- `docs/tank-sound.md` — how the aquarium's audio is synthesised and why it sounds the way it
+  does. Read before touching anything under `tools/audio/`, `Savers/Aquarium/Sounds/` or the
+  `Sound*.swift` files; `spikes/006-saver-audio/README.md` is its plumbing half.
 - `docs/saver-backlog.md` — the other planned screensavers and why they are ordered the
   way they are.
 
@@ -25,6 +28,13 @@ Never hand-edit a `.usdz` or check in a `.blend` as the source of truth.
 The authoring loop is: edit script → `tools/blender/run.sh` → render a contact sheet →
 look at the render → adjust numbers. Always render and inspect before declaring a model
 done; the numbers alone do not tell you whether it reads as a fish.
+
+**Sounds are code too.** A bubble's pitch follows from its radius alone, so audio is
+synthesised by Python scripts and baked by `tools/build-audio.py`; never commit a sample
+library. Same loop with the render step swapped: edit script → bake →
+`tools/audio-preview.py` → **listen** → adjust numbers. `audio-lens` is how an agent checks a
+sound it cannot hear, and it is a lens rather than a verdict — the user is the ear, exactly as
+they are the eye for the tank.
 
 ## Shared code lives in Shared/
 
