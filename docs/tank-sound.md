@@ -263,7 +263,7 @@ preview    -22.9 -21.9 -20.0 -12.5  -1.5  -6.9 -21.7 -50.7    -34.2
 | `Savers/Aquarium/Sounds/soundscape.py` | **every number that shapes the mix** |
 | `Savers/Aquarium/Assets/audio/` | build output, untracked |
 | `SoundVoices.swift` | the render thread — voices, scheduler, water floor, gate |
-| `SoundSession.swift` | whether the screen is being saved |
+| `SoundSession.swift` | whether the screen is being saved, **and whether this view is showing it** |
 | `AquariumSound.swift` | engine lifecycle, ownership, the scene's API |
 
 ## It follows the tank, not a clock
@@ -312,6 +312,45 @@ Two things drive it, and both are already on screen:
 
   Both triggers are edge-triggered with a per-fish and a per-tank cooldown. The per-tank one is
   load-bearing: ten fish each entitled to a swish every few seconds is a shoal of whispers.
+
+## The gate has two halves, and one of them was missing until it shipped
+
+`AquariumSound.update(time:isPresenting:)` is audible only when the screensaver session is
+running **and** this view's window is the one the screensaver is being drawn into. The second
+half was added after the first build reached a real machine, and both of the failures it fixes
+were observed rather than reasoned about:
+
+- a view left over from a *previous* activation — still animating at 60 fps ten minutes later —
+  claimed the sound half a second before the session's real view was constructed, and then held
+  it for the whole session, so the tank on screen was silent while something else played;
+- a screensaver dismissed inside its first second left the sound fading up onto the desktop of a
+  user who was working, because `willstop` is posted before the host exists to hear it, exactly
+  as `didstart` is.
+
+The argument, the measurements and the three refuted theories are in
+`spikes/006-saver-audio/README.md` §"Phase 0 was not enough". Two things to carry into any
+future audio work here: **it is a property of the view, not an arbitration between views** —
+one host holds several saver *bundles* at once and their owner `static`s cannot see each other
+— and **it is re-read every frame**, because the level changes underneath a live view with no
+callback of any kind.
+
+To reach it from this repo's loop: `AQUARIUM_SOUND_SESSION=1` asserts the session half, since
+under the harness the honest answer depends on whether System Settings happens to be open. The
+level half needs no override — the harness window passes it, deliberately.
+
+**And when the tank is silent on a real machine, `SoundLog` is the only instrument there is.**
+The environment is empty inside `legacyScreenSaver`, so `AQUARIUM_AUDIO_STATS` cannot be reached
+there, and "I heard nothing" otherwise has five causes that look identical from the front of the
+screen — switched off, judged a thumbnail, no grain library, session gate shut, or not the
+presenting view. It is off unless a sentinel file exists, so a shipped saver does no file I/O:
+
+```bash
+D=~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp
+touch "$D/aquarium-audio-debug" && killall legacyScreenSaver
+# ... run the screensaver ...
+cat "$D"/aquarium-sound-*.log
+rm "$D/aquarium-audio-debug"      # and it is inert again
+```
 
 ## Default off, and that is settled
 

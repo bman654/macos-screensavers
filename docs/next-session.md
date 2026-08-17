@@ -1,5 +1,14 @@
 # Where to pick up
 
+**Read first if you touch audio: the session gate has two halves now, and shipping only one of
+them put sound on the user's desktop while they were working.** A saver is audible only when the
+screensaver session is running **and** its own window is still below the desktop level — the
+level the host returns to `.normal` the moment it is finished with a view. `SoundSession.swift`
+carries the rule, `docs/tank-sound.md` §"The gate has two halves" the summary, and
+`spikes/006-saver-audio/README.md` §"Phase 0 was not enough" the measurements and the three
+plausible theories that were refuted on the way. It is verified on the installed build over five
+consecutive activations.
+
 **Open with the user, not blocking anything:** `AudioProbe.saver` is installed on purpose and
 is to be left installed. The user will log out at some point, leave the login screen idle until
 the screensaver starts, and report what the on-screen readout says. That is the last untested
@@ -755,6 +764,17 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
   number was set by the per-tank cooldown refusing half the offers rather than by the trigger.
   The `refused` counter beside the `swishes` counter exists so that this is visible; when it is
   comparable to the count, the knob under test is not the one being measured.
+- **A `legacyScreenSaver` host outlives its session, keeps its views, and loads several saver
+  bundles at once.** Three consequences, each of which cost time: a view from a previous
+  activation is still animating at 60 fps ten minutes later and will claim anything a `static`
+  arbitrates; the bundle competing with yours may not be yours, so a per-bundle `static` cannot
+  see it; and a real session **reuses the picker's existing host and its existing full-screen
+  view** rather than spawning one, so "was this view born into the session" is not a question
+  with an answer. Measured with a per-second `lsof` sweep across an activation.
+- **`willstop` is posted before the host exists, exactly as `didstart` is.** The known trap is
+  half a trap: a screensaver dismissed inside its first second is over before the observer is
+  installed, so the startup guess is never corrected *in either direction*. Gating on the
+  session alone therefore plays into a room after the screensaver has gone.
 - **A throwaway `AVAudioEngine()` used only to read its output format crashes.** `AVAudioEngine()
   .outputNode.outputFormat(forBus: 0)` deallocates the engine before the node is used, and the
   dangling node fails a pointer-authentication check — `EXC_BAD_ACCESS`/`SIGKILL`, with a stack

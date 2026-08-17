@@ -63,7 +63,20 @@ final class SoundSession {
         //
         // Wrong in one direction only: a user who leaves System Settings open and walks away
         // gets a silent screensaver. That is the direction to be wrong in.
-        isScreenSaverRunning = SoundSession.settingsPaneIsClosed() ?? false
+        // `AQUARIUM_SOUND_SESSION=1` asserts the answer, for `tools/run-saver.swift` only.
+        //
+        // Without it this repo's ground-truth loop — record the saver, measure it, listen to it —
+        // depends on whether System Settings happens to be open, since the harness is an ordinary
+        // process that the startup guess reads exactly as it reads a picker thumbnail. That is a
+        // loop whose result is decided by an unrelated window, and the failure is nearly silent:
+        // the recording is a valid WAV of nothing. Safe because the environment is empty under
+        // `legacyScreenSaver`, so it cannot be reached where it would matter.
+        if let forced = ProcessInfo.processInfo.environment["AQUARIUM_SOUND_SESSION"] {
+            isScreenSaverRunning = (forced as NSString).boolValue
+            hasAuthoritativeState = true
+        } else {
+            isScreenSaverRunning = SoundSession.settingsPaneIsClosed() ?? false
+        }
 
         let center = DistributedNotificationCenter.default()
         // `.deliverImmediately` is load-bearing rather than a nicety. The default suspension
@@ -132,6 +145,53 @@ final class SoundSession {
     /// Nil when the question could not be answered, which is not at all the same as "no".
     static func settingsPaneIsClosed() -> Bool? {
         isProcessRunning(named: "System Settings").map { !$0 }
+    }
+
+    // MARK: Whether *this* view is the one showing it
+
+    /// Is this window the surface the screensaver is actually being drawn into?
+    ///
+    /// The notification above says whether *a* screensaver is running. It cannot say whether
+    /// this view is the one showing it, and both are needed, because a `legacyScreenSaver` host
+    /// is long-lived and accumulates views it has finished with — measured: a view from one
+    /// activation was still animating at 60 fps ten minutes and one whole session later.
+    /// Two failures come out of that, and this is the only signal found that separates them:
+    ///
+    ///   - **A stale view claims the sound before the real one exists.** On the next `didstart`
+    ///     every leftover view in the host becomes eligible at once, and the host does not
+    ///     construct the session's actual view until ~0.5 s later — so the leftover wins, and
+    ///     "never steal from an eligible owner" then locks the real view out for the whole
+    ///     session. Observed with the arpeggio playing over a tank that was silent.
+    ///   - **A session can end before the host exists to hear it end.** `willstop`/`didstop` are
+    ///     posted before this process is up, exactly as `didstart` is, so dismissing a
+    ///     screensaver within the first second leaves the startup guess — which said *running* —
+    ///     uncorrected forever. Observed: the sound faded up onto the user's desktop while they
+    ///     were working, and only `killall` stopped it.
+    ///
+    /// Crucially this has to be a property of the *view*, not an arbitration between views: one
+    /// host holds several saver **bundles** at once (`lsof` shows Aquarium and the spike's probe
+    /// loaded together), and each bundle's owner `static` is its own, so they cannot see each
+    /// other at all. Nothing a single bundle arbitrates could have fixed either case.
+    ///
+    /// Measured levels, and there are only three:
+    ///
+    /// ```
+    /// -2147483625   presenting the screensaver, for the whole session and no longer
+    /// -2147483622   the `tools/run-saver.swift` harness window
+    ///           0   .normal — a view the host has finished with, or one whose session ended
+    /// ```
+    ///
+    /// The bound is `desktopIcon` rather than `desktop` (-2147483623) because the harness sits
+    /// *above* the desktop and below the icons, and the harness must stay audible or this repo's
+    /// ground-truth recording loop goes silent. Erring tight is the safe direction here: too
+    /// tight is a screensaver that says nothing, too loose is one that plays into a room.
+    ///
+    /// Checked every frame, never cached. The level changes underneath a live view with no
+    /// callback of any kind — the same way its frames stop with no callback — so a view that
+    /// asked once would answer with the truth from before it was set aside.
+    static func isPresenting(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow))
     }
 
     /// Is a process with this executable name alive, according to the kernel? Nil if the

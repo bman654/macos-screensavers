@@ -19,6 +19,7 @@
 import AppKit
 import Foundation
 import Metal
+import QuartzCore
 import ScreenSaver
 
 @objc(AudioProbeView)
@@ -63,6 +64,17 @@ final class AudioProbeView: SaverView {
     private var sessionObserver: NSObjectProtocol?
     private let created = Date()
 
+    /// The machine's clock at the previous rendered frame, so a *gap* in the frames is visible.
+    ///
+    /// This is the instrument for the question that reopened the spike: which of several hosts
+    /// is the one saving the screen. A picker tile renders continuously for the life of its
+    /// host, while the real screensaver's view has its window ordered out when the screensaver
+    /// is dismissed — which stops the display link dead and, as phase 0 measured, fires no
+    /// callback whatsoever. So frames resuming after a gap may be the only "I am back on screen"
+    /// edge a reused view ever produces, and whether it does is exactly what has to be measured
+    /// before a gate can be built on it.
+    private var lastFrameWall: CFTimeInterval = 0
+
     /// Set to 1 to let the thumbnail play, which is the only way to tell the preview gate
     /// working apart from audio failing in a small view for some unrelated reason.
     ///
@@ -71,6 +83,15 @@ final class AudioProbeView: SaverView {
         ProcessInfo.processInfo.environment["AUDIOPROBE_PREVIEW_AUDIO"] == "1"
 
     private var isPreviewSized: Bool { bounds.width < previewWidthThreshold }
+
+    /// Whether this view's window is the surface the screensaver is actually being drawn into.
+    ///
+    /// Re-read every time it is asked, never cached: the level changes underneath a live view
+    /// with no callback at all, exactly the way its frames stop with no callback.
+    private var isPresentingWindow: Bool {
+        guard let window else { return false }
+        return window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow))
+    }
 
     /// How much of its screen's width this view covers.
     ///
@@ -125,8 +146,19 @@ final class AudioProbeView: SaverView {
         // this round is the one chance to measure both at once. A screensaver that has actually
         // taken the screen sits at `CGShieldingWindowLevel()`; a thumbnail in a settings pane is
         // an ordinary window whatever size it has been given.
+        // Everything here that is not `level` is a candidate for the same job, logged so that the
+        // choice between them is made from a table rather than from the first one that worked.
+        // A single signal that happens to separate two observations is how the last three rounds
+        // of this spike went wrong.
+        let screen = window.screen.map { NSScreen.screens.firstIndex(of: $0).map(String.init)
+            ?? "off-list" } ?? "nil"
         return "window=\(window.isVisible ? "shown" : "orderedOut") \(occluded) "
-            + "level=\(window.level.rawValue) shield=\(Int(CGShieldingWindowLevel()))"
+            + "level=\(window.level.rawValue) shield=\(Int(CGShieldingWindowLevel())) "
+            + "num=\(window.windowNumber) alpha=\(window.alphaValue) "
+            + "activeSpace=\(window.isOnActiveSpace) screen=\(screen) "
+            + "inApp=\(NSApp?.windows.contains(window) ?? false) "
+            + "origin=\(Int(window.frame.origin.x)),\(Int(window.frame.origin.y)) "
+            + "size=\(Int(window.frame.width))x\(Int(window.frame.height))"
     }
 
     override init?(frame: NSRect, isPreview: Bool) {
@@ -188,6 +220,15 @@ final class AudioProbeView: SaverView {
         host.onUpdate = { [weak self] frame in
             guard let self else { return }
             self.elapsed = frame.time
+            // Logged before anything else, because a resumption is a one-frame event and the
+            // heartbeat below only speaks every two seconds. The threshold is the same quarter
+            // second the tone already uses to decide it has stopped being looked at.
+            let wall = CACurrentMediaTime()
+            if self.lastFrameWall > 0, wall - self.lastFrameWall > 0.25 {
+                self.log(String(format: "frames resumed after %.2f s gap  ",
+                                wall - self.lastFrameWall) + self.visibility)
+            }
+            self.lastFrameWall = wall
             // The heartbeat the audio thread listens for. Everything else here is diagnostic;
             // this line is what stops the sound when the view stops being seen.
             self.tone.noteFrame()
@@ -325,6 +366,13 @@ final class AudioProbeView: SaverView {
         // `AudioProbeSession`. The two below are kept because they cost nothing and are right
         // about a harness window, but neither is load-bearing any more.
         if !AudioProbeSession.shared.isScreenSaverRunning { return "screensaver not running" }
+        // The view's own half of the gate, and the session notification cannot substitute for it.
+        // A host keeps every view it has ever finished with — one measured here was still
+        // animating at 60 fps ten minutes and a whole session later — and on the next `didstart`
+        // the leftovers all become eligible about half a second before the session's real view is
+        // constructed, so a leftover wins the sound and locks the real one out. Measured levels:
+        // -2147483625 presenting, -2147483622 under the harness, 0 once the host is done with it.
+        if !isPresentingWindow { return "not the presenting window" }
         if isPreviewSized { return "preview (width)" }
         if isThumbnail { return "preview (screen fraction)" }
         return nil
@@ -357,8 +405,8 @@ final class AudioProbeView: SaverView {
                 + String(format: "  %.2f of screen", screenFraction)
                 + (isPreviewSized || isThumbnail ? "  PREVIEW" : ""),
             "visibility   \(visibility)  animating \(isAnimating)",
-            "session      screensaver running: "
-                + "\(AudioProbeSession.shared.isScreenSaverRunning)",
+            "session      running: \(AudioProbeSession.shared.isScreenSaverRunning)"
+                + "   presenting: \(isPresentingWindow)   level \(window?.level.rawValue ?? 0)",
             "host         \(process.processName) pid \(process.processIdentifier)"
                 + String(format: "   up %.0f s", elapsed),
         ]

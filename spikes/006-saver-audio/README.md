@@ -134,6 +134,15 @@ before it was reached. Each one passed a picker thumbnail as a full-screen scree
 | `occlusionState` | `occluded`, and so is the real full-screen preview |
 | window level | ordinary, and never `CGShieldingWindowLevel()` (2147483628) — no window here ever reaches it |
 
+> **Corrected later, and the correction is load-bearing — see "Phase 0 was not enough" below.**
+> The window level row is right about what it tested and wrong about what it concluded. No
+> window reaches the *shield* level, so nothing here separates a thumbnail from a real
+> screensaver — but the presenting window sits at a distinctive level far *below* the desktop
+> (-2147483625), and a view the host has finished with is returned to `.normal`. That does not
+> answer the question this table was asking, and it does answer the one phase 0 did not think to
+> ask: **is this view the one on screen right now?** Gating on the session alone let a leftover
+> view from a previous activation play over a saver that was silent.
+
 The picker's tile is a **2056x1329 view on a 2056-point screen**, scaled down into a tile by
 something above the saver. So the tile and the real thing are the same size, and no measurement
 of the view can separate them.
@@ -249,6 +258,150 @@ real numbers. Note that the session notification is not the answer for *this* ha
 thumbnail should render cheaply whether or not the screensaver is running, so the cost gate and
 the audio gate are different questions with different signals.
 
+## Phase 0 was not enough: the session gate needs a second half, and here it is
+
+**Reopened by a user report** — "when I launched the aquarium screensaver I get the test tones
+from the AudioProbe" — and the report was exactly right. Everything in this section is measured
+on the real host, with the probe's log; nothing in it was predicted correctly beforehand, and
+three separate theories were refuted along the way.
+
+**The finding: gate on the session *and* on the window level.** The notification says whether *a*
+screensaver is running. It cannot say whether *this view* is the one showing it, and both are
+needed:
+
+```swift
+window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow))
+```
+
+Three levels exist and there are only three:
+
+| level | what the view is |
+|---|---|
+| `-2147483625` | presenting the screensaver — for the whole session, and no longer |
+| `-2147483622` | the `tools/run-saver.swift` harness window |
+| `0` (`.normal`) | a view the host has finished with, or one whose session ended under it |
+
+The bound is `desktopIcon` (-2147483603) rather than `desktop` (-2147483623) because the harness
+sits *between* them and must stay audible or this repo's recording loop goes silent. Err tight:
+too tight is a screensaver that says nothing, too loose is one that plays into a room.
+
+**It must be re-read every frame.** The level changes underneath a live view with no callback of
+any kind — the same way its frames stop with no callback.
+
+### Why a per-view property, and not better arbitration
+
+`lsof` on a single host:
+
+```
+pid 74278  legacyScreenSaver -> Screen Savers/Aquarium.saver  Screen Savers/AudioProbe.saver
+```
+
+**One host holds several saver bundles at once**, and each bundle's owner `static` is its own, so
+they cannot see each other at all. No amount of arbitration inside one bundle could have fixed
+this — the view stealing the sound belonged to a *different saver*. That is why the answer had to
+be something a view can ask about itself.
+
+### The two failures it fixes, both observed
+
+**1. A stale view claims the sound before the real one exists.** A host is long-lived and keeps
+the view from a previous activation alive: measured still animating at 60 fps ten minutes and a
+whole session later. On the next `didstart` every leftover becomes eligible at once, and the host
+does not construct the session's actual view until ~0.5 s afterwards — so a leftover wins, and
+"never steal from an eligible owner" then locks the real view out for the whole session:
+
+```
+09:24:46.441  notification com.apple.screensaver.didstart -> running=true
+09:24:46.441  [0x…c000] audio -> PLAYING            level=0            <- stale, from 7 min ago
+09:24:47.005  [0x…c380] init frame=3840x2160                           <- the real one, 0.56 s later
+09:24:49.558  [0x…c380] audio -> another instance owns audio  level=-2147483625
+```
+
+That is the user's report, and note the inversion: the sound and the picture came from *different
+views*.
+
+**2. `willstop` is posted before the host exists, exactly as `didstart` is.** Dismiss a
+screensaver within its first second and the session is over before the observer is installed, so
+the startup guess — which said *running* — is never corrected. Measured, with no notification line
+in the log at all:
+
+```
+09:29:03.189  session observer installed, seeded running=true
+09:29:03.739  startAnimation                       level=0
+09:29:05.761  audio -> PLAYING                     level=0
+09:29:06.709  engine STARTED
+```
+
+The sound faded up onto the user's desktop while they were working, and only `killall` stopped it.
+**A saver that gates on the session alone will do this.** The level is already 0 by
+`startAnimation`, so the second half of the gate catches it.
+
+### Verified
+
+Five consecutive activations in one host, every one identical — the immortal leftover refused, the
+view on screen playing:
+
+```
+didstart -> running=true
+[c000 stale]  audio -> not the presenting window   level=0
+[new view]    init … level=-2147483625 … audio -> PLAYING   engine STARTED
+```
+
+Confirmed by ear on the installed build, and the readout agreed: `2 views, 1 audible,
+presenting true`.
+
+Then on the aquarium, on three independent paths — including the two a real user actually takes.
+**Idle-triggered**, nobody at the machine, the leftover view refused and the real one playing for
+five minutes and forty-three seconds:
+
+```
+10:03:21.916  audible=false  session=true  presenting=false  owner=none   <- leftover, refused
+10:03:22.809  scene built  soundEnabled=true isPreview=false library=loaded
+10:03:24.876  audible=true   session=true  presenting=true   owner=mine
+10:09:07.836  audible=false  session=false ...
+```
+
+And **the settings-pane path, which is where this was reported as "it never makes any noise"**:
+
+```
+10:12:02  scene built  seed=629928           <- the pane's live preview of the selected saver
+10:12:06  presenting=false                   <- System Settings quits; its level drops to 0
+10:12:14  session=true  presenting=false      <- session starts; the preview is REFUSED
+10:12:15  scene built  seed=522849           <- the screensaver's own view, a second later
+10:12:18  audible=true  presenting=true  owner=mine  engine=running
+```
+
+**The same bug produces both symptoms.** Whether you hear the wrong saver or hear nothing at all
+depends only on whether the view that stole the sound happens to have anything to play — an
+abandoned probe beeps, an abandoned aquarium is a tank nobody can see. A saver silent on the real
+screensaver and correct under the harness is this, until proven otherwise.
+
+### Three theories this refuted, all plausible, all wrong
+
+Worth keeping, because each would have produced a fix that did nothing:
+
+- **"The picker's grid tiles are live views that play."** They are not live at all — third-party
+  tiles in the Tahoe grid are static images, and the container held no probe log while the tile was
+  on screen. What *is* live is one full-screen view of the **selected** saver, plus a `0x0`
+  `isPreview=true` one, in two hosts.
+- **"Switching selection abandons the old saver's view."** It does not; that path tears down
+  cleanly (`viewDidMoveToWindow window=nil`, then `deinit`). The immortal view comes from a
+  *dismissed session*, not from a deselection.
+- **"A view born before the session started is not the screensaver's view."** The most promising
+  idea, and dead on arrival: **a real session reuses the picker's existing host and its existing
+  full-screen view.** No new process is spawned — measured with a per-second `lsof` sweep across an
+  activation, where the tank appeared and the only two hosts were the picker's, unchanged. The
+  picker's preview view and the screensaver's view are the same object, so there is nothing to tell
+  apart.
+
+### Left open, deliberately
+
+- **One view per host leaks and renders forever.** Only the *first* one: every later view gets
+  `deinit live=1` on dismissal, so the leak is bounded at one rather than growing. It is a GPU cost
+  in a host that survives, it is not an audio bug any more, and it belongs with the `isPreview`
+  work above rather than here.
+- **The startup guess is still wrong in one direction** — System Settings open and the user walks
+  away gives a silent screensaver. Unchanged, and still the direction to be wrong in.
+
 ## Still to test
 
 **The login window.** `AudioProbe.saver` is installed and can be left installed for this.
@@ -293,9 +446,13 @@ already share.
 
 ## What the real feature should take from this
 
-1. **Gate on the session, never on the view.** `com.apple.screensaver.didstart` / `willstop` /
-   `didstop`, registered `.deliverImmediately` — the default `.coalesce` withholds them from a
-   process that is never "active", which a screensaver host never is.
+1. **Gate on the session *and* on the window level.** `com.apple.screensaver.didstart` /
+   `willstop` / `didstop`, registered `.deliverImmediately` — the default `.coalesce` withholds
+   them from a process that is never "active", which a screensaver host never is — **and**
+   `window.level < CGWindowLevelForKey(.desktopIconWindow)`, re-read every frame. The
+   notification says a screensaver is running; the level says this view is the one showing it.
+   Phase 0 shipped only the first half and both of the failures in "Phase 0 was not enough"
+   followed from that, including audio playing onto the desktop of a user who was working.
 2. **Seed the state at startup and let it settle**, because `didstart` is unreachable on a fresh
    host. Hold audio ~1.5 s and re-check until a notification supersedes the guess.
 3. **Fade out on `willstop`, not `didstop`**, so ambience ends under a screensaver still on

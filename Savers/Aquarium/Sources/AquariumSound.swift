@@ -127,7 +127,12 @@ final class AquariumSound {
 
     /// Called once per rendered frame. Cheap on purpose — one relaxed atomic increment plus, on
     /// the rare frames where something changes, a little bookkeeping.
-    func update(time: CFTimeInterval) {
+    ///
+    /// - Parameter isPresenting: whether this view's window is the surface the screensaver is
+    ///   being drawn into, from `SoundSession.isPresenting`. It is the *view's* half of the gate
+    ///   and the session notification is the system's half; neither is sufficient alone, and the
+    ///   comment on that function is where both failures it fixes are recorded.
+    func update(time: CFTimeInterval, isPresenting: Bool) {
         core.frameTick.wrappingAdd(1, ordering: .relaxed)
         now = time
 
@@ -142,10 +147,20 @@ final class AquariumSound {
         if time - first < SoundSession.settlingPeriod {
             SoundSession.shared.reevaluateIfUnconfirmed()
             core.gateTarget.store(Float(0).bitPattern, ordering: .relaxed)
+            // Logged too, or a tank that never leaves this branch — one whose frame clock does
+            // not advance the way this assumes — writes nothing at all and looks like a saver
+            // whose sound was never built.
+            if SoundLog.isEnabled, lastLoggedState == "unstarted" {
+                lastLoggedState = "settling"
+                SoundLog.write("settling  t=\(String(format: "%.2f", time))")
+            }
             return
         }
 
-        let running = SoundSession.shared.isScreenSaverRunning
+        // Both halves, and ownership is claimed on the pair rather than on the session alone: a
+        // view that is not the one on screen must not hold the sound, or it locks out the view
+        // that is — which is precisely the failure this gate was added for.
+        let running = SoundSession.shared.isScreenSaverRunning && isPresenting
         if running {
             let wall = CACurrentMediaTime()
             if AquariumSound.owner === self {
@@ -163,7 +178,9 @@ final class AquariumSound {
         let audible = running && AquariumSound.owner === self
         core.gateTarget.store((audible ? Float(1) : Float(0)).bitPattern, ordering: .relaxed)
         if audible { startEngineIfNeeded() }
+        self.isPresenting = isPresenting
         reportIfAsked(time: time)
+        logIfChanged(audible: audible, isPresenting: isPresenting)
     }
 
     /// The bed's density, from whichever aerators are emitting on screen this instant.
@@ -409,6 +426,10 @@ final class AquariumSound {
 
     private var lastReport: CFTimeInterval = 0
 
+    /// Last frame's answer, kept only so the stats line can print it. A run where the session is
+    /// running and nothing is heard has two very different causes now, and this names which.
+    private var isPresenting = false
+
     /// `AQUARIUM_AUDIO_STATS=<seconds>`, and `render` is the load-bearing number.
     ///
     /// It is incremented on CoreAudio's own render thread, so it climbs if and only if the HAL
@@ -417,6 +438,30 @@ final class AquariumSound {
     private static let statsPeriod: Double? = ProcessInfo.processInfo
         .environment["AQUARIUM_AUDIO_STATS"].flatMap(Double.init).flatMap { $0 > 0 ? $0 : nil }
 
+    /// The same four facts as the stats line, on the only channel that exists inside the real
+    /// host — and only when they change, because this is called every frame for hours.
+    ///
+    /// Seeded with a state the gate can never produce, so the first decision is always written.
+    private var lastLoggedState = "unstarted"
+
+    private func logIfChanged(audible: Bool, isPresenting: Bool) {
+        guard SoundLog.isEnabled else { return }
+        let owner: String
+        if AquariumSound.owner === self {
+            owner = "mine"
+        } else {
+            owner = AquariumSound.owner == nil ? "none" : "other"
+        }
+        let state = "audible=\(audible)"
+            + "  session=\(SoundSession.shared.isScreenSaverRunning)"
+            + "  presenting=\(isPresenting)"
+            + "  owner=\(owner)"
+            + "  engine=\(engine == nil ? "off" : "running")"
+        guard state != lastLoggedState else { return }
+        lastLoggedState = state
+        SoundLog.write(state)
+    }
+
     private func reportIfAsked(time: CFTimeInterval) {
         // Read once. `ProcessInfo.environment` materialises a fresh dictionary of the whole
         // environment on every access, so asking it per frame allocates on the frame path even
@@ -424,10 +469,11 @@ final class AquariumSound {
         guard let period = AquariumSound.statsPeriod, time - lastReport >= period else { return }
         lastReport = time
         print(String(format:
-            "[sound] t=%6.1f  engine %@  session %@  owner %@  render %d  voices %d"
+            "[sound] t=%6.1f  engine %@  session %@  showing %@  owner %@  render %d  voices %d"
             + "  bubbles %d (dropped %d)  swishes %d (refused %d)",
             time, engine == nil ? "off" : "running",
             SoundSession.shared.isScreenSaverRunning ? "running" : "idle",
+            isPresenting ? "yes" : "no",
             AquariumSound.owner === self ? "mine" : "other",
             core.renderedFrames.load(ordering: .relaxed),
             core.voicesInFlight.load(ordering: .relaxed),

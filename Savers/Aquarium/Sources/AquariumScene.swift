@@ -209,6 +209,12 @@ final class AquariumScene {
             }
             self.sound = sound
         }
+        // Three separate reasons for a silent tank, and from the front of the screen they look
+        // identical: the user has it switched off, the view was judged a thumbnail, or the grain
+        // library did not load out of the bundle. See `SoundLog` for how to turn this on.
+        SoundLog.write("scene built  soundEnabled=\(settings.soundEnabled) isPreview=\(isPreview)"
+                       + "  library=\(self.sound == nil ? "FAILED or skipped" : "loaded")"
+                       + "  seed=\(seed)")
 
         seabed.position = SCNVector3(0, tank.floorY(aspect: aspect), 0)
     }
@@ -240,6 +246,17 @@ final class AquariumScene {
 
     // MARK: Per-frame update
 
+    /// Whether the view driving this scene is the one the screensaver is being drawn into, set
+    /// by that view every frame before `update`.
+    ///
+    /// It is pushed in rather than read here because a scene has no window — and it is not a
+    /// field on `FrameContext`, which every saver would then carry, because only a saver with a
+    /// voice has any use for it. If a second one grows sound, this and `SoundSession.isPresenting`
+    /// are what move into SaverKit together.
+    ///
+    /// Defaults false: a scene nobody has claimed is not on screen.
+    var isPresenting = false
+
     func update(_ frame: FrameContext) {
         // Mutating nodes here is only safe because `SceneKitHost` suppresses implicit
         // animation around this call — see the comment there.
@@ -253,7 +270,7 @@ final class AquariumScene {
             // After the bubblers, so the rate the ear is given is the one the eye is being
             // shown this frame rather than the previous one's.
             sound.setEmission(declaredRate: bubblers.reduce(0) { $0 + $1.emissionRate })
-            sound.update(time: frame.time)
+            sound.update(time: frame.time, isPresenting: isPresenting)
         }
     }
 

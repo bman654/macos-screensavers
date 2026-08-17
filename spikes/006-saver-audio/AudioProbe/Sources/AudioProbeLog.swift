@@ -47,13 +47,25 @@ enum AudioProbeLog {
 
     private static let started = Date()
 
-    /// Every line is stamped with seconds since this process started rather than a wall clock:
-    /// the questions here are all about intervals — how long after a window went away did the
-    /// sound stop — and a stopwatch answers those without arithmetic. The pid is on every line
-    /// so that logs from several hosts can be merged and still be readable.
+    /// A wall clock as well as the stopwatch, and the wall clock is the load-bearing one now.
+    ///
+    /// The stopwatch answers "how long after a window went away did the sound stop", which is
+    /// what the first round of this spike asked. The question that replaced it is *which* of
+    /// several hosts played, and that can only be answered by laying their logs side by side
+    /// against a single system-wide edge — and every host's stopwatch starts at a different
+    /// moment, so intervals from two files cannot be compared at all.
+    private static let clock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
+
+    /// The pid is on every line so that logs from several hosts can be merged and still be
+    /// readable — `sort` over the concatenation puts them in real order.
     static func write(_ message: String) {
-        let stamp = String(format: "%7.2f", Date().timeIntervalSince(started))
+        let now = Date()
+        let stamp = String(format: "%7.2f", now.timeIntervalSince(started))
         NSLog(message)
-        handle?.write(Data("\(stamp)  pid \(pid)  \(message)\n".utf8))
+        handle?.write(Data("\(clock.string(from: now))  \(stamp)  pid \(pid)  \(message)\n".utf8))
     }
 }

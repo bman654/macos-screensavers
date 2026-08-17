@@ -90,7 +90,14 @@ final class AquariumView: SaverView {
         // The seed badge. It hangs on the renderer rather than on the scene, which is why the
         // scene builds it and this hands it over — see `SeedBadge`.
         host.renderer.overlaySKScene = scene.overlay
-        host.onUpdate = { [weak scene] frame in scene?.update(frame) }
+        // The window is read here, every frame, because this is the only place in the saver that
+        // has one — and it must be re-read rather than captured, since the host changes a view's
+        // window level out from under it with no callback when it has finished with the view.
+        // `SoundSession.isPresenting` is where that is measured and argued.
+        host.onUpdate = { [weak self, weak scene] frame in
+            scene?.isPresenting = SoundSession.isPresenting(self?.window)
+            scene?.update(frame)
+        }
         // Only the backing scale is worth reacting to here; the drawable's shape reaches the
         // scene every frame through `FrameContext`. This is not optional polish — the scene is
         // always built at a provisional scale of 1, and this is what corrects it.
