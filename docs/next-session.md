@@ -630,6 +630,67 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 ## Next, in order
 
+**Items 1 and 2 are the agreed next session.** They are two halves of one observation — the host
+keeps views it is not really showing, and a saver currently treats them as though it were — but
+they are separate pieces of work and neither blocks the other. Read `docs/saver-host.md` §2 first;
+it holds the measurements both of these start from, and the list of signals already proven useless.
+
+1. **The picker renders a full-quality frame into a two-inch thumbnail.** The aquarium draws five
+   lights, caustics, god rays, bloom and MSAA for a tile a couple of inches wide, several alive at
+   once in the settings pane. Nothing in SaverKit has been changed for it.
+
+   **Why the obvious fix does not exist:** the tile is a 2056x1329 view on a 2056-point screen, so
+   `ScreenSaverView.isPreview` (`false`), SaverKit's 600-point `previewWidthThreshold`, screen
+   fraction (1.00) and `occlusionState` (`occluded`, for the real thing too) all call it a
+   full-screen saver. Those are measured, not assumed. **The session notification is not the fix
+   either** — a thumbnail must render cheaply whether or not a screensaver is running.
+
+   **The leading candidate, untested for this purpose:** the per-view window level, which is
+   already proven to separate a presenting view (`-2147483625`) from one the host is not showing
+   (`0`), and which `SoundSession.isPresenting` already reads every frame for the audio gate. A
+   view at `.normal` is not presenting the screensaver, so it does not need the expensive passes.
+   Three things to think about before building it:
+
+   - **Quality is currently decided when the host is built**, via `HostContext.isPreview`, and the
+     level changes under a live view with no callback. `reloadHost()` already exists for exactly
+     this shape of problem — it is how the settings sheet applies a new look to a running view —
+     so reacting to a level change by rebuilding may be cheaper to write than making every pass
+     dynamic. Do not rebuild on a level *flicker*; require the change to hold.
+   - **The sheet's own 384x216 preview is at a normal level too, and must still render** — cheaply
+     is correct there, invisibly is not.
+   - **A full-screen Preview launched from the sheet is presenting**, so it must keep full quality.
+     That is the case that will catch a naive test.
+
+   Wants the aquarium in front of the user, since the question "is this still the tank" is a
+   judgement rather than a measurement.
+
+2. **An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**
+   `suspendFrames()` keys on `window == nil`, but a window that has been ordered out is still a
+   window — so the view keeps a live `CADisplayLink`, and therefore the run-loop retain that makes
+   it immortal. `spikes/006-saver-audio/lifecycle-driver.swift` measured that `orderOut` sends **no
+   callback of any kind** while the frame heartbeat stops dead, and that dropping every reference
+   afterwards produced **no `deinit`**. That last result is recorded without a root-cause analysis
+   and is not covered by any SaverKit test; **establishing what still retains the view is the first
+   task, not the fix.**
+
+   **The obvious candidate** is to widen the test from `window != nil` to something that also
+   rejects an ordered-out window — `window.isVisible` is the direct reading of it. Check it against
+   all three of the settings-sheet preview, the harness window and a real session before believing
+   it, because this is a test that fails silently in the expensive direction: too strict and a real
+   saver goes black, too loose and nothing is fixed.
+
+   **How to measure it, and two traps:** `SAVERKIT_LIFECYCLE=1` logs a `created` and a `destroyed`
+   line per view, and counting them is the whole regression test. A harness that pumps the run loop
+   by hand measures its own autorelease pool — a first probe reported a steady 445 MB per cycle
+   leaking from the settings sheet, which does not leak at all — so use `app.run()` and
+   `leaks <pid> --traceTree=<addr>`. And **`run-saver` proves nothing about deallocation**, because
+   process exit does not run `deinit`.
+
+3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
+   twelve did not (independent dorsal spines; a curled prehensile tail).
+
+### Done, kept for what they record
+
 1. ~~**The audio spike.**~~ **Done — a screensaver can make a sound.** Read
    `spikes/006-saver-audio/README.md` before writing any audio; it is mostly a list of things
    that look like they work and do not. The headline: **gate audio on the screensaver session,
@@ -641,12 +702,7 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    allowed to settle, because `didstart` is posted before the host process exists.
 
    **The finding that is not about audio: `isPreview` is wrong in the picker, for every saver.**
-   The tile is 2056x1329 on a 2056-point screen, so both `ScreenSaverView.isPreview` and
-   SaverKit's width threshold call it a full-screen saver — and the aquarium has therefore been
-   rendering five lights, caustics, god rays, bloom and MSAA into a two-inch thumbnail, several
-   alive at once in the settings pane. This is its own piece of work, wants the aquarium in front
-   of the user, and **the session notification is not the fix for it**: a thumbnail should render
-   cheaply whether or not the screensaver is running. Nothing in SaverKit has been changed yet.
+   That is now item 1 above, with what is known about how to fix it.
 
 2. ~~**Phase 1 of the audio track: the bubble bed.**~~ **Done and signed off.** The sound is
    judged good — see the State section. What is left on this track is small and optional:
@@ -688,9 +744,7 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    whether an unrelated window happens to be open, and the failure is a valid WAV of silence.
    The stats line names it: `session idle` means the gate, `showing no` means the window level.
 
-3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
-   twelve did not (independent dorsal spines; a curled prehensile tail).
-4. ~~**The picker thumbnail.**~~ **Done and verified in the picker.** The tile is the tank now.
+3. ~~**The picker thumbnail.**~~ **Done and verified in the picker.** The tile is the tank now.
    Everything that was unknown about the convention was measured rather than guessed, and
    `spikes/007-picker-thumbnail/README.md` holds all of it — read that before touching
    `tools/build-thumbnail.sh` or the thumbnail step in `build-saver.sh`. The two findings that
