@@ -123,7 +123,8 @@ The same falls out for a fish's movement, by construction: the radii it entrains
 every one of those is what resampling does. One reference fish covers every fish in the
 library exactly.
 
-So the shipped library is **five radii, two trains and two gestures — 25 files, ~1.9 MB** —
+So the shipped library is **five radii, two trains, two fish gestures and three aerator
+releases — 31 files, ~3.8 MB** —
 and the runtime's rate knob fills in the continuum. What extra baked radii buy is not
 coverage but *tail fidelity*: the tank's response is baked in and a resample stretches that
 too, so the ratio is kept inside ±33%.

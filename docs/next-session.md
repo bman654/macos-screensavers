@@ -70,7 +70,7 @@ The three things that actually mattered:
 The rest of the shape:
 
 - **Sounds are code, the same as models.** `tools/build-audio.py` bakes a grain library from
-  `Savers/Aquarium/Sounds/*.py` into `Assets/audio/` — untracked build output, 25 files, 1.9 MB.
+  `Savers/Aquarium/Sounds/*.py` into `Assets/audio/` — untracked build output, 31 files, 3.8 MB.
 - **The library is short because a resample is the *correct* transform, not a cheap one.**
   Radiation damping is independent of bubble radius, so ring-down time is exactly inversely
   proportional to frequency — playing a baked 1.5 mm bubble 20% fast *is* a 1.25 mm bubble. A
@@ -250,8 +250,10 @@ each in the direction of saying a broken thing was fine:
 
 **The generated library is not tracked.** Models are code; the `.usdz` and `.json` under
 `Savers/Aquarium/Assets/` are its outputs, and a re-bake is part of the normal loop rather
-than an event. On a fresh clone run `tools/build-library.py` (about 10 minutes) before
-`tools/build-saver.sh`.
+than an event. On a fresh clone run `tools/build-library.py` (about 10 minutes) **and
+`tools/build-audio.py` (about 15 seconds)** before `tools/build-saver.sh`. Skipping the audio
+bake fails quietly in the way that wastes an afternoon: `SoundLibrary` returns nil by design, so
+the tank simply has no voice and nothing anywhere says why.
 
 ## Loops
 
@@ -654,9 +656,16 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    And from the saver itself, which is the ground truth:
 
    ```bash
-   AQUARIUM_SOUND=1 AQUARIUM_AUDIO_STATS=30 AQUARIUM_AUDIO_RECORD=/tmp/tank.wav \
+   AQUARIUM_SOUND=1 AQUARIUM_SOUND_SESSION=1 AQUARIUM_AUDIO_STATS=30 \
+       AQUARIUM_AUDIO_RECORD=/tmp/tank.wav \
        tools/run-saver.swift Aquarium --size 1200x700 --seconds 95 --screenshot /tmp/t.png
    ```
+
+   **`AQUARIUM_SOUND_SESSION=1` is not optional here**, and leaving it off is the trap this
+   loop has: without it the session gate falls back to "is System Settings open", which the
+   harness cannot answer for itself — so whether your recording contains anything depends on
+   whether an unrelated window happens to be open, and the failure is a valid WAV of silence.
+   The stats line names it: `session idle` means the gate, `showing no` means the window level.
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
