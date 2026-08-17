@@ -219,6 +219,16 @@ if [[ -d "$SAVER_DIR/Assets" ]]; then
   ditto "$SAVER_DIR/Assets" "$RESOURCES"
 fi
 
+# The picker finds a saver's tile by filename, at Contents/Resources/thumbnail.png — no
+# Info.plist key names it, and without the file the tile is a generic swirl however good the
+# saver looks running. Kept out of Assets/ because that directory is generated build output.
+if [[ -d "$SAVER_DIR/Thumbnail" ]]; then
+  for thumbnail in "$SAVER_DIR"/Thumbnail/thumbnail*.png; do
+    [[ -f "$thumbnail" ]] || continue
+    cp "$thumbnail" "$RESOURCES/"
+  done
+fi
+
 SHADER_SOURCES=()
 if [[ -d "$SAVER_DIR/Shaders" ]]; then
   mkdir -p "$RESOURCES/Shaders"
