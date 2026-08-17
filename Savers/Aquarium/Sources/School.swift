@@ -411,7 +411,16 @@ final class School {
         let turning = abs(fish.yawRate) * fish.speed
             / max(fish.limits.yawRate * fish.cruiseSpeed * swishTurnShare, 1e-4)
         let strain = max(effort / max(swishThreshold, 1e-4), turning)
-        let straining = strain >= 1
+        // **Only while the fish is darting**, which is a narrowing and was asked for by name.
+        // The threshold above answers "is this animal working hard", and it answered correctly:
+        // most of what it caught was a hard turn during a cruise or a wander. But a hard turn is
+        // not something a viewer can see happen — judged on the installed build, the sound could
+        // not be tied to anything on screen — so the gesture is now spent only on the one act
+        // that reads as an event. The strain test is kept rather than replaced by the decision
+        // itself, because it fires when the animal is actually moving fast rather than at the
+        // instant it made up its mind, and because `strength` is what separates a hard bolt from
+        // a lazy one.
+        let straining = fish.brain.behavior == .dart && strain >= 1
         let beginning = straining && !fish.wasStraining
         fish.wasStraining = straining
 

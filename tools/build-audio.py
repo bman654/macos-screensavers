@@ -28,7 +28,7 @@ sys.path.insert(0, str(_REPO / "Savers" / "Aquarium" / "Sounds"))
 
 import library  # noqa: E402
 import soundscape  # noqa: E402
-from soundlib import bubble, dsp, swish, water, wavefile  # noqa: E402
+from soundlib import bubble, dsp, puff, swish, water, wavefile  # noqa: E402
 
 _OUT = _REPO / "Savers" / "Aquarium" / "Assets" / "audio"
 _SAMPLE_RATE = water.SAMPLE_RATE
@@ -95,6 +95,29 @@ def _bake_swishes(response: np.ndarray) -> list[dict]:
     return grains
 
 
+def _bake_puffs(response: np.ndarray) -> list[dict]:
+    grains: list[dict] = []
+    for index, spec in enumerate(library.PUFFS):
+        for variant in range(spec.variants):
+            rng = np.random.default_rng(0x9FF0_0000 + index * 16 + variant)
+            dry = puff.release(_SAMPLE_RATE, rng, size=spec.size)
+            grains.append({
+                "name": f"puff_{index}_{variant}",
+                "family": "puff",
+                # The size is what the scheduler resamples against, and it stands in for a
+                # radius here: a bigger release is a slower rate, exactly as a bigger bubble
+                # is. Carried so `_level_family` groups the variants of one size together.
+                "radiusMm": round(puff.MEDIAN_RADIUS * spec.size, 3),
+                "size": spec.size,
+                # The bed's own treatment, not the fish's. A puff is bubbles rising in
+                # water, so it keeps the tilt and the fine top that `swish` deliberately
+                # cuts — see the module docstring.
+                "samples": water.place(water.underwater(dry, _SAMPLE_RATE), response,
+                                       wet=spec.wet),
+            })
+    return grains
+
+
 def _level_family(grains: list[dict], families: set[str]) -> None:
     """Normalise each grain to the file's headroom, and carry its authored level as `gain`.
 
@@ -156,11 +179,13 @@ def main() -> int:
     response = water.tank_space(_SAMPLE_RATE)
 
     grains: list[dict] = []
-    wanted = arguments.only or ["bubble", "swish"]
+    wanted = arguments.only or ["bubble", "swish", "puff"]
     if any("bubble" in w or "burst" in w for w in wanted):
         grains += _bake_bubbles(response)
     if any("swish" in w or "dart" in w for w in wanted):
         grains += _bake_swishes(response)
+    if any("puff" in w for w in wanted):
+        grains += _bake_puffs(response)
     if not grains:
         print(f"error: --only {wanted} matched no families", file=sys.stderr)
         return 1
@@ -169,6 +194,11 @@ def main() -> int:
         _level_family(grains, {"bubble", "burst"})
     if any(g["family"] in {"swish", "dart"} for g in grains):
         _level_family(grains, {"swish", "dart"})
+    # Levelled on its own, not with the bed. A puff has to be able to stand out from the bed
+    # it arrives over — that is the whole point of it — so the two families' relative loudness
+    # is a mix decision in `soundscape.py`, not an accident of their RMS.
+    if any(g["family"] == "puff" for g in grains):
+        _level_family(grains, {"puff"})
 
     arguments.out.mkdir(parents=True, exist_ok=True)
     entries = []

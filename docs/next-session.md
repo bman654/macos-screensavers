@@ -621,10 +621,13 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
      arrive a dozen a second. **Do not fix it with a noise layer** — that is exactly what was
      removed as "a steady background hum". If it is fixed at all, it is fixed with more
      arrivals: a second, much faster stream of very small radii.
-   - **The swish rate has never been judged deliberately.** It is one every ~3.5 s of tank
-     time, and the user's only comment was that they "can hear the occasional swish", which
-     reads as acceptable rather than as tuned. `TURN_SHARE` has a cliff in it — 0.9 gives 30
-     per 90 s, 1.3 gives 2 — so small changes are large.
+   - ~~**The swish rate has never been judged deliberately.**~~ **Judged, and the answer was
+     not a rate.** The verdict was that nothing audible could be tied to anything visible —
+     "probably I have never seen a fish dart, the visual change in acceleration is too subtle
+     to register" — so the fix was to the *tank*: a dart is longer, faster and now turns 26–66°,
+     which buys a visible bank for free, and the gesture is spent on darts only. The props got
+     an onset gesture of their own (`puff.py`) so a chest opening is heard as an event rather
+     than as a rise in bed density. `docs/tank-sound.md` §"Tying the audible to the visible".
    - **Two spike items are still open and neither belongs to this feature**: the login window,
      and two real displays.
 

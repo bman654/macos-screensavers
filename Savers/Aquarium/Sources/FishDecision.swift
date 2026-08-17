@@ -207,14 +207,30 @@ extension FishBrain {
             targetHeight = min(ground + context.length * rand.inRange(0.8, 1.6), span.high)
 
         case .dart:
-            remaining = rand.inRange(0.35, 0.8)
-            targetSpeedFactor = rand.inRange(2.4, 3.2)
-            // A dart holds its heading. The startle is the acceleration, not a change of mind.
-            targetYaw = context.yaw + rand.inRange(-0.25, 0.25)
-            pitchBias = rand.inRange(-0.15, 0.15)
-            // Long enough that a fish cannot chain two into a twitch, short enough that a tank
-            // watched for a minute still sees several.
-            dartCooldown = rand.inRange(8, 22)
+            // Long enough to cover ground. At 0.35–0.8 s it was over before the eye arrived:
+            // judged on the installed build, "I have never seen a fish dart… the visual change
+            // in acceleration is too subtle to register", and the tank's own census agreed at
+            // four darts in a hundred and fifty seconds across ten fish. A dart is the one
+            // gesture the sound is tied to, and a sound whose picture nobody catches is worse
+            // than no sound at all.
+            remaining = rand.inRange(0.75, 1.3)
+            targetSpeedFactor = rand.inRange(2.6, 3.6)
+            // **A dart turns now, and that is the change that makes it visible.** It used to
+            // hold its heading on the argument that a startle is acceleration rather than a
+            // change of mind — true of the physics, and it produced a fish that got slightly
+            // faster in a straight line for half a second, which is nothing to see. A real
+            // C-start throws the body into a bend and the animal leaves at an angle, and the
+            // angle is what the eye catches: `School` banks a fish into its own yaw rate, so a
+            // heading change buys a visible roll for free rather than costing an animation.
+            //
+            // Signed rather than symmetric about zero, so the fish commits to a side instead of
+            // picking a small number either way.
+            let away: Float = rand.next() < 0.5 ? -1 : 1
+            targetYaw = context.yaw + away * rand.inRange(0.45, 1.15)
+            pitchBias = rand.inRange(-0.22, 0.22)
+            // Short enough that a tank watched for a minute sees several, long enough that one
+            // fish cannot chain two into a twitch.
+            dartCooldown = rand.inRange(5, 13)
 
         case .host:
             remaining = rand.inRange(3.2, 6.5)
@@ -328,7 +344,11 @@ extension FishBrain {
             options.append((.forage, context.bounds.isEnclosed ? 2.2 : 1.2))
         }
         if dartCooldown <= 0 {
-            options.append((.dart, 0.15))
+            // Raised from 0.15 with the dart's own shape. It is the only thing in the tank that
+            // is both audible and legible as a single act, so it has to happen often enough to
+            // be caught — but it is still the rarest behaviour on offer, because a tank where
+            // something bolts every few seconds is agitated rather than alive.
+            options.append((.dart, 0.34))
         }
         if passageCooldown <= 0, nearestPassage(context) != nil {
             // A lurker is here for this. For everything else a swim-through is a diversion it

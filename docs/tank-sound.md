@@ -352,6 +352,69 @@ cat "$D"/aquarium-sound-*.log
 rm "$D/aquarium-audio-debug"      # and it is inert again
 ```
 
+## Tying the audible to the visible
+
+The first build with sound was judged working and *disconnected*:
+
+> "Right now I hear a fairly steady bubble bed... what would be interesting is to keep the
+> bubble bed that we currently have, but tie the swishes to the actual fish doing something
+> like darting or changing direction, and tie a burst of bubbles to when one of the bubblers
+> activates and releases its set of bubbles, like when the chest opens."
+
+Both couplings already existed and neither was legible, for two different reasons. Fixing them
+took one new gesture and one change to the fish, and the fish change is not an audio change at
+all.
+
+### The props: a density is not an event
+
+`setEmission` derives the bed's arrival rate from whichever emitters are alive, so a chest
+opening genuinely did raise the bed — by an amount nobody can hear as a *moment*. `puff.py` is
+the onset: one baked gesture, fired on the frame a stream starts, panned and attenuated at the
+prop's own position so it comes from where the bubbles can be seen leaving.
+
+It is built from the same primitives as the bed and the fish — an inhomogeneous Poisson burst of
+bubbles kicking the plume's collective mode — and differs in exactly three ways, each with a
+reason:
+
+- **It starts at full density and decays.** `swish.stroke` ramps over its first 22% because a
+  fish has to get moving; a lid releases gas that was already there.
+- **Coarser radii with a long upper tail**, past what the bed can produce (11 mm against 5.6).
+  Trapped gas tears into big bubbles where a boundary layer sheds fine ones, and that first slow
+  blorp is the single most recognisable thing about a release.
+- **No cliff.** `swish.py` cuts hard at 780 Hz because its references do; a puff is bubbles
+  rising in water exactly like the bed, so it keeps the bed's tilt. Cutting it would make a chest
+  sound like a fish.
+
+Size follows the picture with nothing authored per prop: the emitter's declared particle rate —
+7 a second for a clamshell, 55 for a treasure chest — picks the baked release, so the chest gets
+the big one. Measured at **one puff about every ten seconds** on a two-emitter tank, which is the
+props' own 11–26 s idle showing through.
+
+### The fish: the sound was right and the picture was invisible
+
+The swish trigger was working exactly as designed and the design was the problem. It fired on
+lateral acceleration, so most of what it caught was a hard turn during a cruise — and a hard turn
+is not something a viewer can *see happen*. The user's verdict names it precisely:
+
+> "Probably I have never seen a fish dart. The visual change in acceleration is too subtle to
+> register, which leads to me not tying the visual to the audible swish."
+
+Two changes, and the load-bearing one is to the tank rather than to the sound:
+
+- **A dart is now visible.** It was 0.35–0.8 s at 2.4–3.2× cruise *holding its heading* — a fish
+  that got slightly faster in a straight line for half a second, four times in a hundred and
+  fifty seconds across ten fish. It is now 0.75–1.3 s at 2.6–3.6× and **turns 26° to 66°**, which
+  is what a real C-start does and what the eye actually catches. The turn costs no animation:
+  `School` banks a fish into its own yaw rate, so a heading change buys the visible roll for
+  free. Weight 0.15 → 0.34 and the cooldown 8–22 s → 5–13 s.
+- **The gesture is spent on darts only.** `noteSwish` still measures strain — it fires when the
+  animal is moving fast rather than when it made up its mind, and `strength` still separates a
+  hard bolt from a lazy one — but it is gated on `behavior == .dart`.
+
+`TURN_SHARE` therefore no longer sets the rate; the dart weight and cooldown do. The old cliff
+table in this file is kept below because it is a measurement, but it describes a trigger that no
+longer fires outside a dart.
+
 ## Default off, and that is settled
 
 Ambient sound only, toggleable, **defaulting to off**. A screensaver starts *because* the user

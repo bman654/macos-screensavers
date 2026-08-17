@@ -106,3 +106,29 @@ SWISHES: list[SwishGrain] = [
     SwishGrain(name="swish", beats=1, effort=1.0),
     SwishGrain(name="dart", beats=3, effort=2.4),
 ]
+
+
+@dataclass(frozen=True)
+class PuffGrain:
+    """One baked aerator release — a chest opening and letting its gas go."""
+    #: A pure time-scale on the whole gesture, so variants differ in more than a seed
+    #: without any of them being a separate synthesis.
+    size: float
+    variants: int = 2
+    #: As wet as the bed. A puff comes from a prop standing in the tank, at the same
+    #: distance as everything else that bubbles, and the ear will place them together.
+    wet: float = 0.24
+
+
+#: Three sizes of release, and the runtime picks by the emitter's declared birth rate.
+#:
+#: The library could have been one grain and a rate knob — that is the rule everywhere else
+#: here — and these are still exactly that, baked. What buys the three is tail fidelity:
+#: the tank's response is baked into every grain and a resample stretches it too, so the
+#: runtime's rate is kept inside about +/-33% and three sizes is what covers a clamshell's
+#: 7 bubbles a second through a treasure chest's 55 without leaving that window.
+PUFFS: list[PuffGrain] = [
+    PuffGrain(size=0.62),
+    PuffGrain(size=1.00),
+    PuffGrain(size=1.55),
+]

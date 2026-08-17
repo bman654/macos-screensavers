@@ -72,6 +72,17 @@ struct SoundManifest: Decodable {
         let rateMin: Float
         let rateMax: Float
     }
+    struct Puff: Decodable {
+        let gain: Float
+        /// Declared particle rates that map to the smallest and largest baked release. What
+        /// the picture is doing chooses the sound: a clamshell ticks out 7 a second and a
+        /// treasure chest 55, so the chest gets the big one with nothing authored per prop.
+        let rateSmall: Float
+        let rateLarge: Float
+        let rateMin: Float
+        let rateMax: Float
+        let cooldown: Float
+    }
     struct Mix: Decodable {
         let panWidth: Float
         let masterGain: Float
@@ -85,6 +96,7 @@ struct SoundManifest: Decodable {
     let bed: Bed
     let water: Water
     let fish: Fish
+    let puff: Puff
     let mix: Mix
 }
 
@@ -108,6 +120,12 @@ final class SoundLibrary {
     let swishCount: Int
     let dartFirst: Int
     let dartCount: Int
+
+    /// Baked releases, by size. A size class rather than a flat range because a puff is
+    /// chosen by how hard the emitter is running, and picking the nearest baked size keeps
+    /// the resample — and therefore the stretch on the baked tank response — small.
+    let puffSizes: UnsafeMutablePointer<GrainSizeClass>
+    let puffSizeCount: Int
 
     private let sampleCapacity: Int
 
@@ -171,6 +189,7 @@ final class SoundLibrary {
         (burstSizes, burstSizeCount) = SoundLibrary.sizeClasses(of: "burst", in: playable)
         (swishFirst, swishCount) = SoundLibrary.range(of: "swish", in: playable)
         (dartFirst, dartCount) = SoundLibrary.range(of: "dart", in: playable)
+        (puffSizes, puffSizeCount) = SoundLibrary.sizeClasses(of: "puff", in: playable)
 
         guard bubbleSizeCount > 0 else { return nil }
     }
@@ -180,11 +199,12 @@ final class SoundLibrary {
         grains.deallocate()
         bubbleSizes.deallocate()
         burstSizes.deallocate()
+        puffSizes.deallocate()
     }
 
     // MARK: Building the tables
 
-    private static let familyOrder = ["bubble", "burst", "swish", "dart"]
+    private static let familyOrder = ["bubble", "burst", "swish", "dart", "puff"]
 
     private static func order(_ grains: [SoundManifest.Grain]) -> [SoundManifest.Grain] {
         grains

@@ -102,6 +102,11 @@ final class AquariumSound {
     private var swishesPlayed = 0
     private var swishesRefused = 0
 
+    /// The last time any prop was heard letting go, and the counters for `AQUARIUM_AUDIO_STATS`.
+    private var lastPuff: CFTimeInterval = -.greatestFiniteMagnitude
+    private var puffsPlayed = 0
+    private var puffsRefused = 0
+
     /// What `School` needs in order to decide which gestures are worth offering at all.
     var minimumEffort: Float { library.manifest.fish.minEffort }
     var turnShare: Float { library.manifest.fish.turnShare }
@@ -233,6 +238,68 @@ final class AquariumSound {
         swishesPlayed += 1
         return core.push(SoundTrigger(offset: slice.offset, frames: slice.frames, rate: ratio,
                                       gain: level,
+                                      pan: min(max(pan, -1), 1)
+                                          * library.manifest.mix.panWidth))
+    }
+
+    /// A prop has just started emitting — a chest lid opening, a vent kicking off.
+    ///
+    /// The bed already follows the props, but only as a *density*: `setEmission` raises the
+    /// arrival rate while an emitter is alive, which is true and is not an event. The user's
+    /// verdict on the first build says what that costs — "a fairly steady bubble bed", with
+    /// nothing tying the audible to the visible. This is the onset, landing on the frame the
+    /// picture shows it happening.
+    ///
+    /// - Parameters:
+    ///   - declaredRate: the emitter's own particle rate, which is what picks the size. The
+    ///     clamshell's 7 a second and the treasure chest's 55 are already authored in the model
+    ///     manifests, so the chest gets the big release with nothing added per prop.
+    ///   - pan: -1 at the left edge of the frame, +1 at the right.
+    ///   - nearness: 1 at the glass, falling toward the back wall.
+    @discardableResult
+    func puff(declaredRate: Float, pan: Float, nearness: Float) -> Bool {
+        let spec = library.manifest.puff
+        guard library.puffSizeCount > 0 else { return false }
+        guard now - lastPuff >= Double(spec.cooldown) else {
+            puffsRefused += 1
+            return false
+        }
+
+        // Where this emitter sits between the smallest and largest baked release, in log space
+        // because size here is a playback rate and rates multiply.
+        let span = max(spec.rateLarge - spec.rateSmall, 1e-3)
+        let position = min(max((declaredRate - spec.rateSmall) / span, 0), 1)
+        let smallest = max(library.puffSizes[0].radiusMm, 1e-4)
+        let largest = max(library.puffSizes[library.puffSizeCount - 1].radiusMm, 1e-4)
+        let target = smallest * pow(largest / smallest, position)
+
+        // Nearest baked size by log distance, the same rule the bed's scheduler uses — it keeps
+        // the resample small, and the resample stretches the tank response baked into the grain.
+        var best = 0
+        var bestDistance = Float.greatestFiniteMagnitude
+        for index in 0..<library.puffSizeCount {
+            let distance = abs(log(max(library.puffSizes[index].radiusMm, 1e-4) / target))
+            if distance < bestDistance {
+                bestDistance = distance
+                best = index
+            }
+        }
+        let sizeClass = library.puffSizes[best]
+        guard sizeClass.count > 0 else { return false }
+
+        // From the tank's own stream, so a seeded recording picks the same variants twice.
+        let variant = Int(sizeClass.first)
+            + min(Int(choice.next() * Float(sizeClass.count)), Int(sizeClass.count) - 1)
+        let slice = library.grains[variant]
+        guard slice.frames > 1 else { return false }
+
+        let ratio = min(max(sizeClass.radiusMm / target, spec.rateMin), spec.rateMax)
+        let level = spec.gain * slice.gain * min(max(nearness, 0.2), 1)
+
+        lastPuff = now
+        puffsPlayed += 1
+        return core.push(SoundTrigger(offset: slice.offset, frames: slice.frames,
+                                      rate: ratio, gain: level,
                                       pan: min(max(pan, -1), 1)
                                           * library.manifest.mix.panWidth))
     }
@@ -470,7 +537,7 @@ final class AquariumSound {
         lastReport = time
         print(String(format:
             "[sound] t=%6.1f  engine %@  session %@  showing %@  owner %@  render %d  voices %d"
-            + "  bubbles %d (dropped %d)  swishes %d (refused %d)",
+            + "  bubbles %d (dropped %d)  swishes %d (refused %d)  puffs %d (refused %d)",
             time, engine == nil ? "off" : "running",
             SoundSession.shared.isScreenSaverRunning ? "running" : "idle",
             isPresenting ? "yes" : "no",
@@ -478,6 +545,7 @@ final class AquariumSound {
             core.renderedFrames.load(ordering: .relaxed),
             core.voicesInFlight.load(ordering: .relaxed),
             core.bubblesPlaced.load(ordering: .relaxed),
-            core.bubblesDropped.load(ordering: .relaxed), swishesPlayed, swishesRefused))
+            core.bubblesDropped.load(ordering: .relaxed), swishesPlayed, swishesRefused,
+            puffsPlayed, puffsRefused))
     }
 }

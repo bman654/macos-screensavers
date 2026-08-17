@@ -207,6 +207,26 @@ final class AquariumScene {
                             nearness: event.nearness, strength: event.strength,
                             isDart: event.isDart)
             }
+            // The props letting go. The bed already follows their *density*; this is the onset,
+            // placed where the bubbles leave rather than at the centre of the frame — a sound
+            // tied to something visible is worth nothing if it does not come from where the
+            // thing is.
+            let tank = style.tank
+            for bubbler in bubblers {
+                bubbler.onEmissionStart = { [weak reefNode = reef.node] position, rate in
+                    let world = reefNode?.convertPosition(position, to: nil) ?? position
+                    let depth = max(Float(-world.z), 1e-3)
+                    let halfWidth = tank.halfWidth(atDepth: depth)
+                    let span = max(tank.swimFarDepth - tank.swimNearDepth, 1e-3)
+                    let recession = min(max((depth - tank.swimNearDepth) / span, 0), 1)
+                    sound.puff(declaredRate: rate,
+                               pan: halfWidth > 1e-4 ? Float(world.x) / halfWidth : 0,
+                               // The same depth cue the school uses, and never all the way to
+                               // zero for the same reason: the listener is inside a tank a
+                               // metre deep, so the back wall is not far away.
+                               nearness: 1 - 0.6 * recession)
+                }
+            }
             self.sound = sound
         }
         // Three separate reasons for a silent tank, and from the front of the screen they look

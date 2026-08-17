@@ -46,11 +46,21 @@ final class Bubbler {
         streams.forEach { $0.trackSource() }
     }
 
+    /// Raised on the frame a stream starts, with the mouth's position in reef space and the
+    /// emitter's declared rate. Nil, and therefore free, when sound is off.
+    var onEmissionStart: ((SCNVector3, Float) -> Void)?
+
     func update(dt: Float) {
         cycle?.update(dt: dt)
         // The part has already reached this frame's pose, so the first bubble born from an opening
         // lid leaves its new position rather than trailing the hinge by one frame.
         streams.forEach { $0.trackSource() }
+        // After `trackSource`, for the same reason: the sound of a chest letting go is placed
+        // where its opened lid put the mouth, not where the closed one had it.
+        guard let onEmissionStart else { return }
+        for stream in streams where stream.takeOnset() {
+            onEmissionStart(stream.position, stream.declaredRate)
+        }
     }
 
     /// Particles per second this prop is emitting right now, summed over its live streams.
@@ -136,12 +146,32 @@ private final class BubbleStream {
 
     private(set) var isActive: Bool
 
+    /// Set on the frame this stream starts, cleared by whoever reads it.
+    ///
+    /// A continuous emitter never raises one: a thermal vent that has been running since the
+    /// tank was drawn has no moment to tie a sound to, and firing one at launch would put a
+    /// release on top of the fade-in for something the viewer never saw start.
+    private(set) var justStarted = false
+
     func setActive(_ active: Bool) {
+        if active && !isActive && !spec.continuous { justStarted = true }
         isActive = active
         particles.birthRate = active ? CGFloat(max(0, spec.rate)) : 0
     }
 
+    /// The onset, once. Read on the frame after the part has been posed, so a release is heard
+    /// from where the bubbles actually leave rather than from where the lid was last frame.
+    func takeOnset() -> Bool {
+        defer { justStarted = false }
+        return justStarted
+    }
+
     var liveRate: Float { isActive ? max(0, spec.rate) : 0 }
+
+    /// Where this stream's mouth is, in the reef's own space, for placing its sound.
+    var position: SCNVector3 { anchor.position }
+
+    var declaredRate: Float { max(0, spec.rate) }
 
     func trackSource() {
         anchor.position = source.convertPosition(SCNVector3Zero, to: reefNode)

@@ -120,6 +120,11 @@ SWISH_FISH_COOLDOWN = 5.0
 SWISH_TANK_COOLDOWN = 1.6
 
 #: Peak gain for a stroke and for a bolt.
+#:
+#: `SWISH_GAIN` is very nearly unreachable now and is kept rather than removed: the gesture is
+#: gated on the fish actually darting (see `docs/tank-sound.md` §"The fish"), so `dart` is what
+#: plays. A fish that crosses into strain during the first frames of a dart, before its speed
+#: has built, still takes the stroke.
 SWISH_GAIN = 0.30
 DART_GAIN = 0.52
 
@@ -128,6 +133,36 @@ DART_GAIN = 0.52
 #: clamped and the remaining size difference is carried by gain instead.
 SWISH_RATE_MIN = 0.62
 SWISH_RATE_MAX = 1.55
+
+# --- The props letting go ------------------------------------------------------------
+
+#: Peak gain for an aerator release.
+#:
+#: Louder than a fish stroke, and that is the feature rather than a mix accident. The user's
+#: verdict on the first build with sound was that the bed was "fairly steady" and that
+#: nothing was tied to what could be seen — so a puff has to be recognisable *over* the bed
+#: it arrives on top of, or it is another density change and changes nothing.
+PUFF_GAIN = 0.66
+
+#: Which baked size a release plays, chosen by the emitter's declared birth rate.
+#:
+#: The rate is what the picture is doing — 7 particles a second for a clamshell, 24 for a
+#: thermal vent, 55 for a treasure chest — so the chest's release is the big one and the
+#: clam's is the small one, without anything having to be authored per prop.
+PUFF_RATE_SMALL = 12.0
+PUFF_RATE_LARGE = 40.0
+
+#: Rate limits on the size resample, as everywhere else here: the tank's response is baked
+#: into the grain and stretching it too far turns the tank into a cave.
+PUFF_RATE_MIN = 0.78
+PUFF_RATE_MAX = 1.30
+
+#: Seconds a single emitter must wait before it may be heard again.
+#:
+#: A prop's cycle idles for eleven to twenty-six seconds between releases, so this never
+#: binds in normal play. It exists for `AQUARIUM_BUBBLER_RUSH=1`, which collapses the idle
+#: phases to 0.18 s, and for a malformed cycle — neither should be able to machine-gun it.
+PUFF_COOLDOWN = 4.0
 
 # --- Placement and level -----------------------------------------------------------
 
@@ -181,6 +216,14 @@ def manifest() -> dict:
             "dartGain": DART_GAIN,
             "rateMin": SWISH_RATE_MIN,
             "rateMax": SWISH_RATE_MAX,
+        },
+        "puff": {
+            "gain": PUFF_GAIN,
+            "rateSmall": PUFF_RATE_SMALL,
+            "rateLarge": PUFF_RATE_LARGE,
+            "rateMin": PUFF_RATE_MIN,
+            "rateMax": PUFF_RATE_MAX,
+            "cooldown": PUFF_COOLDOWN,
         },
         "mix": {
             "panWidth": PAN_WIDTH,
