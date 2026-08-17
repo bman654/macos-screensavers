@@ -20,6 +20,12 @@ _RUN_BLENDER = _REPO / "tools" / "blender" / "run.sh"
 _ERROR = re.compile(r"Error|Traceback")
 _BUDGET_BYTES = 40_000_000
 
+# USD validation runs outside Blender, so importing `build_fish.py` would also import `bpy`.
+# Keep these coupled explicitly to build_fish.py's `_NO_PART` and `_PECTORAL_IDS` instead.
+_FISH_PART_IDS = (0.0, 0.25, 0.35)
+_PART_ID_TOLERANCE = 1e-3
+_USD_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+
 _FISH_RESOLUTION = 256
 _PROP_RESOLUTION = 256
 _RESOLUTION_BY_NAME = {
@@ -197,8 +203,13 @@ def _validate_outputs(name, category, asset, manifest):
     if category == "prop" and data.get("category") == "fish":
         raise BuildFailure(f"{manifest} is not a prop manifest")
 
+    # Fish need the full USDA text to inspect their second UV set. Props retain the cheaper
+    # load-only check and are deliberately outside the part-channel contract.
+    command = ["usdcat", os.fspath(asset)] if category == "fish" else [
+        "usdcat", "--loadOnly", os.fspath(asset)
+    ]
     check = subprocess.run(
-        ["usdcat", "--loadOnly", os.fspath(asset)],
+        command,
         cwd=_REPO,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -206,6 +217,39 @@ def _validate_outputs(name, category, asset, manifest):
     )
     if check.returncode:
         raise BuildFailure(f"usdcat could not load {asset}:\n{check.stdout}")
+
+    if category == "fish":
+        declaration = re.search(
+            r"\bprimvars:st1\s*=\s*\[(.*?)\]", check.stdout, re.DOTALL
+        )
+        if declaration is None:
+            raise BuildFailure(f"{asset} does not declare primvars:st1")
+        u_values = [
+            float(value)
+            for value in re.findall(rf"\(\s*({_USD_NUMBER})\s*,", declaration.group(1))
+        ]
+        if not u_values:
+            raise BuildFailure(f"{asset} declares primvars:st1 without readable UV values")
+        if any(abs(value - 1.0) <= _PART_ID_TOLERANCE for value in u_values):
+            raise BuildFailure(
+                f"{asset} primvars:st1 contains reserved U=1.0 (missing-channel white fill)"
+            )
+        unexpected = sorted({
+            value for value in u_values
+            if not any(abs(value - expected) <= _PART_ID_TOLERANCE
+                       for expected in _FISH_PART_IDS)
+        })
+        if unexpected:
+            samples = ", ".join(f"{value:.6g}" for value in unexpected[:8])
+            raise BuildFailure(
+                f"{asset} primvars:st1 has unexpected U value(s): {samples}; "
+                f"expected only {_FISH_PART_IDS} within {_PART_ID_TOLERANCE:g}"
+            )
+        present = sorted({
+            min(_FISH_PART_IDS, key=lambda expected: abs(value - expected))
+            for value in u_values
+        })
+        print(f"    [validate] primvars:st1 U ids {present}; no reserved white fill")
 
 
 def _build_one(name, category, staging):

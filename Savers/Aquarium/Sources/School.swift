@@ -18,56 +18,6 @@ import Foundation
 import SceneKit
 import simd
 
-// MARK: - Swim deformation
-
-/// How the body is deformed, in the vertex stage. Two terms, both keyed on `tailward`.
-///
-/// Proven in `spikes/001-fish-pipeline`. It works in the mesh's own object space, which is
-/// only valid because the fish is exported as a single joined mesh — reaching for world
-/// space via `u_modelTransform` inside a geometry modifier produces shredded geometry and a
-/// magenta surface, with no diagnostic. The `tailward²` envelope holds the head steady; a
-/// fish that translates bodily side to side reads as a bar of soap.
-///
-/// **The axes are the mesh's, which is Blender's and not the tank's.** Nose is +X, up is +Z and
-/// +Y is the fish's left; the pivot's -90° about X is what turns that into the tank's Y-up (see
-/// `makeFish`). So the lateral axis the swim wave has always used is `y`, and the vertical axis
-/// the turn arc needs is `z`.
-///
-/// **The terms compose, they do not replace each other.** Each is a displacement of the same
-/// undeformed vertex, added:
-///
-/// - **the body wave** — a travelling sine down the body, which is the swimming itself;
-/// - **the turn arc** — a constant-curvature bend, which is the body lying along the path the
-///   head has already taken. Only a lurker ever writes a non-zero `bendYaw`/`bendPitch`, so for
-///   every other species this term is exactly the zero it was built with.
-private let swimModifier = """
-#pragma arguments
-float swimPhase;
-float swimAmplitude;
-float swimWaves;
-float bodyMinX;
-float bodyLength;
-float bendYaw;
-float bendPitch;
-
-#pragma body
-float tailward = clamp((bodyMinX + bodyLength - _geometry.position.x) / bodyLength, 0.0, 1.0);
-
-// The body wave.
-float envelope = tailward * tailward;
-float wave = sin(tailward * swimWaves * 6.2831853 - swimPhase) * swimAmplitude * envelope;
-
-// The turn arc. A body of constant curvature k, measured back a distance s along itself from
-// the nose, stands k*s²/2 off the nose's own axis — toward the inside of the turn, which is
-// where a chord of a circle always lies. `bendYaw` and `bendPitch` are that curvature in these
-// object units, signed so that positive is toward +y (the fish's left) and +z (up).
-float s = tailward * bodyLength;
-float arc = 0.5 * s * s;
-
-_geometry.position.y += wave + bendYaw * arc;
-_geometry.position.z += bendPitch * arc;
-"""
-
 // MARK: - One fish
 
 private final class Fish {
@@ -121,6 +71,15 @@ private final class Fish {
     /// method needed a `Double` reduction to survive.
     var swimPhase: Float = 0
     var beat: Float = 1.5
+
+    /// The pectoral beat, carried apart from the tail's. It has to be: the two run at different
+    /// rates and in opposite directions — the pectorals work hardest exactly when the tail is
+    /// idling — so one phase cannot serve both.
+    var finPhase: Float = 0
+    /// The stroke's half-angle in radians, eased toward whatever the current behaviour asks for.
+    /// Eased for the same reason the bank is: a fish that decides to hover must not have its
+    /// fins snap open on the frame it decides.
+    var finAmplitude: Float = 0
 
     /// A small residual sway. It used to carry all of the school's vertical interest and now
     /// carries none of it, so it is much smaller than it was: with fish genuinely changing
@@ -240,6 +199,13 @@ final class School {
             else { break }
             let manifest = pool.remove(at: index)
             guard let model = cache.model(named: manifest.asset), model.length > 0 else { continue }
+            // Harness diagnostic only: the library build validates every fish before install.
+            // A stale local asset otherwise looks correct apart from fins that never move, so say
+            // why when the same environment gate used by the school census requests diagnostics.
+            if censusEnabled && !model.hasPartChannel {
+                print("[aquarium] \(manifest.asset) has no part channel (st1); its pectoral fins "
+                      + "cannot beat. Rebuild the library: tools/build-library.py")
+            }
 
             // No one species may take the whole tank.
             //
@@ -267,8 +233,12 @@ final class School {
                 // blanks are the ones that get looked at.
                 place(fish, spawningOffScreen: false, bounds: bounds, lanes: lanes,
                       stratum: (Float(member) + 0.5) / Float(size), spreadIndex: spawned + member)
-                // Spread the tail beats so a school of clones does not pulse in unison.
+                // Spread the tail beats so a school of clones does not pulse in unison. The fins
+                // are spread against a different denominator so the two do not stay locked to
+                // each other for the life of the school.
                 fish.swimPhase = Float(member) / Float(size) * 2 * .pi
+                fish.finPhase = (Float(member) * 0.7 * 2 * .pi)
+                    .truncatingRemainder(dividingBy: 2 * .pi)
                 fishes.append(fish)
                 node.addChildNode(fish.node)
             }
@@ -533,6 +503,13 @@ final class School {
             let beatFactor = min(max(0.34 + 0.66 * effort, 0.34), 2.2)
             fish.swimPhase += fish.beat * beatFactor * 2 * .pi * dt
             if fish.swimPhase > 2 * .pi { fish.swimPhase -= 2 * .pi }
+
+            let sculling = School.pectoralStroke(behavior: fish.brain.behavior, effort: effort,
+                                                 length: fish.length)
+            fish.finPhase += sculling.hertz * 2 * .pi * dt
+            if fish.finPhase > 2 * .pi { fish.finPhase -= 2 * .pi }
+            fish.finAmplitude += (sculling.amplitude - fish.finAmplitude)
+                * min(1, School.finEasing * dt)
 
             // The nose-down inspection pose is eased in and out. Snapping it looks like a hinge,
             // and it is the one part of the attitude that is not a consequence of the path.
@@ -870,6 +847,38 @@ final class School {
     /// that tracked it exactly would shiver rather than bend.
     private static let bendEasing: Float = 6
 
+    /// How fast the pectorals open and close, per second of easing. Slower than the bank and the
+    /// bend, because those follow the path and this follows a *decision*: a fish coming out of a
+    /// hover takes the better part of a second to fold its fins away, and easing it faster is the
+    /// snap the easing exists to prevent.
+    private static let finEasing: Float = 3.5
+
+    /// What the pectoral fins are doing, from what the fish is doing.
+    ///
+    /// The pectorals are a low-speed instrument and are almost the inverse of the tail: a fish
+    /// holding station sculls hard with them, a cruising fish beats them gently to trim, and a
+    /// bolting one folds them against its flanks because at speed they are drag. `effort` carries
+    /// the continuous half of that, so a fish accelerating out of a hover tucks them progressively
+    /// rather than at the moment it changes behaviour.
+    ///
+    /// The rate falls with body length for the reason every beat frequency does — a big animal
+    /// moves a big fin slowly, and a 40 cm angelfish sculling at a gramma's rate reads as a
+    /// fast-forwarded video. Referenced to 9 cm, which is about the middle of this library.
+    private static func pectoralStroke(behavior: Behavior, effort: Float,
+                                       length: Float) -> (amplitude: Float, hertz: Float) {
+        let base: (amplitude: Float, hertz: Float)
+        switch behavior {
+        case .hover, .forage: base = (0.46, 2.6)
+        case .host: base = (0.32, 2.3)
+        case .cruise, .wander, .transit: base = (0.20, 1.7)
+        // Folded. A dart is the one time a fish deliberately stops using them.
+        case .dart: base = (0.0, 2.0)
+        }
+        let tuck = min(max(1.15 - 0.45 * effort, 0.10), 1.0)
+        let size = min(max((0.09 / max(length, 0.01)).squareRoot(), 0.45), 1.3)
+        return (base.amplitude * tuck, base.hertz * size)
+    }
+
     /// Bends the body onto the path the head is taking.
     ///
     /// A swimming snake is its own trail: every part of it is where the head was a moment ago,
@@ -940,6 +949,10 @@ final class School {
         for material in fish.materials {
             material.setValue(NSNumber(value: fish.swimPhase), forKey: "swimPhase")
             material.setValue(NSNumber(value: amplitude), forKey: "swimAmplitude")
+            // Written for every fish. The fallback shader substitutes `float2(0)` rather than
+            // reading absent `texcoords[1]` (which makes the fish vanish), so no fin id matches.
+            material.setValue(NSNumber(value: fish.finPhase), forKey: "finPhase")
+            material.setValue(NSNumber(value: fish.finAmplitude), forKey: "finAmplitude")
             if let bend {
                 material.setValue(NSNumber(value: bend.x), forKey: "bendYaw")
                 material.setValue(NSNumber(value: bend.y), forKey: "bendPitch")
@@ -999,7 +1012,12 @@ final class School {
                   let copy = geometry.copy() as? SCNGeometry else { return }
             copy.materials = geometry.materials.compactMap { $0.copy() as? SCNMaterial }
             for material in copy.materials {
-                material.shaderModifiers = [.geometry: swimModifier]
+                // A model built before the part channel existed gets the variant that never
+                // touches `texcoords[1]` — see `swimModifierSource`. The whole fish still swims;
+                // only its fins are still.
+                material.shaderModifiers = [
+                    .geometry: model.hasPartChannel ? swimModifier : swimModifierWithoutParts
+                ]
                 material.setValue(NSNumber(value: 0.0), forKey: "swimPhase")
                 // Amplitude is in the model's own object space, so it scales with the source
                 // mesh, not with the fish's world size.
@@ -1011,6 +1029,10 @@ final class School {
                 // written.
                 material.setValue(NSNumber(value: 0.0), forKey: "bendYaw")
                 material.setValue(NSNumber(value: 0.0), forKey: "bendPitch")
+                // Fins folded until the first step decides otherwise, which keeps the very first
+                // frame from showing a school caught mid-stroke in unison.
+                material.setValue(NSNumber(value: 0.0), forKey: "finPhase")
+                material.setValue(NSNumber(value: 0.0), forKey: "finAmplitude")
             }
             node.geometry = copy
             materials.append(contentsOf: copy.materials)

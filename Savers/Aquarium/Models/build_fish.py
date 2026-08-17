@@ -42,6 +42,26 @@ _FIN_SUBSURF = 0
 _EYE_SEGMENTS = 20
 _EYE_RINGS = 12
 
+# The per-vertex part channel: which movable part a vertex belongs to, and how far out along
+# that part it sits. It is what lets one geometry shader modifier beat the pectoral fins
+# without touching the rest of the fish — see `swimModifier` in `SwimDeformation.swift`.
+#
+# It is authored here as a POINT colour attribute on every mesh *before* modifiers are
+# evaluated, so Solidify and subdivision propagate it the way they propagate geometry, and it
+# is transcoded to a second UV set after the atlas bake (`_part_uv`). Both halves of that are
+# forced: SceneKit drops vertex colour entirely on macOS 26, and `bake_atlas` deletes every UV
+# layer that exists when it runs, so the colour attribute is the only channel that survives the
+# middle of the pipeline and a UV set is the only one that survives the end of it.
+_PART_CHANNEL = "displayColor"
+_PART_UV = "st1"
+
+# Part ids ride in R. Both ends of the range are reserved: 0 is "no part", and 1 is what
+# Blender's join fills in for a mesh that arrived without the attribute at all — so a real id
+# must be strictly interior, or an omitted part would silently lose its id and never move.
+# The shader matches with a tolerance window, never with equality.
+_NO_PART = 0.0
+_PECTORAL_IDS = {1.0: 0.25, -1.0: 0.35}
+
 
 def build(spec):
     body_spec = BodySpec(
@@ -96,6 +116,14 @@ def build(spec):
         obj.parent = root
         assign(obj, iris)
 
+    # Everything that is not a labelled moving part still has to say so. A mesh that reaches
+    # the join without the channel is filled *white* by Blender, which is the id the shader
+    # must never see — so this sweeps the whole fish rather than being called beside each
+    # part, and a part added later is caught instead of silently losing its id and never moving.
+    for child in root.children_recursive:
+        if child.type == "MESH" and _PART_CHANNEL not in child.data.color_attributes:
+            _part_channel(child)
+
     return root
 
 
@@ -147,6 +175,100 @@ def _eye_ring(spec, body):
     params.setdefault("center", (point.x, 0.0, point.z))
     params.setdefault("radius", radius)
     return params
+
+
+def _part_channel(obj, part_id=_NO_PART, distance=None):
+    """Write the part channel onto one mesh, before its modifiers are evaluated.
+
+    `distance(vertex_index)` gives how far that vertex lies from the part's hinge, in the
+    model's own units; it is stored raw and normalized by the finished body's length in
+    `_part_uv`, which is the only place that length is known. Everything that does not move
+    on its own — body, eyes, every fin but the pectorals — gets `_NO_PART` and a zero
+    distance, which the shader reads as "leave this vertex alone".
+    """
+    mesh = obj.data
+    attribute = mesh.color_attributes.get(_PART_CHANNEL) or mesh.color_attributes.new(
+        name=_PART_CHANNEL, type="FLOAT_COLOR", domain="POINT"
+    )
+    mesh.color_attributes.active_color = attribute
+    mesh.color_attributes.render_color_index = mesh.color_attributes.find(_PART_CHANNEL)
+
+    values = []
+    for index in range(len(mesh.vertices)):
+        values.extend((part_id, 0.0 if distance is None else distance(index), 0.0, 1.0))
+    attribute.data.foreach_set("color", values)
+    mesh.update()
+    return obj
+
+
+def _pectoral_channel(obj, fin, root, part_id):
+    """Label a pectoral fin with its side's id and true hinge-to-vertex distance.
+
+    A fin beat is a hinge about the root, so the shader needs the actual lever arm after
+    `build_fin` has applied span, flare, rake, and curl. The freshly authored mesh still has
+    both its vertex coordinates and the same `root(u)` callable used to build it; the vertex
+    index recovers u before modifiers add or interpolate geometry.
+    """
+    samples_u, samples_v = fin.samples_u, fin.samples_v
+
+    def distance(index):
+        i, _ = divmod(index, samples_v)
+        hinge = Vector(root(i / (samples_u - 1)))
+        return (obj.data.vertices[index].co - hinge).length
+
+    return _part_channel(obj, part_id, distance)
+
+
+def _part_uv(joined):
+    """Move the part channel into the second UV set and drop the colour attribute.
+
+    Runs immediately before export. On a baked path that must be after `bake_atlas`, which
+    removes every UV layer that exists when it runs. The distance stored per vertex is
+    normalized here by the finished mesh's own length along X, which is exactly the `bodyLength`
+    uniform the runtime measures
+    from the imported geometry: the shader multiplies by it and gets the authored distance back
+    in object units, so `finAmplitude` is an angle in radians for every species alike.
+
+    The V flip is SceneKit's, not ours: its USD importer flips V on import, so the value
+    written here is pre-flipped to arrive the right way up.
+    """
+    mesh = joined.data
+    source = mesh.color_attributes.get(_PART_CHANNEL)
+    if source is None:
+        raise RuntimeError(f"'{joined.name}' lost its part channel before the transcode")
+    if source.domain != "POINT":
+        raise RuntimeError(
+            f"'{joined.name}' part channel has domain {source.domain!r}, expected 'POINT'"
+        )
+    material_uv = mesh.uv_layers.active
+    if material_uv is None:
+        raise RuntimeError(f"'{joined.name}' has no material UV layer to keep active")
+
+    xs = [vertex.co.x for vertex in mesh.vertices]
+    length = max(max(xs) - min(xs), 1e-6)
+
+    colors = [0.0] * (len(source.data) * 4)
+    source.data.foreach_get("color", colors)
+    coordinates = []
+    for loop in mesh.loops:
+        base = loop.vertex_index * 4
+        coordinates.extend((colors[base], 1.0 - colors[base + 1] / length))
+
+    channel = mesh.uv_layers.new(name=_PART_UV)
+    channel.data.foreach_set("uv", coordinates)
+    # The material UV stays the render layer, which is what makes it export as `st` with the
+    # part channel following as `st1`; SceneKit then hands them over as texcoords 0 and 1.
+    mesh.uv_layers.active = material_uv
+    material_uv.active_render = True
+    mesh.update()
+
+    # The data now lives in `st1`, and a `displayColor` left behind would render this fish
+    # black-and-red in any consumer that honours it.
+    mesh.color_attributes.remove(source)
+
+    parts = sorted({round(colors[i * 4], 4) for i in range(len(mesh.vertices))})
+    print(f"[build_fish] part channel -> {_PART_UV}: ids {parts}, body length {length:.4f}")
+    return channel
 
 
 def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
@@ -225,14 +347,22 @@ def _build_fins(spec, body):
         theta = 2.0 * math.pi * theta_frac
         for side in (1.0, -1.0):
             mirrored = Vector((direction.x, direction.y * side, direction.z))
-            fins.append((build_fin(
+            root = flank_root(body, f.t0, f.t1, theta, side=side, sink=f.sink)
+            obj = build_fin(
                 f"{spec.name}_{attr}_{'L' if side > 0 else 'R'}",
-                root=flank_root(body, f.t0, f.t1, theta, side=side, sink=f.sink),
+                root=root,
                 out_dir=lambda u, d=mirrored: d,
                 span=f.span, rake=f.rake, curl=f.curl * side, flare=f.flare,
                 curl_axis=(0, 0, 1), samples_u=f.samples_u, samples_v=f.samples_v,
                 **common,
-            ), attr, f))
+            )
+            # The pectorals are the only fins that beat on their own, so they are the only
+            # ones that carry a part id. The side is known here and is written into the id
+            # rather than left for the shader to infer from the sign of a vertex's y: by the
+            # time the shader runs, y is a coordinate the swim wave is also displacing.
+            if attr == "pectoral":
+                _pectoral_channel(obj, f, root, _PECTORAL_IDS[side])
+            fins.append((obj, attr, f))
 
     return [(_fin_uv(obj, f.samples_u, f.samples_v), kind, f)
             for obj, kind, f in fins]
@@ -271,6 +401,13 @@ def join_parts(root, name):
 
     for obj in meshes:
         _bake_modifiers(obj)
+
+    # Check the evaluated meshes that actually enter the join. Join fills a missing colour
+    # attribute with white, so an affected part would silently lose its id and never move.
+    # It is cheaper to refuse to build than to find that in a render.
+    missing = [obj.name for obj in meshes if _PART_CHANNEL not in obj.data.color_attributes]
+    if missing:
+        raise RuntimeError(f"part channel missing on: {', '.join(missing)}")
 
     bpy.ops.object.select_all(action="DESELECT")
     for obj in meshes:
@@ -361,6 +498,8 @@ def main():
         parser.error("--bake requires --export")
     if args.bake and args.no_join:
         parser.error("--bake requires the production joined mesh; remove --no-join")
+    if args.export and args.no_join:
+        parser.error("--export requires the production joined mesh; remove --no-join")
 
     spec = CATALOG[args.species]
 
@@ -420,6 +559,9 @@ def main():
             joined = _join(fish, spec)
         export_path = os.path.abspath(args.export)
         os.makedirs(os.path.dirname(export_path), exist_ok=True)
+        # Bake paths arrive here after `bake_atlas`; non-bake paths retain their original active
+        # UV. In both cases transcode exactly once, immediately before USD export.
+        _part_uv(joined)
         bpy.ops.wm.usd_export(
             filepath=export_path,
             export_materials=True,

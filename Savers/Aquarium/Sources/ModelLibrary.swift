@@ -230,6 +230,13 @@ final class ModelCache {
         let template: SCNNode
         let minBound: SIMD3<Float>
         let maxBound: SIMD3<Float>
+        /// Whether this asset carries the per-vertex part channel — the second UV set `st1` that
+        /// says which movable part a vertex belongs to. False for anything built before
+        /// `build_fish.py` began writing it, and for every prop, none of which has parts of this
+        /// kind. The school reads it to decide which swim shader a fish gets: a modifier that
+        /// indexes a texcoord the geometry does not have is not a term that does nothing, it is
+        /// a shader that may not compile.
+        let hasPartChannel: Bool
 
         /// Blender exports Z-up with a fish's nose at +X, and `build_prop.py` seats a prop's
         /// lowest vertex on z = 0. The tank is Y-up, so X is the long axis of a fish and Z is
@@ -261,10 +268,27 @@ final class ModelCache {
         guard let imported = try? SCNScene(url: url, options: nil),
               let (minBound, maxBound) = ModelCache.bounds(of: imported.rootNode)
         else { return nil }
-        let model = LoadedModel(template: imported.rootNode, minBound: minBound, maxBound: maxBound)
+        let model = LoadedModel(
+            template: imported.rootNode, minBound: minBound, maxBound: maxBound,
+            hasPartChannel: ModelCache.hasPartChannel(imported.rootNode))
         ModelCache.forceMetalnessIfRequested(imported.rootNode)
         loaded[asset] = model
         return model
+    }
+
+    /// Whether every geometry in the model arrived with a second texcoord source.
+    ///
+    /// Silent: a prop legitimately has none, so the only place that can say whether an absent
+    /// channel is a problem is the caller that knows what it asked for — see `School.init`.
+    private static func hasPartChannel(_ root: SCNNode) -> Bool {
+        var geometries = 0
+        var labelled = 0
+        root.enumerateHierarchy { node, _ in
+            guard let geometry = node.geometry else { return }
+            geometries += 1
+            if geometry.sources(for: .texcoord).count >= 2 { labelled += 1 }
+        }
+        return geometries > 0 && geometries == labelled
     }
 
     /// DIAGNOSTIC, `AQUARIUM_FORCE_METALNESS=<0…1>`. Not a feature and not a fix.
