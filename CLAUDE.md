@@ -17,6 +17,9 @@
   from rediscovering them.
 - `spikes/002-saver-shell/README.md` — what the `.saver` shell and raw Metal host proved,
   including why shaders ship as source rather than as a compiled library.
+- `spikes/008-view-lifecycle/README.md` — what actually keeps an abandoned saver view alive in
+  the real host (the host does), what a view can still observe once it is abandoned, and the
+  idle release built on it. Read before touching anything about view lifetime or memory.
 - `spikes/007-picker-thumbnail/README.md` — where the Screen Saver picker actually is on Tahoe,
   what it does with a saver's thumbnail, and the tile cache that makes a correct change look
   like no change at all. Read before touching a thumbnail or trying to drive System Settings.

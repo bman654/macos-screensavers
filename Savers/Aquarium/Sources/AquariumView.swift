@@ -14,6 +14,9 @@ final class AquariumView: SaverView {
 
     private var aquarium: AquariumScene?
 
+    /// The seed of the tank an idle release let go, so the wake rebuilds the same one.
+    private var resumeSeed: UInt64?
+
     /// Held because the host asks for `configureSheet` on every press of Options, and presents
     /// whatever it is handed without taking ownership of it.
     private var settingsSheet: AquariumSettingsSheet?
@@ -53,6 +56,19 @@ final class AquariumView: SaverView {
         super.stopAnimation()
     }
 
+    /// The scene is held here rather than by the host (see `makeHost`), so when SaverKit lets the
+    /// host go — a settings change, or a view the host has stopped drawing — the scene, its
+    /// models and its voice have to be let go here too, or the release frees nothing that matters.
+    ///
+    /// An idle release is a pause, not a request for a new tank: the seed is kept so that the
+    /// tank that comes back is the one that was being watched. A reload is the opposite — the
+    /// user asked for something new — so it forgets the seed and draws again.
+    override func didReleaseHost(_ reason: HostReleaseReason) {
+        aquarium?.silence()
+        resumeSeed = reason == .idle ? aquarium?.seed : nil
+        aquarium = nil
+    }
+
     // MARK: Settings
 
     override var hasConfigureSheet: Bool { true }
@@ -72,7 +88,8 @@ final class AquariumView: SaverView {
         // The drawable size, not the view's bounds: the tank's vertical extent is derived from
         // the aspect ratio the camera will actually project into, and the scene re-reads it
         // from every frame, so this only has to be right enough for the opening layout.
-        let settings = settingsOverride ?? AquariumSettings.forLaunch(defaults: saverDefaults)
+        var settings = settingsOverride ?? AquariumSettings.forLaunch(defaults: saverDefaults)
+        if settings.seed == nil, let resumeSeed { settings.seed = resumeSeed }
         guard let modelURL = AquariumScene.modelURL(in: context.bundle),
               let scene = AquariumScene(modelURL: modelURL, bundle: context.bundle,
                                         settings: settings, isPreview: context.isPreview,

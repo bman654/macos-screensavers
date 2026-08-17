@@ -39,6 +39,10 @@ final class AquariumScene {
     private let seabed = SCNNode()
     private var school: School?
     private var bubblers: [Bubbler] = []
+    /// What this tank was drawn from — the number on the seed badge, and what an idle release
+    /// hands back to `AquariumView` so the tank that comes back is this one.
+    let seed: UInt64
+
     private var rand: Rand
 
     /// The tank's voice, or nil when the user has sound switched off — which is the default,
@@ -107,6 +111,7 @@ final class AquariumScene {
         let library = ModelLibrary.load(from: directory)
         let cache = ModelCache(directory: directory)
         let seed = AquariumScene.launchSeed(pinned: settings.seed)
+        self.seed = seed
         rand = Rand(seed: seed)
         // Never in the thumbnail. It is 384x216 in the settings sheet and smaller again in the
         // Screen Saver list, where the badge would be either illegible or — sized to stay

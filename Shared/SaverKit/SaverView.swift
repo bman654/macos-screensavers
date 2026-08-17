@@ -35,6 +35,44 @@ class SaverView: ScreenSaverView {
     /// `FrameContext.time`.
     var preferredFPS: Int { 0 }
 
+    /// Why a view let its host go. A saver may want to treat the two differently: a reload is
+    /// a request for something new, an idle release is a pause it should try to resume from.
+    enum HostReleaseReason {
+        /// `reloadHost()` — settings changed, build the host afresh.
+        case reload
+        /// No frame was committed for `idleReleaseDelay`; the graph will be rebuilt on the next.
+        case idle
+    }
+
+    /// Called after the view has released its `RenderHost`, for either reason above. Drop
+    /// anything the saver built alongside the host and kept a reference to; `makeHost(_:)` will
+    /// be asked for a new one when the view is next drawn.
+    ///
+    /// Exists because a saver commonly retains what drives its scene separately from the host
+    /// (the Aquarium keeps its `AquariumScene`), and SaverView cannot free what it never held.
+    /// A saver that keeps nothing outside its host has nothing to do here.
+    func didReleaseHost(_ reason: HostReleaseReason) {}
+
+    /// Seconds without a committed frame before a view that still wants frames releases its
+    /// render graph.
+    ///
+    /// The host keeps views it has finished with for the life of the process and never tells
+    /// them so: it orders their window out, which stops the display link dead with no callback
+    /// of any kind, and holds on to the view. `SAVERKIT_LIFECYCLE` measures a first view per
+    /// host that is *never* deallocated — retained by the host's own container view and its
+    /// window — so deallocation cannot be the goal. Releasing what the view owns can be. A view
+    /// that has committed nothing for this long hands back its host, its attachments, its
+    /// drawables and its scene; the next frame the link delivers rebuilds them.
+    ///
+    /// Four seconds is well past any stall of a view that is being shown in the paths measured
+    /// (`spikes/008-view-lifecycle`), and well inside anything a person would notice as memory
+    /// pressure — the leftover found on the real host was holding 612 MB with nothing on
+    /// screen. Two things it is not: it is not proof that nobody is looking (a display asleep
+    /// or a main thread frozen past four seconds gets a rebuild — a fresh scene, and about
+    /// 0.6 s of main-thread work at 1200x700 — on the next frame), and it is not a stop, so a
+    /// saver that keeps state across a release should carry it in `didReleaseHost(_:)`.
+    var idleReleaseDelay: CFTimeInterval { 4 }
+
     /// A view narrower than this is treated as the System Settings thumbnail.
     ///
     /// Size is the signal, not `ScreenSaverView.isPreview`, which is unreliable on Tahoe.
@@ -89,6 +127,25 @@ class SaverView: ScreenSaverView {
     /// keeps a reparented view running.
     private var isSuspended = false
 
+    /// True once an idle view has released its render graph and is waiting for a frame to
+    /// rebuild it. Distinct from `isSuspended` (no window) and `wantsFrames` (animating): a
+    /// view can be any combination, and only this one says the host is gone.
+    private var isHibernating = false
+
+    /// The machine clock at the last committed frame — or at the last `startAnimation()` or link
+    /// creation, so a view that has been asked for frames and produced none ages from the ask.
+    /// A link that has gone silent leaves no other trace.
+    private var lastFrameCommit: CFTimeInterval = 0
+
+    /// The idle watchdog: a 1 Hz repeating timer on the main run loop, alive between
+    /// `startAnimation()` and `stopAnimation()`. Block-based with a weak capture, so it does
+    /// not keep the view alive; the inherited `ScreenSaverView` timer already does that, and
+    /// this one is not relied on for anything but the check. It is deliberately SaverView's own
+    /// rather than `animateOneFrame`: the inherited timer's callback is gated on `window != nil`
+    /// and can be switched off by a saver's own Info.plist (`SSENeedsAnimationTimer`), and the
+    /// watchdog must run in exactly the states where nothing else does.
+    private var watchdog: Timer?
+
     /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
     /// backwards. `SCNRenderer.render(atTime:)` takes an absolute clock: handing it a value
     /// lower than the last one re-simulates or resets particle systems, and every phase in a
@@ -126,9 +183,9 @@ class SaverView: ScreenSaverView {
         self.metalDevice = MTLCreateSystemDefaultDevice()
         super.init(frame: frame, isPreview: isPreview)
 
-        // The inherited timer still exists and `legacyScreenSaver` expects it
-        // (`SSENeedsAnimationTimer` in its Info.plist), but the display link does the real
-        // work. Keep the timer cheap; `animateOneFrame` is intentionally a no-op.
+        // The inherited timer still exists — `ScreenSaverView` schedules it unless the *saver's*
+        // own Info.plist sets `SSENeedsAnimationTimer` to false — but the display link does the
+        // real work. Keep it cheap; `animateOneFrame` is intentionally a no-op.
         animationTimeInterval = 1.0
 
         guard metalDevice != nil else { return }
@@ -146,6 +203,7 @@ class SaverView: ScreenSaverView {
     deinit {
         logLifecycle("destroyed")
         frameLink?.invalidate()
+        watchdog?.invalidate()
         host?.teardown()
     }
 
@@ -214,6 +272,9 @@ class SaverView: ScreenSaverView {
         // Zero bounds are normal at init on Tahoe. Leave the previous drawable size alone
         // and wait for a real layout.
         guard pixels.width > 0, pixels.height > 0 else { return }
+        // A hibernating view is resized by a host that is not showing it; the wake path
+        // re-runs this once a frame is actually wanted.
+        guard !isHibernating else { return }
         guard pixels != metalLayer.drawableSize || depthTexture == nil else { return }
 
         metalLayer.drawableSize = pixels
@@ -252,16 +313,85 @@ class SaverView: ScreenSaverView {
     /// display link on the main thread and bails on a nil host, and any GPU work the old host
     /// already submitted is retained by its own command buffer.
     func reloadHost() {
+        releaseHost(.reload)
+        // A reload is a fresh chance for a host that failed to build; an idle release is not.
+        hostFailed = false
+        // A hibernating view builds its host on the next frame it is asked for, and not before.
+        guard !isHibernating else { return }
+        ensureHost()
+        rebuildAttachments()
+    }
+
+    /// Frees everything built for drawing: the host, the render attachments and whatever the
+    /// saver kept beside them.
+    private func releaseHost(_ reason: HostReleaseReason) {
         host?.teardown()
         host = nil
-        hostFailed = false
         // Dropped rather than left in place: `rebuildAttachments` reallocates them for the new
         // host anyway, but it returns early if the new host fails to build, and these are
         // hundreds of megabytes at 5K that a view which has stopped drawing has no use for.
         depthTexture = nil
         msaaTexture = nil
-        ensureHost()
-        rebuildAttachments()
+        didReleaseHost(reason)
+    }
+
+    // MARK: Idle release
+    //
+    // The memory half of the rule the audio spike produced: tie every side effect to frames
+    // actually being produced, never to a callback. Sound fades when the frames stop; here the
+    // render graph is let go when nothing has been committed for `idleReleaseDelay`. Nothing has
+    // to notify the view — the failing case is precisely a view nobody notifies.
+
+    /// Releases the render graph if no frame has been committed for `idleReleaseDelay`.
+    ///
+    /// One test for every way frames can have stopped: a window ordered out (link alive and
+    /// silent), a view that left its window (link gone), `startAnimation()` before there was a
+    /// window to link to (never had one). Committing is what counts, not the link calling back —
+    /// a callback whose `render` bailed on a missing attachment or drawable produced nothing
+    /// anyone could see, and holding a scene for it holds it for nobody.
+    private func releaseHostIfIdle() {
+        // Only a view that still *wants* frames and is not getting them. One the host has
+        // properly stopped is being managed, keeps its scene, and resumes where it left off.
+        guard wantsFrames, !isHibernating, host != nil || depthTexture != nil,
+              lastFrameCommit > 0,
+              CACurrentMediaTime() - lastFrameCommit >= idleReleaseDelay else { return }
+        hibernate()
+    }
+
+    private func hibernate() {
+        isHibernating = true
+        logLifecycle("hibernated")
+        releaseHost(.idle)
+        // The layer keeps a pool of presented drawables sized to `drawableSize` — some 100 MB at
+        // 4K — and only lets them go when that size changes. Wake restores it from the bounds
+        // through `updateDrawableSize()`, and nothing draws in between: `render` bails on the
+        // nil host long before it asks for a drawable.
+        metalLayer?.drawableSize = CGSize(width: 1, height: 1)
+    }
+
+    /// The other direction: a frame is wanted, so build again. Called from the frame path only.
+    /// A wake whose frames then fail to commit ages out again after `idleReleaseDelay`, so a
+    /// view that cannot draw rebuilds at most once per delay rather than holding a dead scene.
+    private func wakeIfHibernating() {
+        guard isHibernating else { return }
+        isHibernating = false
+        logLifecycle("woke")
+        // Everything below is what a first layout does; the depth texture is nil, so it runs.
+        updateDrawableSize()
+    }
+
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.releaseHostIfIdle()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
     }
 
     private func rebuildAttachments() {
@@ -345,12 +475,16 @@ class SaverView: ScreenSaverView {
         super.startAnimation()
         wantsFrames = true
         isSuspended = false
+        // Frames were asked for now; if none is ever committed, the graph ages from here.
+        lastFrameCommit = CACurrentMediaTime()
         startFrameLink()
+        startWatchdog()
     }
 
     override func stopAnimation() {
         wantsFrames = false
         isSuspended = false
+        stopWatchdog()
         stopFrameLink()
         super.stopAnimation()
     }
@@ -397,6 +531,7 @@ class SaverView: ScreenSaverView {
         // tracking, which is exactly when a preview is being scrubbed in System Settings.
         link.add(to: .main, forMode: .common)
         frameLink = link
+        lastFrameCommit = CACurrentMediaTime()
     }
 
     private func stopFrameLink() {
@@ -421,6 +556,7 @@ class SaverView: ScreenSaverView {
             suspendFrames()
             return
         }
+        wakeIfHibernating()
 
         // `targetTimestamp` is the vsync this frame is for, so animation driven from it is
         // one frame less latent than one driven from `timestamp`.
@@ -436,17 +572,23 @@ class SaverView: ScreenSaverView {
         // delivered at, not the vsync they were aimed at.
         stats?.frameTick(link.timestamp, drawableSize: metalLayer?.drawableSize ?? .zero)
 
-        render(time: time, delta: delta)
+        if render(time: time, delta: delta) {
+            // Stamped when a frame *finishes*, not when the link fires: a wake rebuilds the
+            // whole scene on the main thread first, and a build slower than `idleReleaseDelay`
+            // stamped at the start would look idle the moment it ended.
+            lastFrameCommit = CACurrentMediaTime()
+        }
     }
 
-    private func render(time: CFTimeInterval, delta: CFTimeInterval) {
+    /// True if a frame was committed; false if there was nothing to draw with.
+    private func render(time: CFTimeInterval, delta: CFTimeInterval) -> Bool {
         guard let host, let commandQueue, let metalLayer,
               bounds.width > 0, bounds.height > 0,
               metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0,
               let depthTexture,
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let drawable = metalLayer.nextDrawable()
-        else { return }
+        else { return false }
 
         let pass = MTLRenderPassDescriptor()
         if let msaaTexture {
@@ -474,6 +616,7 @@ class SaverView: ScreenSaverView {
         stats?.observe(commandBuffer)
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        return true
     }
 
     // MARK: Fail-soft

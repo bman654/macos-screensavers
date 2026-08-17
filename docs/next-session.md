@@ -30,7 +30,10 @@ are fixed and signed off by the user on the installed build.** Start at "The eel
 floor now" if you are touching the school; the section after it is the one open art question.
 
 Extended 2026-08-17 by the session that shot the picker tile and established, by measurement,
-what Tahoe's picker does with a third-party saver's thumbnail — `spikes/007-picker-thumbnail/`.
+what Tahoe's picker does with a third-party saver's thumbnail — `spikes/007-picker-thumbnail/`;
+and again the same day by the session that traced what keeps an abandoned view alive in the
+real host and taught `SaverView` to hand its render graph back while it waits —
+`spikes/008-view-lifecycle/`.
 
 ## State
 
@@ -630,10 +633,10 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 ## Next, in order
 
-**Items 1 and 2 are the agreed next session.** They are two halves of one observation — the host
-keeps views it is not really showing, and a saver currently treats them as though it were — but
-they are separate pieces of work and neither blocks the other. Read `docs/saver-host.md` §2 first;
-it holds the measurements both of these start from, and the list of signals already proven useless.
+**Item 1 is the agreed next task; item 2 landed on 2026-08-17.** They are two halves of one
+observation — the host keeps views it is not really showing, and a saver currently treats them
+as though it were. Read `docs/saver-host.md` §2 first; it holds the measurements both start
+from, and the list of signals already proven useless.
 
 1. **The picker renders a full-quality frame into a two-inch thumbnail.** The aquarium draws five
    lights, caustics, god rays, bloom and MSAA for a tile a couple of inches wide, several alive at
@@ -664,27 +667,21 @@ it holds the measurements both of these start from, and the list of signals alre
    Wants the aquarium in front of the user, since the question "is this still the tank" is a
    judgement rather than a measurement.
 
-2. **An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**
-   `suspendFrames()` keys on `window == nil`, but a window that has been ordered out is still a
-   window — so the view keeps a live `CADisplayLink`, and therefore the run-loop retain that makes
-   it immortal. `spikes/006-saver-audio/lifecycle-driver.swift` measured that `orderOut` sends **no
-   callback of any kind** while the frame heartbeat stops dead, and that dropping every reference
-   afterwards produced **no `deinit`**. That last result is recorded without a root-cause analysis
-   and is not covered by any SaverKit test; **establishing what still retains the view is the first
-   task, not the fix.**
-
-   **The obvious candidate** is to widen the test from `window != nil` to something that also
-   rejects an ordered-out window — `window.isVisible` is the direct reading of it. Check it against
-   all three of the settings-sheet preview, the harness window and a real session before believing
-   it, because this is a test that fails silently in the expensive direction: too strict and a real
-   saver goes black, too loose and nothing is fixed.
-
-   **How to measure it, and two traps:** `SAVERKIT_LIFECYCLE=1` logs a `created` and a `destroyed`
-   line per view, and counting them is the whole regression test. A harness that pumps the run loop
-   by hand measures its own autorelease pool — a first probe reported a steady 445 MB per cycle
-   leaking from the settings sheet, which does not leak at all — so use `app.run()` and
-   `leaks <pid> --traceTree=<addr>`. And **`run-saver` proves nothing about deallocation**, because
-   process exit does not run `deinit`.
+2. ~~**An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**~~
+   **Done, 2026-08-17 — the view cannot be freed, and it no longer needs to be.** `leaks
+   --traceTree` on a live host showed the leftover is retained by the *host* — its container
+   `ScreenSaverView` and its ViewBridge window — plus the never-stopped `ScreenSaverView` timer
+   and our link; deallocation is not available from inside the bundle. What is available is
+   letting the render graph go: `SaverView` now releases its host, attachments and (via
+   `didReleaseHost(_:)`) the saver's scene after 4 s without a committed frame, and rebuilds
+   them on the next frame, same seed — the "tie it to frames, not callbacks" rule the audio
+   uses, on a longer clock. The heartbeat is a weak 1 Hz timer of SaverView's own, which keeps
+   ticking through `orderOut`. Measured 495 → 287 MB (1200x700) and 886 → 387 MB (4K) in the
+   harness; **installed, not yet observed on a real session** — after the next one,
+   `pgrep -fl legacyScreenSaver`, then `footprint <pid>` should sit well under the 612 MB the
+   old leftover held, and `heap <pid> -addresses AquariumView` still shows one view (expected). `spikes/008-view-lifecycle/README.md` is the whole measurement, §6 the one
+   case it does not cover — a picker leftover that keeps rendering — and how to measure that.
+   The "no `deinit`" of spike 006 was the driver's own autorelease pool, not a leak.
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
@@ -988,8 +985,11 @@ it holds the measurements both of these start from, and the list of signals alre
   4112x2658. A dozen Previews in System Settings took the host to a 5.7 GB footprint, at which point
   the settings sheet could no longer allocate its preview tank and the Settings button silently did
   nothing — no crash, nothing in the log. Frames are now tied to *being in a window* rather than to
-  `startAnimation()` alone. `SAVERKIT_LIFECYCLE=1` logs every view created and destroyed; counting
-  the two lines is the whole regression test.
+  `startAnimation()` alone — and, since 2026-08-17, a view that wants frames and gets none for
+  4 s releases its whole render graph and rebuilds it on the next frame, because the real host
+  keeps its first view forever with the window merely ordered out. `SAVERKIT_LIFECYCLE=1` logs
+  every view created, destroyed, hibernated and woken; counting the lines is the whole
+  regression test, and only in a compiled harness (spike 008 §4).
 - **A memory harness that pumps the run loop by hand measures its own autorelease pool.** Objects
   autoreleased outside a run-loop callout land in a top-level pool that never drains, and the
   resulting graph is completely convincing: the first probe reported a steady 445 MB per cycle

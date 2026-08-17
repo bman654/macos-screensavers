@@ -111,7 +111,7 @@ not have to know about it.
 | `CAMetalLayer` does not track its own bounds, and does not inherit the window's scale | `updateDrawableSize()`, called synchronously from the resize callbacks |
 | `makeBackingLayer()` runs synchronously inside `wantsLayer = true`, so later layer config is silently ignored | all layer setup is in `makeBackingLayer()` |
 | `startAnimation`/`stopAnimation` must call `super` | `SaverView` |
-| The framework timer must still exist (`SSENeedsAnimationTimer`), but should not drive frames | `animationTimeInterval = 1.0`, `animateOneFrame` a no-op |
+| The framework timer must still exist, but should not drive frames | `animationTimeInterval = 1.0`, `animateOneFrame` a no-op. (`SSENeedsAnimationTimer` in a *saver's* Info.plist is what `ScreenSaverView` reads to decide whether to schedule it at all — leave it unset.) |
 | A display link in `.default` mode stops during event tracking — i.e. while the preview is being used | added in `.common` |
 | `Bundle.main` is `legacyScreenSaver.appex`, not the saver | `HostContext.bundle`, `SaverView.saverBundle` |
 | A settings domain named from `Bundle.main` belongs to the host, not to this saver | `SaverView.saverDefaults` |
@@ -119,6 +119,7 @@ not have to know about it.
 | A host is created on the first layout, which routinely happens *before* the view is in a window — so the layer's scale is still 1 then, whatever display it is about to land on | scale is delivered with `RenderTargets`, never in `HostContext` |
 | A crash is an unrecoverable black screen | every failure path degrades instead of trapping |
 | An animating view is retained by the main run loop and cannot be freed, so a host that discards one without `stopAnimation()` leaks the whole render graph and keeps drawing | `SaverView.suspendFrames()` — see below |
+| The real host keeps its first view *forever* — its own container view and window retain it — and orders its window out without a callback, so the view above still holds its scene, ~600 MB at 4K, doing nothing | `SaverView.releaseHostIfIdle()`: no committed frame for `idleReleaseDelay` releases the host; the next frame rebuilds it. Override `didReleaseHost(_:)` to drop what you kept beside the host — see below |
 
 ### An animating saver view is immortal
 
@@ -143,6 +144,43 @@ So `SaverView` ties frames to *being in a window* rather than to `startAnimation
 because a host that tears its window down around the view need not send the notification.
 `SAVERKIT_LIFECYCLE=1` logs every view created and destroyed, which is the only way to see any
 of this — count the two lines, and they must match.
+
+### And the real host never frees its first view at all
+
+That fix covers a view that *leaves* its window. The real host does something else with the
+view it built for a session: it orders the window out and keeps everything — measured with
+`leaks --traceTree` on a live `legacyScreenSaver`, the view is retained by the host's own
+container `ScreenSaverView` (a responder-chain back-reference), by the ViewBridge window's
+`initialFirstResponder`, and by `ScreenSaverView`'s animation timer, which was never stopped
+because `stopAnimation()` was never called. `spikes/008-view-lifecycle/README.md` has the tree.
+Two of those four references are the host's, so **deallocation is not available**; the view
+was found idle at 0% CPU holding a 612 MB footprint with nothing on screen.
+
+What *is* available is letting the render graph go. `orderOut` stops the display link dead
+with no callback, but a plain 1 Hz timer keeps ticking through it, so `SaverView` runs one of
+its own between `startAnimation()` and `stopAnimation()` — weak, so it retains nothing — and
+when a view that still wants frames has *committed* none for `idleReleaseDelay` (4 s), it calls
+`releaseHost(.idle)`: host torn down, attachments dropped, the layer's drawable pool shrunk to
+a pixel, `didReleaseHost(.idle)` sent to the subclass. One test covers a window ordered out, a
+view that left its window, and `startAnimation()` before there was a window. The next frame the
+link delivers rebuilds everything through `makeHost(_:)`, exactly like `reloadHost()`, so
+nothing has to be told the view is wanted again — the frame *is* the signal, in both
+directions. `SAVERKIT_LIFECYCLE=1` logs `hibernated` and `woke` beside `created` and
+`destroyed`.
+
+Measured on the Aquarium in the harness (`spikes/008-view-lifecycle`): 495 → 287 MB four
+seconds after `orderOut` at 1200x700, 886 → 387 MB at 3840x2160. A wake rebuilds the scene —
+about 0.6 s on the main thread at 1200x700 — and comes back *higher* than the first look
+because process-wide caches from the first scene remain (awake 436 → ~805 MB across five
+cycles, hibernated 276 → 382 MB, both plateauing). The Aquarium carries its seed across an idle
+release, so the tank that comes back is the one that was being watched; a `.reload` draws anew.
+
+**Override `didReleaseHost(_:)` if you keep anything beside the host.** The Aquarium keeps its
+`AquariumScene` on the view; without dropping it there the release frees the renderer and
+nothing else. A view the host has *properly* stopped is not released — it keeps its scene and
+resumes where it left off, as System Settings previews expect. Also measured to release, and
+correctly: `view.isHidden = true`, and a window moved fully off-screen. Not: a window at alpha 0
+or one fully covered — both keep a 60 fps link.
 
 Two more that are not SaverKit's to fix, but will bite:
 

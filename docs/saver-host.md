@@ -14,7 +14,9 @@ If you read nothing else:
 
 1. **The host is not what you think.** It outlives its session, keeps views for the life of the
    process, holds several saver bundles at once, and hands a real session the *same view* the
-   picker was already using. Design for that, not for create-show-destroy.
+   picker was already using. Design for that, not for create-show-destroy. **Its first view is
+   never freed** — the host itself retains it — so a view must be able to give back everything
+   expensive it owns while staying alive, and SaverKit's does.
 2. **Never ask the view whether it is real.** Size, `isPreview`, occlusion and screen fraction all
    give the same answer for a picker tile as for a full-screen session. They have all been
    measured. §3 has the table.
@@ -126,7 +128,8 @@ need Accessibility permission for whatever runs them. Two further quirks, both o
 ## 2. Views, and how one leaks
 
 Sources: `Shared/SaverKit/README.md` §"An animating saver view is immortal",
-`spikes/006-saver-audio/README.md`, `Shared/SaverKit/SaverView.swift`.
+`spikes/006-saver-audio/README.md`, `spikes/008-view-lifecycle/README.md`,
+`Shared/SaverKit/SaverView.swift`.
 
 ### What the host actually does, measured
 
@@ -201,20 +204,33 @@ checking there is the only guarantee.
 `isSuspended` is kept distinct from `wantsFrames` so that a view which merely left its window
 resumes when reparented, rather than being confused with one that was genuinely stopped.
 
+### What actually keeps a leftover alive — measured on the real host
+
+`spikes/008-view-lifecycle/README.md` §1 has the full `leaks --traceTree` of an `AquariumView`
+in an idle `legacyScreenSaver` twenty minutes after its session ended: 0% CPU, **612 MB
+footprint, nothing on screen**. Four strong references:
+
+| Who | What | Ours to break? |
+| --- | --- | --- |
+| The host's container `ScreenSaverView` (`LegacyViewController.view`) | responder-chain back-reference to our view | no |
+| The ViewBridge window, still in `NSApp.windows` | `initialFirstResponder` | no |
+| `ScreenSaverView`'s own animation timer | target — never invalidated, because `stopAnimation()` was never called | yes |
+| Our `CADisplayLink` | target — same reason | yes |
+
+Breaking the two that are ours frees the view's own 768 bytes. **Deallocation is off the
+table; releasing the render graph is not**, and that is what SaverKit now does — see below.
+
 ### Three ways a host stops showing a view, and they behave differently
 
-Isolated by `spikes/006-saver-audio/lifecycle-driver.swift`:
+Isolated by `spikes/006-saver-audio/lifecycle-driver.swift` and, with more instruments,
+`spikes/008-view-lifecycle/driver.swift`:
 
 | What the host does | What your view is told |
 | --- | --- |
-| `window.orderOut()` | **Nothing at all.** No callback. The frame heartbeat stops dead. |
-| `contentView = nil` | `viewDidMoveToWindow` fires with `window == nil` |
-| drops all references | No `deinit` |
-
-**`orderOut` is a real gap and is not handled.** `suspendFrames` keys on `window == nil`, and an
-ordered-out window is still a window, so such a view keeps a live `CADisplayLink` and therefore
-its run-loop retain. Nothing in the repo measures whether it is ever freed. The "no `deinit`" row
-is likewise asserted from that driver run without a root-cause analysis anywhere.
+| `window.orderOut()` | Nothing on the *view*. KVO on `window.isVisible` and the occlusion notification do fire; the display link stops dead; **the inherited 1 Hz timer keeps ticking**. |
+| `contentView = nil` | `viewDidMoveToWindow` fires with `window == nil`; the timer stops too (`_oneStep:` is gated on `window != nil`) |
+| `window.orderFront()` again | Nothing. The link simply resumes. |
+| drops all references | `deinit` — the "no `deinit`" of spike 006 was the driver's own autorelease pool and its never-closed window (spike 008 §4) |
 
 The general rule the spike produced, and the one to design against:
 
@@ -222,11 +238,51 @@ The general rule the spike produced, and the one to design against:
 > failing case is a view nobody can reach, so any fix that requires someone to call you is a fix
 > that will not run.
 
+### The idle release, which is that rule applied to memory
+
+Sound already fades when frames stop (§3, the 0.25 s stall guard). The render graph now goes
+the same way, on a longer clock: a view that still wants frames and has *committed* none for
+`SaverView.idleReleaseDelay` (4 s) tears down its host, attachments and drawable pool and calls
+`didReleaseHost(.idle)`; the next frame the link delivers rebuilds them through `makeHost(_:)`.
+The watchdog is a weak 1 Hz timer of SaverView's own, alive between `startAnimation()` and
+`stopAnimation()` — a plain timer keeps ticking through `orderOut`, which is the whole trick. A
+view the host has properly stopped is left alone.
+
+Measured on the Aquarium in the harness: 495 → 287 MB four seconds after `orderOut` at
+1200x700, 886 → 387 MB at 4K; the wake rebuilds the scene (~0.6 s of main thread at 1200x700,
+same seed) and comes back higher than the first look because of process-wide caches, then
+plateaus. `SAVERKIT_LIFECYCLE=1` logs `hibernated` and `woke`. Also releases, correctly: a
+hidden view, a window moved off-screen. Does not: alpha 0, a covered window. What it does *not*
+know is whether anyone is looking — a display asleep past four seconds, or a main thread frozen
+that long, gets a rebuild on the next frame rather than a resume.
+
+Two consequences for a saver:
+
+- **Override `didReleaseHost(_:)`** if you keep anything beside the host. The Aquarium keeps its
+  scene on the view, and without dropping it there the release would free the renderer only.
+  `.idle` is a pause worth resuming from (the Aquarium keeps its seed); `.reload` is not.
+- **Never rely on `animateOneFrame` for a heartbeat.** It is gated on `window != nil`, and
+  `SSENeedsAnimationTimer` in a saver's Info.plist can switch it off entirely. SaverView's
+  watchdog is its own timer for exactly that reason.
+
+**What this does not cover:** a picker-spawned host whose view goes on rendering after System
+Settings quits (spike 006 measured one at 60 fps, `window=shown`, level 0). Its link never goes
+silent. Spike 008 §6 has the measurement to take before touching it.
+
+**The road not taken:** every open-source saver that has met this bug — XScreenSaver, Aerial,
+ScreenSaverMinimal and others — observes `com.apple.screensaver.willstop` and *exits the host*
+(Aerial after a 2 s delay, because Tahoe relaunched it on an immediate exit). It works, and it
+is a mitigation with three costs this repo would pay: `willstop` was measured missing under
+rapid start/stop, it never reaches a picker preview, and one host carries several savers'
+views. The idle release frees what matters without any of that; if it ever proves
+insufficient, that is the fallback, and it belongs behind a session-only, non-preview check.
+
 ### What SaverKit does for you, and what your saver must still do
 
 Automatic — do not re-implement:
 
 - Suspending and resuming frames on window changes, plus the display-link safety net.
+- Releasing the render graph after 4 s without a frame, and rebuilding it on the next one.
 - `deinit` invalidates the frame link and calls `host?.teardown()`.
 - Owning the `CAMetalLayer`, drawable sizing, MSAA and depth attachments, presentation and
   command-buffer commit. **A host encodes; it never touches the layer, the drawable, or
@@ -240,8 +296,10 @@ Yours to get right:
 - **Build GPU resources in `makeHost(_:)`, never in `init`.** Bounds are routinely zero at `init`
   on Tahoe.
 - **Release everything in `RenderHost.teardown()`** — it is the only teardown hook `SaverView`
-  calls. `SceneKitHost.teardown()` is the model, and note that it explicitly nils
+  calls on the host. `SceneKitHost.teardown()` is the model, and note that it explicitly nils
   `overlaySKScene`, which is "exactly the kind of thing the leaked-view bug dragged along".
+- **Override `didReleaseHost(_:)`** to drop whatever the view itself kept beside the host; it is
+  called on `reloadHost()` and on the idle release, before `makeHost(_:)` can be asked again.
 - **Never let a host closure strongly capture the view or the scene.** The Aquarium uses
   `[weak self, weak scene]` on `onUpdate` and `[weak scene]` on `onResize`.
 - **Override `stopAnimation()` to stop anything external, and call `super`.** When a host says
