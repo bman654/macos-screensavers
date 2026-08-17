@@ -246,6 +246,13 @@ func capturePNG(of view: NSView, in window: NSWindow, to path: String,
 let options = parseArguments()
 let application = NSApplication.shared
 let bundleURL = saverURL(for: options.saverArgument)
+// Every view this tool creates is on the developer's screen or being captured from, so
+// SaverKit's audience gate — which would otherwise read the interactive window's ordinary level
+// as "a leftover nobody can see" and stop drawing — is told so. See `SaverView.hasAudience`.
+// A default only: `SAVERKIT_AUDIENCE=0` in the environment makes this window stand in for
+// exactly that leftover, which is how the gate is exercised without the real host.
+setenv("SAVERKIT_AUDIENCE", "1", 0)
+
 guard let bundle = Bundle(path: bundleURL.path) else {
     fail("not a valid bundle path: \(bundleURL.path)")
 }

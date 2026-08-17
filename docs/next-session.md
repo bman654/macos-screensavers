@@ -33,7 +33,9 @@ Extended 2026-08-17 by the session that shot the picker tile and established, by
 what Tahoe's picker does with a third-party saver's thumbnail — `spikes/007-picker-thumbnail/`;
 and again the same day by the session that traced what keeps an abandoned view alive in the
 real host and taught `SaverView` to hand its render graph back while it waits —
-`spikes/008-view-lifecycle/`.
+`spikes/008-view-lifecycle/`; and once more the same day, when a real session showed that
+release never firing because the leftover's frames never stop, and `SaverView` learned to
+decline a frame nobody can see (`hasAudience()`, spike 008 §6).
 
 ## State
 
@@ -677,11 +679,21 @@ from, and the list of signals already proven useless.
    them on the next frame, same seed — the "tie it to frames, not callbacks" rule the audio
    uses, on a longer clock. The heartbeat is a weak 1 Hz timer of SaverView's own, which keeps
    ticking through `orderOut`. Measured 495 → 287 MB (1200x700) and 886 → 387 MB (4K) in the
-   harness; **installed, not yet observed on a real session** — after the next one,
-   `pgrep -fl legacyScreenSaver`, then `footprint <pid>` should sit well under the 612 MB the
-   old leftover held, and `heap <pid> -addresses AquariumView` still shows one view (expected). `spikes/008-view-lifecycle/README.md` is the whole measurement, §6 the one
-   case it does not cover — a picker leftover that keeps rendering — and how to measure that.
-   The "no `deinit`" of spike 006 was the driver's own autorelease pool, not a leak.
+   harness. **Then observed on a real session, and it was not enough:** a hot-corner session
+   left the host at 623 MB and ~24% CPU, because the leftover's frames never stopped — the
+   link kept firing into an off-screen level-0 window and every other window property read
+   exactly as it had while presenting. `SaverView.hasAudience()` closes it: a full-screen view
+   at `.normal` commits nothing — unless it has never presented and System Settings is running,
+   the picker's live preview — and the watchdog hibernates it 4 s later. **Verified on the
+   installed build over two hot-corner sessions: 623 → 135 MB, `hibernated` 4 s after
+   dismissal, the second session drawing at 60 fps beside the first's hibernated view.**
+   `SAVERKIT_AUDIENCE=0 run-saver …` reproduces the leftover in the harness. **One thing to
+   check with the user's eyes, not yet done:** open the picker, watch the live preview at the
+   top, click Preview, dismiss it — the live preview must still animate afterwards. If it is
+   dark, the picker's preview view was the one promoted to present, and the `hasPresented`
+   latch needs the reuse case handled. `spikes/008-view-lifecycle/README.md` §6 is the measurement and
+   `docs/saver-host.md` §2 the rule. The "no `deinit`" of spike 006 was the driver's own
+   autorelease pool, not a leak.
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).

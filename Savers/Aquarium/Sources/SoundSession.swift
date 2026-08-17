@@ -144,7 +144,7 @@ final class SoundSession {
 
     /// Nil when the question could not be answered, which is not at all the same as "no".
     static func settingsPaneIsClosed() -> Bool? {
-        isProcessRunning(named: "System Settings").map { !$0 }
+        HostSignals.isSystemSettingsRunning().map { !$0 }
     }
 
     // MARK: Whether *this* view is the one showing it
@@ -155,7 +155,8 @@ final class SoundSession {
     /// this view is the one showing it, and both are needed, because a `legacyScreenSaver` host
     /// is long-lived and accumulates views it has finished with — measured: a view from one
     /// activation was still animating at 60 fps ten minutes and one whole session later.
-    /// Two failures come out of that, and this is the only signal found that separates them:
+    /// Two failures come out of that, and the window level is the only signal found that
+    /// separates them:
     ///
     ///   - **A stale view claims the sound before the real one exists.** On the next `didstart`
     ///     every leftover view in the host becomes eligible at once, and the host does not
@@ -173,61 +174,11 @@ final class SoundSession {
     /// loaded together), and each bundle's owner `static` is its own, so they cannot see each
     /// other at all. Nothing a single bundle arbitrates could have fixed either case.
     ///
-    /// Measured levels, and there are only three:
-    ///
-    /// ```
-    /// -2147483625   presenting the screensaver, for the whole session and no longer
-    /// -2147483622   the `tools/run-saver.swift` harness window
-    ///           0   .normal — a view the host has finished with, or one whose session ended
-    /// ```
-    ///
-    /// The bound is `desktopIcon` rather than `desktop` (-2147483623) because the harness sits
-    /// *above* the desktop and below the icons, and the harness must stay audible or this repo's
-    /// ground-truth recording loop goes silent. Erring tight is the safe direction here: too
-    /// tight is a screensaver that says nothing, too loose is one that plays into a room.
-    ///
-    /// Checked every frame, never cached. The level changes underneath a live view with no
-    /// callback of any kind — the same way its frames stop with no callback — so a view that
-    /// asked once would answer with the truth from before it was set aside.
+    /// The measurement and the levels themselves live with `HostSignals.isPresenting`, which
+    /// SaverKit's own frame gate reads for the same reason. Erring tight is the safe direction
+    /// here: too tight is a screensaver that says nothing, too loose is one that plays into a
+    /// room. Checked every frame, never cached.
     static func isPresenting(_ window: NSWindow?) -> Bool {
-        guard let window else { return false }
-        return window.level.rawValue < Int(CGWindowLevelForKey(.desktopIconWindow))
-    }
-
-    /// Is a process with this executable name alive, according to the kernel? Nil if the
-    /// kernel could not be asked.
-    ///
-    /// `sysctl` rather than `NSWorkspace.runningApplications`, which behaves as a stale
-    /// snapshot in this host — it returned an identical list for ten seconds across a
-    /// screensaver session that provably started, and `didLaunchApplicationNotification` never
-    /// fired. A process list read from the kernel cannot be stale.
-    ///
-    /// Called once at startup and then a handful of times during the settling period, never
-    /// afterwards. The spike's probe polled it every two seconds as a diagnostic; that must not
-    /// survive into a saver, because enumerating every process on the machine is not something
-    /// to do for hours on a battery.
-    static func isProcessRunning(named wanted: String) -> Bool? {
-        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        // Read before the inout call: `u_int(name.count)` inside the argument list is a second
-        // access to `name` while `&name` is exclusive, which Swift 6 rejects.
-        let levels = u_int(name.count)
-        var size = 0
-        guard sysctl(&name, levels, nil, &size, nil, 0) == 0, size > 0 else { return nil }
-
-        let count = size / MemoryLayout<kinfo_proc>.stride
-        var processes = [kinfo_proc](repeating: kinfo_proc(), count: count + 16)
-        size = processes.count * MemoryLayout<kinfo_proc>.stride
-        guard sysctl(&name, levels, &processes, &size, nil, 0) == 0 else { return nil }
-
-        let found = size / MemoryLayout<kinfo_proc>.stride
-        for index in 0..<min(found, processes.count) {
-            var command = processes[index].kp_proc.p_comm
-            let capacity = MemoryLayout.size(ofValue: command)
-            let executable = withUnsafePointer(to: &command) {
-                $0.withMemoryRebound(to: CChar.self, capacity: capacity) { String(cString: $0) }
-            }
-            if executable == wanted { return true }
-        }
-        return false
+        HostSignals.isPresenting(window)
     }
 }

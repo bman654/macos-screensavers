@@ -175,6 +175,23 @@ because process-wide caches from the first scene remain (awake 436 → ~805 MB a
 cycles, hibernated 276 → 382 MB, both plateauing). The Aquarium carries its seed across an idle
 release, so the tank that comes back is the one that was being watched; a `.reload` draws anew.
 
+On the real host, though, a dismissed session's leftover does **not** go silent — its link
+keeps firing into an off-screen window at level 0, and every window property a view can read
+(`isVisible`, `isOnActiveSpace`, `occlusionState`, `screen`, `alphaValue`) reads exactly as it
+did while presenting. Measured at ~24% CPU and 623 MB two minutes after a hot-corner session.
+So `SaverView` also asks, before every frame, whether anyone can see it — `hasAudience()`: a
+full-screen-sized view whose window is at `.normal` (the one level measured for a leftover; any
+other level draws) commits nothing unless it has never presented and System Settings is running,
+which is the picker's live preview — and the watchdog above hibernates it 4 s later. A view that
+has once been at a presenting level (`HostSignals.isPresenting`, the audio gate's test) is a
+session's, and at `.normal` it is a leftover whatever else is open. The process-table answer
+(`HostSignals.systemSettingsIsRunning`) is one shared read every 3 s, never while presenting.
+Preview-sized views always draw, and `tools/run-saver.swift` sets `SAVERKIT_AUDIENCE=1`
+because its interactive window is an ordinary level-0 window that only the harness knows is on
+the developer's screen; `SAVERKIT_AUDIENCE=0` makes that window play the leftover. Verified on
+the installed build: 623 → 135 MB, `hibernated` 4 s after dismissal.
+Both signals and the measurements behind them are documented on `HostSignals`.
+
 **Override `didReleaseHost(_:)` if you keep anything beside the host.** The Aquarium keeps its
 `AquariumScene` on the view; without dropping it there the release frees the renderer and
 nothing else. A view the host has *properly* stopped is not released — it keeps its scene and

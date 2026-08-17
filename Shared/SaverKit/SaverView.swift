@@ -146,7 +146,22 @@ class SaverView: ScreenSaverView {
     /// watchdog must run in exactly the states where nothing else does.
     private var watchdog: Timer?
 
+    /// `SAVERKIT_AUDIENCE=1` declares that every view in this process is being looked at;
+    /// `SAVERKIT_AUDIENCE=0` withdraws that, so the harness can stand in for a leftover.
+    /// `tools/run-saver.swift` sets `1` for itself: its interactive window is an ordinary
+    /// window on the developer's screen, which is exactly the shape of a leftover in the real
+    /// host, and the harness knows the difference where the view cannot. Cannot reach the host,
+    /// whose environment is empty.
+    private static let assumesAudience =
+        (ProcessInfo.processInfo.environment["SAVERKIT_AUDIENCE"] as NSString?)?.boolValue ?? false
+
+    /// Latched the first time this view's window is at a presenting level. A view that has
+    /// presented is a session's view: back at an ordinary level it is a leftover, whatever else
+    /// is running. The picker's live preview never presents, so it never latches.
+    private var hasPresented = false
+
     /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
+    /// backwards.    /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
     /// backwards. `SCNRenderer.render(atTime:)` takes an absolute clock: handing it a value
     /// lower than the last one re-simulates or resets particle systems, and every phase in a
     /// scene driven by that clock snaps back to where it started.
@@ -159,20 +174,51 @@ class SaverView: ScreenSaverView {
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
-    /// `SAVERKIT_LIFECYCLE=1` logs every saver view created and destroyed, with its address.
-    ///
-    /// The one question about a saver that neither a screenshot nor a frame-rate number can
-    /// answer: whether the views a host builds and discards are actually being freed. Counting
-    /// the two lines is the whole test — a host that creates ten views and destroys nine is
-    /// leaking a whole render graph per cycle, which is invisible until the process runs out of
-    /// memory hours later and something unrelated fails to allocate.
-    private static let logsLifecycle =
-        ProcessInfo.processInfo.environment["SAVERKIT_LIFECYCLE"] != nil
-
     private func logLifecycle(_ event: String) {
-        guard SaverView.logsLifecycle else { return }
-        NSLog("SaverKit lifecycle: \(event) \(type(of: self)) "
-              + "\(Unmanaged.passUnretained(self).toOpaque())")
+        guard LifecycleLog.isEnabled else { return }
+        LifecycleLog.emit("SaverKit lifecycle: \(event) \(type(of: self)) "
+                          + "\(Unmanaged.passUnretained(self).toOpaque())")
+    }
+
+    /// Frames committed since the last signals line; the one number that says whether this
+    /// view is producing frames, whatever else the host tells it.
+    private var framesSinceSignal = 0
+
+    /// Under `SAVERKIT_LIFECYCLE`, once a second from the watchdog: everything a view can read
+    /// about its own window, beside how many frames it committed. A host abandons views without
+    /// telling them, and the only way to learn which signal still distinguishes a view someone
+    /// can see from one nobody can is to log them all from inside the real host and compare.
+    private func logSignals() {
+        guard LifecycleLog.isEnabled else { return }
+        let frames = framesSinceSignal
+        framesSinceSignal = 0
+        var fields = ["frames=\(frames)", "wants=\(wantsFrames)", "suspended=\(isSuspended)",
+                      "hibernating=\(isHibernating)", "host=\(host != nil)",
+                      "bounds=\(Int(bounds.width))x\(Int(bounds.height))",
+                      "drawable=\(Int(metalLayer?.drawableSize.width ?? 0))x\(Int(metalLayer?.drawableSize.height ?? 0))",
+                      "hidden=\(isHiddenOrHasHiddenAncestor)",
+                      "visibleRect=\(Int(visibleRect.width))x\(Int(visibleRect.height))"]
+        if let window {
+            // `windowNumber` is documented as non-positive for a window without a window device,
+            // and `CGWindowID` is unsigned: converting a -1 would trap the whole host.
+            let info = window.windowNumber > 0
+                ? (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(window.windowNumber))
+                   as? [[String: Any]])?.first
+                : nil
+            fields += ["level=\(window.level.rawValue)", "isVisible=\(window.isVisible)",
+                       "onActiveSpace=\(window.isOnActiveSpace)",
+                       "occlusion=\(window.occlusionState.contains(.visible) ? "visible" : "occluded")",
+                       "screen=\(window.screen != nil)", "alpha=\(window.alphaValue)",
+                       "winFrame=\(Int(window.frame.width))x\(Int(window.frame.height))",
+                       "winNumber=\(window.windowNumber)",
+                       "cgOnscreen=\(info?[kCGWindowIsOnscreen as String] as? Bool ?? false)",
+                       "cgListed=\(info != nil)",
+                       "keyOrMain=\(window.isKeyWindow || window.isMainWindow)"]
+        } else {
+            fields.append("window=nil")
+        }
+        LifecycleLog.emit("SaverKit signals: \(type(of: self)) \(Unmanaged.passUnretained(self).toOpaque()) "
+                          + fields.joined(separator: " "))
     }
 
     // MARK: Init
@@ -335,6 +381,50 @@ class SaverView: ScreenSaverView {
         didReleaseHost(reason)
     }
 
+    // MARK: Audience
+    //
+    // Measured on the real host, logging every readable window property once a second across a
+    // hot-corner session and its dismissal (spikes/008-view-lifecycle/README.md §6): after the
+    // session ended the view went on committing 60 frames a second into a full-screen window at
+    // level 0, at ~24% CPU and 620 MB, and `isVisible`, `isOnActiveSpace`, `occlusionState`,
+    // `screen`, `alphaValue` and the CG on-screen bit all read exactly as they had while it was
+    // presenting. The level was the only thing that moved. So the level is the test, and two
+    // facts break the one tie it cannot — a full-screen view at `.normal` is either the picker's
+    // live preview or a leftover: the picker's preview has never presented, and it exists only
+    // while System Settings does.
+
+    /// Can anyone see the frame this view is about to draw?
+    ///
+    /// Draws: a view whose window is at any level but the one measured for a leftover (a
+    /// session, the harness's capture window, anything unmeasured — erring toward drawing,
+    /// because a wrong "no" here is a black screensaver, not a quiet one); a preview-sized view,
+    /// which somebody opened on purpose and which costs nothing worth arguing about; and a
+    /// full-screen view at `.normal` that has never presented, while System Settings is running
+    /// — the picker's live preview. What is left is a leftover, and nobody is looking at it.
+    ///
+    /// The process check is shared by every view in the bundle, throttled to seconds, and
+    /// never asked while presenting, so a running screensaver never pays for it. Errs toward
+    /// drawing: a failed lookup keeps the last answer, which starts as "running".
+    ///
+    /// The one visible cost: a picker preview that was promoted to present a real session
+    /// (measured — a session reuses the picker's host and its full-screen view) is dark once
+    /// that session ends, until it is reselected. Rare, and the alternative was measured: with
+    /// System Settings open on any pane, every dismissed session's leftover would draw at full
+    /// rate for as long as Settings stayed open.
+    private func hasAudience() -> Bool {
+        if SaverView.assumesAudience { return true }
+        if HostSignals.isPresenting(window) { hasPresented = true; return true }
+        guard let window, window.level == .normal else { return true }
+        if bounds.width > 0 && isPreviewSized { return true }
+        if hasPresented { return false }
+        return HostSignals.systemSettingsIsRunning(recheckAfter: SaverView.settingsCheckInterval)
+    }
+
+    /// How often the process table is read on behalf of a never-presented view at `.normal`.
+    /// The cost of a stale answer is a picker preview that starts a few seconds late; the cost
+    /// of asking is a copy of the whole process table, so neither end wants to be extreme.
+    private static let settingsCheckInterval: CFTimeInterval = 3
+
     // MARK: Idle release
     //
     // The memory half of the rule the audio spike produced: tie every side effect to frames
@@ -376,6 +466,10 @@ class SaverView: ScreenSaverView {
         guard isHibernating else { return }
         isHibernating = false
         logLifecycle("woke")
+        // Aged from the wake, not from the last frame before hibernation: a first render that
+        // fails transiently (no drawable, say) would otherwise look four seconds idle at once
+        // and rebuild the whole graph again on the very next tick.
+        lastFrameCommit = CACurrentMediaTime()
         // Everything below is what a first layout does; the depth texture is nil, so it runs.
         updateDrawableSize()
     }
@@ -383,6 +477,7 @@ class SaverView: ScreenSaverView {
     private func startWatchdog() {
         guard watchdog == nil else { return }
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.logSignals()
             self?.releaseHostIfIdle()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -556,6 +651,10 @@ class SaverView: ScreenSaverView {
             suspendFrames()
             return
         }
+        // Before the wake, or a hibernated view with nobody to draw for rebuilds its whole
+        // graph every second only to release it again — measured in the harness as a
+        // hibernate/wake pair 3 ms apart on every watchdog tick.
+        guard hasAudience() else { return }
         wakeIfHibernating()
 
         // `targetTimestamp` is the vsync this frame is for, so animation driven from it is
@@ -577,6 +676,7 @@ class SaverView: ScreenSaverView {
             // whole scene on the main thread first, and a build slower than `idleReleaseDelay`
             // stamped at the start would look idle the moment it ended.
             lastFrameCommit = CACurrentMediaTime()
+            framesSinceSignal += 1
         }
     }
 

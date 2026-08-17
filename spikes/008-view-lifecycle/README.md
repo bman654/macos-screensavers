@@ -167,19 +167,64 @@ sourced report; the load-bearing facts are repeated here:
   `com.apple.screensaver.willstart` does not exist in any binary on this machine, while
   `previewdidstop` and `didlaunch` do.
 
-## 6. Still open — the picker's leftover
+## 6. The leftover that keeps rendering — measured on the real host, and closed
 
-Spike 006 measured a *different* leftover: a picker-spawned host whose view went on rendering
-at 60 fps after System Settings quit, `window=shown`, level 0. Its link never goes silent, so
-the idle release cannot see it, and nothing about the view changes when Settings quits. The
-only discriminator found is the process table — is System Settings running — which is a
-heuristic this repo already uses once, at startup, and has ruled out polling every 2 s.
+Spike 006 had measured a *different* leftover: a picker-spawned host whose view went on
+rendering at 60 fps after System Settings quit, `window=shown`, level 0. Its link never goes
+silent, so the idle release of §3 cannot see it. On 2026-08-17 the same shape turned up after
+an ordinary **hot-corner session** on the installed build: the host was at ~24% CPU and
+623–627 MB two minutes after dismissal, `sample` showed `frameLinkFired → render →
+SceneKitHost.encode` every frame, and `winlist.swift` showed its 3840x2160 window at layer 0
+and off-screen. §3's release had nothing to release: frames never stopped.
 
-Before building anything: measure it. Select the Aquarium in the picker, quit System Settings,
-then on the surviving host — `pgrep -fl legacyScreenSaver`, `ps -o %cpu`, `footprint`,
-`heap <pid> -addresses AquariumView`, and `swift spikes/008-view-lifecycle/winlist.swift <pid>`
-for its window's on-screen state and level. If that window is off-screen the link is silent and
-this spike already covers it. If it is on-screen and rendering, the fix is a slow (≥30 s)
-process-table check from `animateOneFrame` that *suppresses rendering* rather than hibernating,
-because a wake-on-frame release would flap. It wants System Settings on the user's screen, so
-it was not run from an agent session.
+**What the view can see, logged from inside the host.** `LifecycleLog` (gated by
+`SAVERKIT_LIFECYCLE=1` or a `saverkit-lifecycle.enable` sentinel in the host container's `tmp`
+— `launchctl setenv` never reaches the appex, and `log show` needs Full Disk Access, so the log
+also goes to a file there) writes one line a second per animating view with every readable
+window property beside the frames it committed. Across a hot-corner session and its dismissal:
+
+```
+15:19:36  frames=44  level=-2147483625  isVisible=true onActiveSpace=true occlusion=occluded
+                                        screen=true alpha=1.0 cgOnscreen=false cgListed=false
+   …      frames=60  level=-2147483625  (identical)
+15:19:47  frames=58  level=0            (identical)          <- dismissed
+   …      frames=60  level=0            (identical, for the life of the process)
+```
+
+**Every property but the level read the same before and after.** `isVisible`, `isOnActiveSpace`,
+`occlusionState` (occluded during the real session too), `screen`, `alphaValue`, and both CG
+window-list bits (the appex's window is not in the CG list from inside the appex at all). The
+level is the only signal, and it says "not presenting" — which is also what the picker's live
+preview says. The tie is broken by the process table: a full-screen view at `.normal` in a host
+with no System Settings behind it has nobody to draw for.
+
+**The fix is `SaverView.hasAudience()`**, checked in the link callback before the wake and
+before `render`. A view draws if its window is at any level but `.normal` (the one level
+measured for a leftover — a wrong "no" here is a black screensaver, so unmeasured levels draw),
+or it is preview-sized, or it has never presented and System Settings is running (asked of the
+kernel every 3 s, one shared answer per bundle, first answer held for an interval because the
+host is spawned before Settings registers, and never while presenting). A view that has once
+presented is a session's, and at `.normal` it is a leftover no matter what else is running.
+Otherwise it commits nothing, and §3's watchdog hibernates it 4 s later. `run-saver.swift` sets
+`SAVERKIT_AUDIENCE=1` for itself, because its interactive window is an ordinary window at level
+0 — the exact shape of a leftover — and only the harness knows the difference;
+`SAVERKIT_AUDIENCE=0` makes that window play the leftover, and it hibernates in the harness 7 s
+after start. Also measured on the way: the gate must precede `wakeIfHibernating()`, or a
+hibernated view with no audience rebuilds its graph on every tick and releases it 3 ms later.
+
+**Verified on the installed build, hot-corner session, 2026-08-17:**
+
+```
+15:30:32  frames=44  level=-2147483625   presenting
+15:30:44  frames=8   level=0             dismissed; gate engaged within the second
+15:30:45  audience: none
+15:30:47  frames=0
+15:30:48  hibernated
+```
+
+`footprint`: **135 MB** (had been 623–627 MB); `heap` shows the `AquariumView` and no
+`SCNRenderer`/`SCNScene`; CPU at the noise floor. A second hot-corner session in the same host
+built a *new* view, which presented at 60 fps while the first stayed hibernated
+(`host=false drawable=1x1`), then hibernated 4 s after its own dismissal: two views, 248 MB
+(process-wide caches, §3), ~0–1% CPU. Reuse of a hibernated view by a later session is the
+wake path of §3, unchanged.

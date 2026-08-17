@@ -265,9 +265,29 @@ Two consequences for a saver:
   `SSENeedsAnimationTimer` in a saver's Info.plist can switch it off entirely. SaverView's
   watchdog is its own timer for exactly that reason.
 
-**What this does not cover:** a picker-spawned host whose view goes on rendering after System
-Settings quits (spike 006 measured one at 60 fps, `window=shown`, level 0). Its link never goes
-silent. Spike 008 §6 has the measurement to take before touching it.
+**What it cannot see on its own is a leftover whose frames never stop** — and on the real
+host that is what a dismissed session leaves: measured after a hot-corner session, the view went
+on committing 60 frames a second into an off-screen 4K window at level 0, ~24% CPU, 625 MB.
+Logged from inside the host, every readable window property (`isVisible`, `isOnActiveSpace`,
+`occlusionState`, `screen`, `alphaValue`, the CG on-screen bit) read identically before and after
+dismissal; **only the window level moved**. So `SaverView.hasAudience()` withholds the commit
+from a full-screen-sized view whose window is at `.normal` — the one level measured for a
+leftover; any other level draws, because a wrong "no" here is a black screensaver — unless it
+has never presented and System Settings is running, which is the picker's live preview. A view
+that has once been at a presenting level (`HostSignals.isPresenting`, the audio gate's test) is a
+session's view, and back at `.normal` it is a leftover whatever else is open. The process-table
+answer is one shared, 3 s-throttled read (`HostSignals.systemSettingsIsRunning`), never taken
+while presenting. A view that commits nothing is hibernated by the watchdog 4 s later.
+Preview-sized views always draw; the harness sets `SAVERKIT_AUDIENCE=1` for itself because its
+interactive window is at level 0, and `SAVERKIT_AUDIENCE=0` makes that window stand in for a
+leftover — the gate's harness reproduction. Verified on the installed build across two
+hot-corner sessions: 623 → 135 MB, `hibernated` 4 s after dismissal, and the second session's
+view presented at 60 fps beside the first's hibernated one. Spike 008 §6 is the measurement.
+**The accepted cost:** a picker preview that was promoted to present a real session (a session
+reuses the picker's host and full-screen view) is dark once that session ends, until reselected.
+The alternative — trusting System Settings alone — was reasoned through and rejected: it would
+have every dismissed session's leftover drawing at full rate for as long as Settings stayed
+open on any pane.
 
 **The road not taken:** every open-source saver that has met this bug — XScreenSaver, Aerial,
 ScreenSaverMinimal and others — observes `com.apple.screensaver.willstop` and *exits the host*
@@ -283,6 +303,8 @@ Automatic — do not re-implement:
 
 - Suspending and resuming frames on window changes, plus the display-link safety net.
 - Releasing the render graph after 4 s without a frame, and rebuilding it on the next one.
+- Declining to draw a full-screen frame nobody can see (`hasAudience()`), which is what turns
+  a leftover that keeps rendering into one the release above can catch.
 - `deinit` invalidates the frame link and calls `host?.teardown()`.
 - Owning the `CAMetalLayer`, drawable sizing, MSAA and depth attachments, presentation and
   command-buffer commit. **A host encodes; it never touches the layer, the drawable, or
@@ -313,10 +335,18 @@ Yours to get right:
 ### Proving you have not regressed it
 
 ```bash
-SAVERKIT_LIFECYCLE=1 …          # logs "created"/"destroyed <Type> <address>"
+SAVERKIT_LIFECYCLE=1 …          # logs "created"/"destroyed <Type> <address>", plus one line a
+                                # second per view of what it can see of its window
+touch ~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/saverkit-lifecycle.enable
+                                # the same, for the installed host, which no env var reaches;
+                                # the log lands beside it as saverkit-lifecycle.log
 ```
 
-Counting the two lines is the whole regression test. Two traps around measuring it:
+In the harness, counting the two lines is the regression test. In the real host a discarded
+view is retained by the host and never destroyed, so the test there is the signals line: a view
+nobody can see reads `frames=0 hibernating=true host=false` within seconds of being set aside
+(measured: `hibernated` 4 s after dismissal), and `footprint <pid>` falls with it. Two traps
+around measuring it:
 
 - **A harness that pumps the run loop by hand measures its own autorelease pool.** A first probe
   reported a steady 445 MB per cycle "leaking from the settings sheet", which does not leak at
