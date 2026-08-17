@@ -2,8 +2,10 @@
 
 **Read first if you touch audio: the session gate has two halves now, and shipping only one of
 them put sound on the user's desktop while they were working.** A saver is audible only when the
-screensaver session is running **and** its own window is still below the desktop level — the
-level the host returns to `.normal` the moment it is finished with a view. `SoundSession.swift`
+screensaver session is running **and** its own window is still at a presenting level — the level
+the host returns to `.normal` the moment it is finished with a view. The test is against the
+desktop *icon* level, not the desktop level: the harness window sits between the two, and a
+literal desktop-level test makes every harness run silent. `SoundSession.swift`
 carries the rule, `docs/tank-sound.md` §"The gate has two halves" the summary, and
 `spikes/006-saver-audio/README.md` §"Phase 0 was not enough" the measurements and the three
 plausible theories that were refuted on the way. It is verified on the installed build over five
@@ -31,6 +33,12 @@ Extended 2026-08-17 by the session that shot the picker tile and established, by
 what Tahoe's picker does with a third-party saver's thumbnail — `spikes/007-picker-thumbnail/`.
 
 ## State
+
+**`docs/saver-host.md` is new, and it is what the next saver starts from.** Everything learned
+about the host rather than about fish, in one place: the picker and its thumbnail, why a view
+leaks and what SaverKit does about it, and the two-part gate that decides when a saver may be
+heard and which instance is heard. It also carries the tables of approaches that were **measured
+and refuted**, which is the half that saves the time.
 
 **The saver has a tile in the picker now, and it is verified there rather than in a build
 directory.** `Savers/Aquarium/Thumbnail/thumbnail.png` and its `@2x` are rendered by

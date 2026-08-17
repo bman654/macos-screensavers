@@ -6,6 +6,10 @@
   time once. Read this first.
 - `Shared/SaverKit/README.md` — how to write a saver, and the macOS 26 hazards the base
   class handles for you. Read before touching any Swift here.
+- `docs/saver-host.md` — what the screensaver host actually does, and the rules that follow:
+  getting a picture into the picker, why a view leaks and how not to, and when a saver may be
+  heard and from which instance. **Read this first when starting a new saver** — SaverKit's
+  README is the kit's API, this is the platform underneath it.
 - `docs/aquarium-plan.md` — the active track, its one blocker, and the decisions already
   settled. Read before touching the aquarium.
 - `spikes/001-fish-pipeline/README.md` — what the Blender→SceneKit pipeline proved, and
