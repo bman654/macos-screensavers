@@ -55,8 +55,10 @@ final class AquariumSound {
     private static var ownerHeartbeat: CFTimeInterval = 0
 
     /// How long an owner may go without a frame before it is considered abandoned. Comfortably
-    /// longer than any legitimate hitch, and the same quarter second the render thread uses to
-    /// decide it has stopped being looked at.
+    /// longer than any legitimate hitch, and deliberately three times the 0.25 s the render
+    /// thread uses to decide it has stopped being looked at: a stalled owner should have faded
+    /// itself out well before anyone is allowed to take the voice away from it, or the handover
+    /// is audible.
     private static let ownerTimeout: CFTimeInterval = 0.75
 
     private var core: SoundCore
