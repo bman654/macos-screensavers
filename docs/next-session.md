@@ -37,6 +37,11 @@ real host and taught `SaverView` to hand its render graph back while it waits �
 release never firing because the leftover's frames never stop, and `SaverView` learned to
 decline a frame nobody can see (`hasAudience()`, spike 008 §6).
 
+Extended 2026-08-17 (later) by the session that gave the fish a second layer of motion: the eel
+bends its body into a turn instead of swinging round like a log, and every fish's pectoral fins
+beat — see "The eel bends and the pectorals beat" below, and `spikes/009-part-channel/` for the
+one piece of tech it took. **Both are built and installed but not yet judged by the user.**
+
 ## State
 
 **`docs/saver-host.md` is new, and it is what the next saver starts from.** Everything learned
@@ -279,7 +284,11 @@ each in the direction of saying a broken thing was fine:
 than an event. On a fresh clone run `tools/build-library.py` (about 10 minutes) **and
 `tools/build-audio.py` (about 15 seconds)** before `tools/build-saver.sh`. Skipping the audio
 bake fails quietly in the way that wastes an afternoon: `SoundLibrary` returns nil by design, so
-the tank simply has no voice and nothing anywhere says why.
+the tank simply has no voice and nothing anywhere says why. **A stale model library fails the same
+quiet way now:** a fish exported before the part channel existed has no `st1` UV set, the runtime
+hands it the fallback shader whose fins never move, and the only readout is a line under
+`AQUARIUM_SCHOOL_STATS`. `tools/build-library.py` refuses to produce such a fish, so on a fresh
+clone the rebuild is the whole cure.
 
 ## Loops
 
@@ -419,6 +428,59 @@ so arcs are the common case and the loop survives as the rare one. Do not "fix" 
 sample — nothing ever leaves a closed tank — and every behaviour entered: wander 168, cruise 145,
 hover 52, forage 29, dart 4. Foraging is picked on 7% of decisions against 23% of its weight, which
 is right: a fish high in the column is not eligible for it.
+
+## The eel bends and the pectorals beat
+
+Two changes, one shader. `SwimDeformation.swift` now holds the geometry modifier that used to sit
+at the top of `School.swift`, and it is **three composing terms** — each a displacement of the same
+undeformed vertex, added: the body wave that was always there, a turn arc, and a pectoral hinge.
+The header states the mesh frame (nose +X, up +Z, **+Y is the fish's left**), because two axis
+comments in `School.swift` had been wrong in ways that cancelled and this work found them.
+
+**The eel bends into a turn.** A fish's tail follows the path its head is on, so the body's
+curvature is the path's — `turnRate / speed`, per axis, smoothed like the bank — and the shader
+lays each vertex `κ·s²/2` off the nose's axis, toward the *inside* of the turn (a chord lies on
+the centre side of its tangent). Clamped through `tanh` at `School.maxBendAngle` = 1.7 rad end to
+end, because past about a right angle the offset form thickens the tail rather than bending it,
+and `tanh` rather than a clip so a slow eel that spends a whole turn past the ceiling does not
+snap on and off. **Only the eel writes the two bend uniforms** — `if fish.isLurker` in `steer` and
+`pose`; every other species keeps the zero it was built with, since a fish five girths long
+already reads as natural. Judge it on `AQUARIUM_STYLE=aquarium AQUARIUM_SEED=4`; the census
+prints `bend +x.xx/+y.yy` per lurker. If the coil reads too strong, `maxBendAngle` is the one
+knob and 1.2 rad is the next thing to try. Known limit: constant curvature cannot do an S-bend —
+a snake reversing mid-turn has its tail still on the old arc — and that would need a spine of past
+head positions passed as a uniform array. Not built; see whether anyone misses it first.
+
+**The pectorals beat, and the tech is a per-vertex part channel.** The shader has to know which
+vertices are a fin and how far out along it they sit, and the joined single-material mesh gave it
+no way to. `spikes/009-part-channel/` measured the answer: SceneKit's USD importer **drops vertex
+colour** on Tahoe (both loaders), but a second UV set named `st1` arrives intact as
+`_geometry.texcoords[1]` in full float. So `build_fish.py` authors a `FLOAT_COLOR`/`POINT`
+attribute on *every* mesh before modifiers — a mesh missing it joins as **white**, not zero — with
+pectorals carrying `(id, |vertex − root|)` (0.25 left, 0.35 right; 0 is "no part", 1 is reserved
+for the white-fill failure), asserts it on the meshes that actually enter the join, and after
+`bake_atlas` (which deletes every UV layer) transcodes it to `st1` as `(x, 1 − y)` because the
+importer flips V, then removes the colour attribute so no other consumer tints the fish. The
+lever arm is normalised by the joined mesh's X extent, which is exactly the runtime's `bodyLength`
+uniform, so `finAmplitude` is a true angle in radians for every species.
+
+The stroke is a real rotation about the root, not a tangent slide: `reach · (sin θ · flap +
+(cos θ − 1) · out)`, with `out` the fin's authored outward direction from `_build_fins` and `flap`
+a fore-aft row with 20° of lift, orthogonalised against it — so the fin keeps its length at every
+angle. Sides beat in antiphase, which reads as rowing. Driven by behaviour in
+`School.pectoralStroke`: hover/forage 0.46 rad at 2.6 Hz, host 0.32 at 2.3, cruise/wander/transit
+0.20 at 1.7, dart 0; amplitude tucked by effort, rate scaled by `sqrt(0.09/length)`, eased at
+3.5/s. Cost: ~+0.3 ms GPU at 2056×1329, 60 fps holds. **Two things for the user's eye:** whether
+antiphase or in-phase reads better (only decidable when a fish faces the camera), and whether the
+hover amplitude is legible at native size — it is a couple of pixels of swing on a small fish, and
+that is inherent to fin size rather than to the term.
+
+**Traps this added, all measured:** an absent `texcoords[1]` does not read zero — a shader that
+indexes it on a mesh without the source makes the *whole fish vanish*, silently, so `ModelCache`
+counts texcoord sources and `School` hands a stale asset a fallback variant that substitutes
+`float2(0)`; and `build-library.py` now `usdcat`s every fish and refuses one whose `st1` is
+missing, carries an unknown id, or carries a 1.0. `--export` without `--bake` also transcodes,
+and `--export --no-join` is refused because the channel is a property of the joined mesh.
 
 ## Fish route through the arch and the wreck now
 
@@ -696,7 +758,13 @@ from, and the list of signals already proven useless.
    autorelease pool, not a leak.
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
-   twelve did not (independent dorsal spines; a curled prehensile tail).
+   twelve did not (independent dorsal spines; a curled prehensile tail). **The animation half of
+   both is now unblocked**: the part channel that drives the pectorals is the same channel a
+   lionfish's spines and fans, and a seahorse's fluttering dorsal, would ride — a new part is a
+   new id in `_PECTORAL_IDS`' family and a term in `SwimDeformation.swift`. Lionfish first: it
+   reuses the fish body pipeline and only adds parts, while the seahorse also needs an upright
+   pose and a locomotion model in `School` that is not a lateral body wave at all. The modelling
+   half (spines, the curled tail) is untouched by any of this.
 
 ### Done, kept for what they record
 
@@ -793,14 +861,13 @@ from, and the list of signals already proven useless.
   height controller lags behind it; the rock arch, whose route is level, does not show it. The
   honest fix is either more waypoints on the climb or a feed-forward term on the height
   controller, and neither is worth it for a prop that already reads correctly.
-- **The pectoral fins never move.** User-reported, and deliberately deferred. It did not matter
-  while every fish did nothing but cruise; now that fish slow, stop, hover and forage it is very
-  noticeable, because holding station is exactly what a real fish does *with* its pectorals. The
-  swim shader is one travelling lateral wave down the body with a `tailward²` envelope and has no
-  term for a fin beating out of phase with it — see `swimModifier` in `School.swift`. Note the
-  connection to `SwimLimits.pivotFloor`: a hovering fish is allowed to keep 18% of its turning
-  authority precisely because a real one reorients on its pectorals, so the number is standing in
-  for the animation that is missing.
+- ~~**The pectoral fins never move.**~~ **They beat now** — see "The eel bends and the pectorals
+  beat". What is left of this item: `SwimLimits.pivotFloor` still lets a hovering fish keep 18% of
+  its turning authority on the argument that a real one reorients on its pectorals; the animation
+  that number was standing in for exists now, so if a hovering fish ever reads as pivoting too
+  freely, that is the number to revisit. And a fin's hinge is a rotation of its *rest offset
+  along the authored outward direction* — rake, curl and flare change the lever arm (which is
+  stored exactly) but not the assumed direction, a small second-order error nobody has seen.
 - **The aquarium's ceiling is not a waterline.** It follows the frustum like the side walls, so it
   rises toward the back of the tank, which no real water surface does. The alternative costs more
   than it buys: a flat waterline can only sit as high as the frustum allows at the *nearest* depth
