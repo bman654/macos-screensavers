@@ -50,6 +50,8 @@ struct AquariumSettings: Equatable {
     /// Whether the tank prints the seed it was drawn from in its corner.
     var showsSeed: Bool
 
+    var soundEnabled: Bool
+
     /// What a machine that has never opened the sheet gets. `shallowReef` because it is the
     /// most legible of the three at a glance.
     ///
@@ -57,8 +59,13 @@ struct AquariumSettings: Equatable {
     /// user who cannot see a seed has nothing to type into the field, so a default-off badge
     /// leaves the field addressing a number the user has no way to learn. It is one click to
     /// turn off, and the badge is deliberately faint.
+    ///
+    /// Sound defaults off as settled policy because a screensaver starts when the user walks
+    /// away. Unrequested sound otherwise plays to an empty room, into a meeting they just
+    /// walked into, or at 2am. Opted-in ambience is charming; the same audio uninvited is why
+    /// people uninstall screensavers.
     static let `default` = AquariumSettings(style: .fixed(.shallowReef), seed: nil,
-                                            showsSeed: true)
+                                            showsSeed: true, soundEnabled: false)
 
     /// Not a `TankStyleName`, and it must stay that way — a style added under this name would
     /// be unreachable, since `StylePreference(stored:)` resolves it to `.random` first.
@@ -67,6 +74,7 @@ struct AquariumSettings: Equatable {
     private static let styleKey = "TankStyle"
     private static let seedKey = "TankSeed"
     private static let showsSeedKey = "ShowsSeed"
+    private static let soundEnabledKey = "SoundEnabled"
 
     // MARK: Persistence
 
@@ -84,6 +92,9 @@ struct AquariumSettings: Equatable {
         if defaults.object(forKey: showsSeedKey) != nil {
             settings.showsSeed = defaults.bool(forKey: showsSeedKey)
         }
+        if defaults.object(forKey: soundEnabledKey) != nil {
+            settings.soundEnabled = defaults.bool(forKey: soundEnabledKey)
+        }
         return settings
     }
 
@@ -98,6 +109,7 @@ struct AquariumSettings: Equatable {
             defaults.removeObject(forKey: AquariumSettings.seedKey)
         }
         defaults.set(showsSeed, forKey: AquariumSettings.showsSeedKey)
+        defaults.set(soundEnabled, forKey: AquariumSettings.soundEnabledKey)
         // Screensaver defaults are conventionally synchronized on write: the sheet runs inside
         // `legacyScreenSaver`, which System Settings kills freely, and an unflushed preference
         // is one the user set and then watched not happen.
@@ -122,6 +134,11 @@ struct AquariumSettings: Equatable {
         // otherwise every screenshot taken for `docs/water-looks.md` would carry a seed on it.
         if let shown = ProcessInfo.processInfo.environment["AQUARIUM_SHOW_SEED"] {
             settings.showsSeed = (shown as NSString).boolValue
+        }
+        // The environment is how this repo's render and record loop reaches settings, since
+        // `tools/run-saver.swift` cannot click a sheet.
+        if let enabled = ProcessInfo.processInfo.environment["AQUARIUM_SOUND"] {
+            settings.soundEnabled = (enabled as NSString).boolValue
         }
         return settings
     }

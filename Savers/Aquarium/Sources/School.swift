@@ -99,6 +99,15 @@ private final class Fish {
     var bobPhase: Float = 0
     var bobAmplitude: Float = 0
 
+    /// Whether this fish was working hard enough to be heard on the previous step, and how long
+    /// it must wait before it may be heard again. Both exist so that a swish is raised on the
+    /// *edge* — a fish over the threshold for half a second is one gesture, not thirty.
+    var wasStraining = false
+    var swishCooldown: Float = 0
+
+    /// This step's yaw rate, kept from `steer` because the bank and the sound both want it.
+    var yawRate: Float = 0
+
     init(node: SCNNode, materials: [SCNMaterial], length: Float, depthBand: Span,
          laneRange: ClosedRange<Int>, baseAmplitude: Float, girth: Float, isLurker: Bool) {
         self.node = node
@@ -343,6 +352,86 @@ final class School {
     private var waypointsReached = 0
     private var routesCrossed = 0
 
+    // MARK: What the fish sound like
+
+    /// A fish working hard enough to move water audibly, at the moment it starts.
+    struct SwishEvent {
+        let bodyLength: Float
+        /// -1 at the left edge of the frame, +1 at the right.
+        let pan: Float
+        /// 1 at the glass, falling toward the back wall.
+        let nearness: Float
+        /// How far past the threshold the fish went, clamped. A hard turn is not a bolt, and
+        /// this is what carries the difference between them into the gain.
+        let strength: Float
+        let isDart: Bool
+    }
+
+    /// Raised when a fish begins to strain. Nil, and therefore free, when sound is off.
+    var onSwish: ((SwishEvent) -> Void)?
+
+    /// Effort — speed over cruise speed — a fish must exceed before it is heard at all.
+    ///
+    /// Infinite by default so that the school is silent unless something has deliberately set
+    /// it. Cruising is meant to be silent: a tank in which every fish is audible all the time
+    /// has nothing left to say when one of them bolts.
+    var swishThreshold: Float = .greatestFiniteMagnitude
+
+    /// How much lateral acceleration counts as a hard turn, as a fraction of what this fish
+    /// makes at cruise speed turning at its own maximum rate.
+    ///
+    /// Speed alone will not do, and measuring showed why: of the seven behaviours only `dart`
+    /// asks for more than 1.15 times cruise speed, so *any* effort threshold in the usable
+    /// range means "darts only" — and darts are rare by design, four in a hundred and fifty
+    /// seconds across a whole school. That measured two swishes in eighty seconds, which is a
+    /// feature nobody would notice.
+    ///
+    /// Turning is the other half of the same physics: a fish comes round by pushing water
+    /// sideways with its body, which is a tail stroke, which is the thing this sound *is*. But
+    /// **yaw rate alone is not that push** — that was the next thing tried and it saturated, at
+    /// fifty-three swishes in ninety seconds with more than half of them refused, which means
+    /// the cooldown was setting the rate rather than the fish. A hovering fish pivoting on its
+    /// pectorals moves almost no water however fast it comes round.
+    ///
+    /// Speed times yaw rate is the lateral acceleration, which is what actually displaces water,
+    /// and it is selective for free: it is large only when the animal is both moving and
+    /// turning. Normalised by the fish's own scale, because a clownfish and a moray are an
+    /// order of magnitude apart in both terms.
+    var swishTurnShare: Float = .greatestFiniteMagnitude
+    var perFishSwishCooldown: Float = 4
+
+    /// Edge-triggered, per fish, with a cooldown.
+    ///
+    /// The edge is the point. `effort` is recomputed every fixed step, so a fish that spends
+    /// half a second above the threshold is above it for thirty steps, and a level test would
+    /// raise thirty gestures for one flick of a tail. What a listener should hear is the
+    /// beginning of the effort, once.
+    private func noteSwish(_ fish: Fish, effort: Float, bounds: WaterBounds, dt: Float) {
+        fish.swishCooldown = max(0, fish.swishCooldown - dt)
+        let turning = abs(fish.yawRate) * fish.speed
+            / max(fish.limits.yawRate * fish.cruiseSpeed * swishTurnShare, 1e-4)
+        let strain = max(effort / max(swishThreshold, 1e-4), turning)
+        let straining = strain >= 1
+        let beginning = straining && !fish.wasStraining
+        fish.wasStraining = straining
+
+        guard beginning, fish.swishCooldown <= 0, let onSwish else { return }
+        fish.swishCooldown = perFishSwishCooldown
+
+        let depth = max(-fish.position.z, 1e-3)
+        let halfWidth = tank.halfWidth(atDepth: depth)
+        let span = max(bounds.farDepth - bounds.nearDepth, 1e-3)
+        let recession = min(max((depth - bounds.nearDepth) / span, 0), 1)
+        onSwish(SwishEvent(bodyLength: fish.length,
+                           pan: halfWidth > 1e-4 ? fish.position.x / halfWidth : 0,
+                           // Never all the way to zero: the tank is a metre deep and the
+                           // listener is in it, so the back wall is not far away. This is a
+                           // depth cue, not an attenuation model.
+                           nearness: 1 - 0.6 * recession,
+                           strength: min(max(strain, 0.55), 1.6),
+                           isDart: fish.brain.behavior == .dart))
+    }
+
     /// One fixed step of the whole school.
     private func simulate(bounds: WaterBounds, lanes: SwimLanes) {
         let dt = School.step
@@ -386,6 +475,7 @@ final class School {
             // station still sculls, and a tail that actually stops is the clearest possible
             // statement that the animation and the motion are unrelated systems.
             let effort = min(max(fish.speed / max(fish.cruiseSpeed, 1e-4), 0.0), 2.6)
+            noteSwish(fish, effort: effort, bounds: bounds, dt: dt)
             let beatFactor = min(max(0.34 + 0.66 * effort, 0.34), 2.2)
             fish.swimPhase += fish.beat * beatFactor * 2 * .pi * dt
             if fish.swimPhase > 2 * .pi { fish.swimPhase -= 2 * .pi }
@@ -670,6 +760,10 @@ final class School {
             effort: fish.speed / max(fish.cruiseSpeed, 1e-4))
         let yawRate = Steering.turn(&fish.yaw, toward: targetYaw,
                                     rate: fish.limits.yawRate * authority, dt: dt)
+        // Kept, because the sound wants it as well as the bank does. A tail stroke is what a
+        // turn is made of, so how hard a fish is turning is the other half of how loud it is —
+        // see `noteSwish`.
+        fish.yawRate = yawRate
         _ = Steering.turn(&fish.pitch, toward: targetPitch,
                           rate: fish.limits.pitchRate * authority, dt: dt)
 

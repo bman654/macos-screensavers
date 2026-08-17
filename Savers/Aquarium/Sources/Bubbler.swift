@@ -52,6 +52,18 @@ final class Bubbler {
         // lid leaves its new position rather than trailing the hinge by one frame.
         streams.forEach { $0.trackSource() }
     }
+
+    /// Particles per second this prop is emitting right now, summed over its live streams.
+    ///
+    /// The audio bed's density is derived from this rather than from a constant, which is what
+    /// makes the sound belong to the tank that was actually drawn: a launch with a thermal vent
+    /// bubbles continuously, one with only a treasure chest is quiet between its puffs, and one
+    /// with neither gets nothing but the ambient trickle. The declared birth rate is the honest
+    /// unit here — it is what the picture is doing — and `AquariumSound` decides what fraction
+    /// of it is audible, since most of what an aerator releases is too small to hear.
+    var emissionRate: Float {
+        streams.reduce(0) { $0 + $1.liveRate }
+    }
 }
 
 private final class MovingPart {
@@ -82,6 +94,10 @@ private final class BubbleStream {
         self.spec = spec
         self.source = source
         self.reefNode = reefNode
+        // A prop with no authored cycle is never told to start, so its opening state has to
+        // agree with the birth rate set below or the sound would report silence over a visibly
+        // running vent.
+        isActive = spec.continuous
 
         let lowerSize = max(0, spec.size.lower * scale)
         let upperSize = max(lowerSize, spec.size.upper * scale)
@@ -118,9 +134,14 @@ private final class BubbleStream {
         reefNode.addChildNode(anchor)
     }
 
+    private(set) var isActive: Bool
+
     func setActive(_ active: Bool) {
+        isActive = active
         particles.birthRate = active ? CGFloat(max(0, spec.rate)) : 0
     }
+
+    var liveRate: Float { isActive ? max(0, spec.rate) : 0 }
 
     func trackSource() {
         anchor.position = source.convertPosition(SCNVector3Zero, to: reefNode)

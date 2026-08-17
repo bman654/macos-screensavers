@@ -40,6 +40,19 @@ final class AquariumView: SaverView {
     /// the tank counts frames.
     override var preferredFPS: Int { 60 }
 
+    /// Silence is not optional when a host says stop.
+    ///
+    /// The frame-stall guard in `SoundCore` already covers the case this repo was bitten by —
+    /// a window ordered out, which fires no callback at all — but that is a backstop for a view
+    /// nobody can reach. When a host does say so, the engine should actually go away rather
+    /// than be held at zero gain. It is also what closes the `AQUARIUM_AUDIO_RECORD` file:
+    /// `tools/run-saver.swift` stops the view before it captures, and a WAV whose header was
+    /// never finalised is a recording no tool can open.
+    override func stopAnimation() {
+        aquarium?.silence()
+        super.stopAnimation()
+    }
+
     // MARK: Settings
 
     override var hasConfigureSheet: Bool { true }
@@ -61,8 +74,8 @@ final class AquariumView: SaverView {
         // from every frame, so this only has to be right enough for the opening layout.
         let settings = settingsOverride ?? AquariumSettings.forLaunch(defaults: saverDefaults)
         guard let modelURL = AquariumScene.modelURL(in: context.bundle),
-              let scene = AquariumScene(modelURL: modelURL, settings: settings,
-                                        isPreview: context.isPreview,
+              let scene = AquariumScene(modelURL: modelURL, bundle: context.bundle,
+                                        settings: settings, isPreview: context.isPreview,
                                         drawableSize: context.drawableSize)
         else { return nil }
 

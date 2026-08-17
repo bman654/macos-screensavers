@@ -41,6 +41,11 @@ final class AquariumScene {
     private var bubblers: [Bubbler] = []
     private var rand: Rand
 
+    /// The tank's voice, or nil when the user has sound switched off — which is the default,
+    /// and which is also what a thumbnail always gets. Nil costs nothing anywhere: the grain
+    /// library is never read, `School.onSwish` stays unset, and no audio device is opened.
+    private var sound: AquariumSound?
+
     /// The key light's gobo, held so the caustic net can be drifted each frame, and nil for a
     /// look with no caustics. It is the light's property rather than a node, because what moves
     /// is the pattern's texture transform and not the lamp.
@@ -96,7 +101,8 @@ final class AquariumScene {
     /// Declared failable to match the host's expectations, and deliberately never nil: a tank
     /// with an unreadable library still renders fogged water, whereas returning nil renders an
     /// unrecoverable black screen. Every model that fails to load simply does not appear.
-    init?(modelURL: URL, settings: AquariumSettings, isPreview: Bool, drawableSize: CGSize) {
+    init?(modelURL: URL, bundle: Bundle, settings: AquariumSettings, isPreview: Bool,
+          drawableSize: CGSize) {
         let directory = modelURL.deletingLastPathComponent()
         let library = ModelLibrary.load(from: directory)
         let cache = ModelCache(directory: directory)
@@ -182,6 +188,28 @@ final class AquariumScene {
         scene.rootNode.addChildNode(school.node)
         self.school = school
 
+        // Skipped for anything this build can tell is a thumbnail, which is not all of them.
+        //
+        // What is *heard* is decided entirely by the session gate in `SoundSession`; no property
+        // of a view can answer that, and this test does not try to. It is about cost — a tile
+        // has no business reading two megabytes of grains, and the settings sheet builds a fresh
+        // tank on every click. It is also known to be incomplete: the spike measured Tahoe's
+        // picker tile as a full-screen-sized view, so `isPreview` is false there and those tiles
+        // do pay for a grain library they will never play. That is the same unfixed signal that
+        // has the picker drawing full-fat tanks, and it wants one pass covering both.
+        if settings.soundEnabled && !isPreview,
+           let sound = AquariumSound(bundle: bundle, seed: seed) {
+            school.swishThreshold = sound.minimumEffort
+            school.swishTurnShare = sound.turnShare
+            school.perFishSwishCooldown = sound.perFishCooldown
+            school.onSwish = { event in
+                sound.swish(bodyLength: event.bodyLength, pan: event.pan,
+                            nearness: event.nearness, strength: event.strength,
+                            isDart: event.isDart)
+            }
+            self.sound = sound
+        }
+
         seabed.position = SCNVector3(0, tank.floorY(aspect: aspect), 0)
     }
 
@@ -221,6 +249,17 @@ final class AquariumScene {
         bubblers.forEach { $0.update(dt: Float(frame.deltaTime)) }
         driftCaustics(time: frame.time)
         swayGodRays(time: frame.time)
+        if let sound {
+            // After the bubblers, so the rate the ear is given is the one the eye is being
+            // shown this frame rather than the previous one's.
+            sound.setEmission(declaredRate: bubblers.reduce(0) { $0 + $1.emissionRate })
+            sound.update(time: frame.time)
+        }
+    }
+
+    /// Stops the tank's voice and closes anything it was recording.
+    func silence() {
+        sound?.stop()
     }
 
     /// Crawls the caustic net across the floor.

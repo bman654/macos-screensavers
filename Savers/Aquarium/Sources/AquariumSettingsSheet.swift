@@ -58,6 +58,7 @@ final class AquariumSettingsSheet: NSObject {
     private var buttons: [NSButton] = []
     private let seedField = NSTextField()
     private let showSeedButton = NSButton()
+    private let soundButton = NSButton()
     private let previewContainer = NSView()
     private var previewView: AquariumView?
     private let previewNote = NSTextField(labelWithString: "")
@@ -158,6 +159,12 @@ final class AquariumSettingsSheet: NSObject {
         // to see and it would cost a whole tank — see `AquariumScene.init`.
     }
 
+    @objc private func soundChanged(_ sender: NSButton) {
+        pending.soundEnabled = sender.state == .on
+        // No preview rebuild: the setting changes no part of the picture, and the preview is
+        // deliberately silent.
+    }
+
     /// Takes whatever is in the field and turns it into a pinned seed, or into none.
     ///
     /// Anything that is not a plain unsigned integer is rejected by putting the last accepted
@@ -248,6 +255,7 @@ final class AquariumSettingsSheet: NSObject {
             buttons[index].state = option.preference == pending.style ? .on : .off
         }
         syncSeedControls()
+        soundButton.state = pending.soundEnabled ? .on : .off
     }
 
     private func syncSeedControls() {
@@ -377,8 +385,15 @@ final class AquariumSettingsSheet: NSObject {
         showSeedButton.target = self
         showSeedButton.action = #selector(showSeedChanged(_:))
 
+        soundButton.setButtonType(.switch)
+        soundButton.title = "Play tank sounds"
+        soundButton.target = self
+        soundButton.action = #selector(soundChanged(_:))
+        // The preview tank inside this sheet is deliberately silent regardless of this switch,
+        // because audio is gated on the screensaver session and never on a view.
+
         let section = NSView()
-        for view in [heading, seedField, caption, showSeedButton] {
+        for view in [heading, seedField, caption, showSeedButton, soundButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
             section.addSubview(view)
         }
@@ -399,7 +414,10 @@ final class AquariumSettingsSheet: NSObject {
 
             showSeedButton.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 10),
             showSeedButton.leadingAnchor.constraint(equalTo: section.leadingAnchor),
-            showSeedButton.bottomAnchor.constraint(equalTo: section.bottomAnchor),
+
+            soundButton.topAnchor.constraint(equalTo: showSeedButton.bottomAnchor, constant: 8),
+            soundButton.leadingAnchor.constraint(equalTo: section.leadingAnchor),
+            soundButton.bottomAnchor.constraint(equalTo: section.bottomAnchor),
         ])
         return section
     }

@@ -9,6 +9,11 @@ build/
 Savers/*/Assets/*.usdz
 Savers/*/Assets/*.json
 
+# Generated grain library. Sounds are code too — a bubble's pitch follows from its
+# radius alone, so the source of truth is tools/build-audio.py and these WAVs are its
+# output. Run it before tools/build-saver.sh if you want a tank with a voice.
+Savers/*/Assets/audio/
+
 # Blender
 *.blend1
 *.blend2
