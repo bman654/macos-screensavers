@@ -13,6 +13,9 @@ import Foundation
 import Metal
 import QuartzCore
 import SceneKit
+// `SCNRenderer.overlaySKScene` is vended by SpriteKit, so a saver that does not itself import
+// SpriteKit cannot compile SaverKit without this line — the whole kit is one module per saver.
+import SpriteKit
 
 final class SceneKitHost: RenderHost {
     let renderer: SCNRenderer
