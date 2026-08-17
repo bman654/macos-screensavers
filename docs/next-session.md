@@ -1,5 +1,11 @@
 # Where to pick up
 
+**Open with the user, not blocking anything:** `AudioProbe.saver` is installed on purpose and
+is to be left installed. The user will log out at some point, leave the login screen idle until
+the screensaver starts, and report what the on-screen readout says. That is the last untested
+case in the audio spike, and `spikes/006-saver-audio/README.md` §"Still to test" holds the four
+lines to read and what each outcome means. It does not block the bubble bed.
+
 Rewritten 2026-08-13, at the end of the session that populated the tank and art-directed
 its three looks; extended the same day by the sessions that ran it on a Retina display, built
 its settings sheet, rebuilt the aquarium's substrate as real gravel, and then relit the tank
@@ -554,13 +560,40 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
    of the user, and **the session notification is not the fix for it**: a thumbnail should render
    cheaply whether or not the screensaver is running. Nothing in SaverKit has been changed yet.
 
-2. **Phase 1 of the audio track: the bubble bed.** Synthesised rather than sampled — a bubble in
-   water is a Minnaert resonator whose frequency follows its radius alone (f·r ≈ 3260 Hz·mm), so
-   the authoring loop is the one this repo already has: edit a Python script, render a WAV, look
-   at it, adjust numbers. The `audio-lens` skill reads a WAV as a spectrogram and numbers, which
-   is how it gets checked without hearing it — but the user is the ear, exactly as they are the
-   eye for the tank. Bake short grains and schedule them stochastically off the launch seed
-   rather than shipping a loop; that answers the bundle-weight hazard outright.
+2. **Phase 1 of the audio track: the bubble bed. This is what the next session is for.**
+
+   **Sounds are code, the same way models are.** A bubble in water is a Minnaert resonator: a
+   decaying sine whose frequency is set by its radius alone (f·r ≈ 3260 Hz·mm — a 1 mm bubble is
+   3.3 kHz, a 3 mm bubble 1.1 kHz), with a slight upward chirp as it collapses. So a bubble
+   stream is a radius distribution and an arrival rate, which are the same kind of numbers as the
+   ones in `Savers/Aquarium/Models/`. A water swish is a noise burst through a moving band-pass;
+   the filter hum is filtered brown noise. None of it wants a sample library, and committing
+   binaries as the source of truth would break this repo's one rule about assets.
+
+   **The authoring loop is the one that already exists**, with the render step swapped: edit a
+   Python script → write a WAV (`numpy` plus stdlib `wave`, in the same `.venv` the other tools
+   use) → *inspect it* → adjust numbers. Inspection is the `audio-lens` skill, which reports
+   RMS, peak, clipping, spectral centroid and writes a spectrogram PNG — that is how an agent
+   checks a sound without hearing it, and it was used in this spike to prove a fade landed where
+   it was supposed to. **But the user is the ear, exactly as they are the eye for the tank.**
+   `afplay` is the other half of the loop and there is no substitute for it.
+
+   **Ship grains, not a loop.** Bake a small library of one-shots — bubbles across a radius
+   range, a few swishes, a short bed — and schedule them stochastically at runtime off the launch
+   seed, through one `AVAudioUnitReverb`. Perhaps 1–2 MB against the model library's 35 MB, and
+   it answers the bundle-weight hazard outright: there is no loop to become repetitive. It also
+   opens the thing that makes it *this* tank rather than aquarium noise — the `Bubbler` prop
+   already has declared emitters and cycles, and the fish have real velocities, so sound can be
+   triggered by what is on screen instead of played over it.
+
+   **Do not re-derive the plumbing.** `spikes/006-saver-audio/README.md` §"What the real feature
+   should take from this" is six rules with measurements behind each. In particular: start the
+   engine once and ride a gain ramp (a start costs 470 ms, a fade is instant), ramp every gate
+   change or it clicks, and fade out on `willstop` rather than `didstop`.
+
+   **Settled by the user and not to be relitigated:** ambient sound only, toggleable, and
+   **defaulting to off**. A screensaver starts because the user walked away, so unrequested sound
+   plays to an empty room, or into a meeting they just walked into, or at 2am.
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
 4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held

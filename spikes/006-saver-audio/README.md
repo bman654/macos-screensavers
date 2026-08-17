@@ -251,11 +251,37 @@ the audio gate are different questions with different signals.
 
 ## Still to test
 
-**The login window.** Log out and let the saver start at the login screen; read `engine` and
-`render` off the screen. This is the one case with no log to read, and it is why the probe
-draws its diagnostics rather than only writing them. It is also the case most likely to differ,
-since the distributed notification the audio gate now depends on is posted in a different
-session context.
+**The login window.** `AudioProbe.saver` is installed and can be left installed for this.
+
+Log out, leave the login screen idle until the screensaver comes up, and read the readout. This
+is the one case with no log to read — the probe writes into
+`~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/`, which belongs
+to the logged-in user and does not exist before login — so the on-screen text *is* the result,
+which is why the probe draws its diagnostics as well as writing them.
+
+Four lines decide it:
+
+```
+engine       running            <- or FAILED <reason>, or silent (<reason>)
+output       48000 Hz, 2 ch     <- 0 Hz means there is no route to a device
+render       N calls, M frames  <- must be climbing; this is the load-bearing one
+session      screensaver running: true
+```
+
+The four outcomes and what each means:
+
+| What it says | Meaning |
+|---|---|
+| `session ... true`, `render` climbing, sound audible | it works at the login window |
+| `session ... true`, `render` climbing, **no** sound | the login window's audio is routed elsewhere or muted — a routing problem, not a screensaver one |
+| `session ... false` | the distributed notification does not reach this session context. **This is the likely failure**, and it means the gate needs a different signal there |
+| `engine FAILED ...` or `output 0 Hz` | CoreAudio is unavailable before login |
+
+It is also worth noting whether the sound starts about 2.5 seconds in, since the settling delay
+should behave the same there.
+
+**To uninstall afterwards:** `rm -rf ~/Library/Screen\ Savers/AudioProbe.saver && killall
+legacyScreenSaver`.
 
 **Two real displays.** Untestable on this machine, which mirrors rather than extends.
 `--instances` stands in for several views in one process, and the picker showed two *processes*
