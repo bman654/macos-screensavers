@@ -27,7 +27,20 @@ clipping the arch it was passing through, and the twirl at the mouth of a passag
 are fixed and signed off by the user on the installed build.** Start at "The eel lies on the
 floor now" if you are touching the school; the section after it is the one open art question.
 
+Extended 2026-08-17 by the session that shot the picker tile and established, by measurement,
+what Tahoe's picker does with a third-party saver's thumbnail — `spikes/007-picker-thumbnail/`.
+
 ## State
+
+**The saver has a tile in the picker now, and it is verified there rather than in a build
+directory.** `Savers/Aquarium/Thumbnail/thumbnail.png` and its `@2x` are rendered by
+`tools/build-thumbnail.sh` and copied into the bundle by `build-saver.sh`; the frame is the
+aquarium look on seed 5, chosen by looking at twenty-two candidates **at 108x71**, the size the
+picker actually draws. It is the aquarium rather than the default shallowReef for a reason worth
+keeping: at tile size the reef's teal-on-grey reads as a smudge, while the tank's bright gravel
+and its pink and orange fish survive the downscale. The tile crops about 5–6% off every edge, so
+nothing that matters may sit at the border. `spikes/007-picker-thumbnail/README.md` is the whole
+measurement, including the two traps that make this look broken when it is not.
 
 **The voice is now heard in the tank, and the audible is tied to the visible.** Signed off on the
 installed build at full screen: *"Yes now I can see the fish dashing and hear the noise associated
@@ -669,21 +682,19 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail).
-4. **The picker thumbnail.** The saver's tile in the Screen Saver list is blank. It was held
-   until the tank looked finished so the picture would not have to be shot twice — the caustics,
-   the god rays and the fish behaviour have all landed and been signed off, so **that condition is
-   now met** and this is only last because it is the smallest. Shoot it with
-   `AQUARIUM_SHOW_SEED=0`, or the tile carries a seed badge.
+4. ~~**The picker thumbnail.**~~ **Done and verified in the picker.** The tile is the tank now.
+   Everything that was unknown about the convention was measured rather than guessed, and
+   `spikes/007-picker-thumbnail/README.md` holds all of it — read that before touching
+   `tools/build-thumbnail.sh` or the thumbnail step in `build-saver.sh`. The two findings that
+   change how anyone works here:
 
-   What is known, from what ships on this machine rather than from documentation: Apple's
-   `/System/Library/Screen Savers/Random.saver` carries `Contents/Resources/thumbnail.png` at
-   90x58 and `thumbnail@2x.png` at 180x116, and its `Info.plist` names neither — so it is a
-   filename convention, not a declared key. `FloatingMessage.saver` ships no thumbnail at all.
-   Unknown, and worth establishing first with a throwaway image: whether Tahoe's picker honours
-   those files for a third-party saver, and whether it will take an image larger than 90x58,
-   because the tiles in that list are much bigger than 90 points wide. `build-saver.sh` would
-   grow a step that copies them, and the frame itself should come from `run-saver --screenshot`
-   at the tile's aspect ratio so the picture is the saver rather than a painting of it.
+   - **There is no Screen Saver pane on Tahoe.** The picker is a sheet behind **Wallpaper →
+     "Screen Saver…"**, and third-party savers sit in an **Other** group collapsed to four
+     entries until "Show All" is clicked.
+   - **The picker caches a rendered tile per saver and never invalidates it.** Shipping a
+     thumbnail into a saver this machine has already seen changes nothing at all until the cache
+     is deleted by hand — see the trap below. It is a development trap only; a fresh machine
+     renders the tile correctly first time.
 
 ## Known gaps, deliberately left
 
@@ -777,6 +788,28 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 ## Traps that cost real time. Each is commented where it happens; this is the index
 
+- **The picker caches a rendered tile PNG per saver and does not invalidate it when the bundle
+  changes.** Install a saver with a new thumbnail and the tile stays exactly as it was, with no
+  error and nothing stale-looking about it — restarting System Settings does not help and neither
+  does `killall legacyScreenSaver`. Delete the saver's hashed PNG under
+  `com.apple.wallpaper.extension.legacy/com.apple.wallpaper.legacy.thumbnails/` and the
+  `extension-com.apple.wallpaper.extension.legacy-screenSaver` view-model cache beside it, then
+  `killall WallpaperAgent`. Full paths and how to find which PNG is yours are in
+  `spikes/007-picker-thumbnail/README.md`.
+- **System Settings has no accessibility tree**, so a script that tries to press one of its
+  buttons finds `entire contents of window 1` empty and looks like it is searching the wrong
+  window. Each pane is an out-of-process ExtensionKit view. Synthetic `CGEvent`s are the only way
+  in — `spikes/007-picker-thumbnail/settings-ui.swift` — and a click on a background window is
+  consumed activating it, so activate first or click twice.
+- **A cleanup routine that removes its own scratch directory takes your evidence with it.**
+  `make-probes.py --uninstall` deletes `/tmp/thumbprobe`, which cost a set of candidate renders
+  and every screenshot of the experiment they were about to be compared against. Artifacts worth
+  keeping go somewhere the teardown does not own.
+- **`SaverKit` did not compile for a saver that does not import SpriteKit.** `SceneKitHost` uses
+  `SCNRenderer.overlaySKScene` and the kit is compiled into each saver as one module, so it built
+  only because the Aquarium's own sources happened to import SpriteKit. The first new saver in the
+  repo hit it immediately. Fixed by importing it where it is used; the lesson is that **nothing
+  proves SaverKit is self-contained except building a saver that uses none of it.**
 - **The saver reads `manifest.json` out of the *built bundle*, so editing it under `Assets/`
   changes nothing until you rebuild.** `build-saver.sh` `ditto`s `Assets/` into `Resources/`.
   This ate a whole parameter sweep: three configurations were patched into the source manifest,

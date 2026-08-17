@@ -13,6 +13,9 @@
   from rediscovering them.
 - `spikes/002-saver-shell/README.md` — what the `.saver` shell and raw Metal host proved,
   including why shaders ship as source rather than as a compiled library.
+- `spikes/007-picker-thumbnail/README.md` — where the Screen Saver picker actually is on Tahoe,
+  what it does with a saver's thumbnail, and the tile cache that makes a correct change look
+  like no change at all. Read before touching a thumbnail or trying to drive System Settings.
 - `docs/tank-sound.md` — how the aquarium's audio is synthesised and why it sounds the way it
   does. Read before touching anything under `tools/audio/`, `Savers/Aquarium/Sounds/` or the
   `Sound*.swift` files; `spikes/006-saver-audio/README.md` is its plumbing half.
