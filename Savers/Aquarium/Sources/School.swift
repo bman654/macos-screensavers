@@ -20,13 +20,26 @@ import simd
 
 // MARK: - Swim deformation
 
-/// A travelling sine wave down the body, applied in the vertex stage.
+/// How the body is deformed, in the vertex stage. Two terms, both keyed on `tailward`.
 ///
 /// Proven in `spikes/001-fish-pipeline`. It works in the mesh's own object space, which is
 /// only valid because the fish is exported as a single joined mesh — reaching for world
 /// space via `u_modelTransform` inside a geometry modifier produces shredded geometry and a
 /// magenta surface, with no diagnostic. The `tailward²` envelope holds the head steady; a
 /// fish that translates bodily side to side reads as a bar of soap.
+///
+/// **The axes are the mesh's, which is Blender's and not the tank's.** Nose is +X, up is +Z and
+/// +Y is the fish's left; the pivot's -90° about X is what turns that into the tank's Y-up (see
+/// `makeFish`). So the lateral axis the swim wave has always used is `y`, and the vertical axis
+/// the turn arc needs is `z`.
+///
+/// **The terms compose, they do not replace each other.** Each is a displacement of the same
+/// undeformed vertex, added:
+///
+/// - **the body wave** — a travelling sine down the body, which is the swimming itself;
+/// - **the turn arc** — a constant-curvature bend, which is the body lying along the path the
+///   head has already taken. Only a lurker ever writes a non-zero `bendYaw`/`bendPitch`, so for
+///   every other species this term is exactly the zero it was built with.
 private let swimModifier = """
 #pragma arguments
 float swimPhase;
@@ -34,12 +47,25 @@ float swimAmplitude;
 float swimWaves;
 float bodyMinX;
 float bodyLength;
+float bendYaw;
+float bendPitch;
 
 #pragma body
 float tailward = clamp((bodyMinX + bodyLength - _geometry.position.x) / bodyLength, 0.0, 1.0);
+
+// The body wave.
 float envelope = tailward * tailward;
-_geometry.position.y += sin(tailward * swimWaves * 6.2831853 - swimPhase)
-                      * swimAmplitude * envelope;
+float wave = sin(tailward * swimWaves * 6.2831853 - swimPhase) * swimAmplitude * envelope;
+
+// The turn arc. A body of constant curvature k, measured back a distance s along itself from
+// the nose, stands k*s²/2 off the nose's own axis — toward the inside of the turn, which is
+// where a chord of a circle always lies. `bendYaw` and `bendPitch` are that curvature in these
+// object units, signed so that positive is toward +y (the fish's left) and +z (up).
+float s = tailward * bodyLength;
+float arc = 0.5 * s * s;
+
+_geometry.position.y += wave + bendYaw * arc;
+_geometry.position.z += bendPitch * arc;
 """
 
 // MARK: - One fish
@@ -67,6 +93,11 @@ private final class Fish {
     /// fits a hole — see `ModelCache.LoadedModel.girth`.
     let girth: Float
     let isLurker: Bool
+    /// World metres per unit of the mesh's own object space — the pivot's scale. The bend is
+    /// computed in world terms and applied in the shader's, and this is the whole of the
+    /// conversion between them. Held per fish because the length cap makes it species- *and*
+    /// tank-dependent: the moray in a glass tank is not the moray in open water.
+    let modelScale: Float
 
     var position = SIMD3<Float>(repeating: 0)
     /// The heading, carried as angles rather than as a vector. See `Steering.shortestDelta` for
@@ -107,9 +138,18 @@ private final class Fish {
 
     /// This step's yaw rate, kept from `steer` because the bank and the sound both want it.
     var yawRate: Float = 0
+    /// This step's pitch rate. Only the bend wants it, and only a lurker bends.
+    var pitchRate: Float = 0
+
+    /// The curvature of the path the head is on, in radians per world metre, smoothed — the
+    /// shape the body takes if it follows that path. Maintained for a lurker and nothing else,
+    /// and left at zero for everything else for the life of the fish.
+    var bendYaw: Float = 0
+    var bendPitch: Float = 0
 
     init(node: SCNNode, materials: [SCNMaterial], length: Float, depthBand: Span,
-         laneRange: ClosedRange<Int>, baseAmplitude: Float, girth: Float, isLurker: Bool) {
+         laneRange: ClosedRange<Int>, baseAmplitude: Float, girth: Float, isLurker: Bool,
+         modelScale: Float) {
         self.node = node
         self.materials = materials
         self.length = length
@@ -119,6 +159,7 @@ private final class Fish {
         self.baseAmplitude = baseAmplitude
         self.girth = girth
         self.isLurker = isLurker
+        self.modelScale = modelScale
     }
 
     /// Screen-space speed is what the eye judges, and that is angular — so world speed grows
@@ -315,7 +356,11 @@ final class School {
         for fish in fishes where fish.isLurker {
             let ceiling = bounds.ceilingY(atDepth: -fish.position.z) - bounds.floorY
             let share = ceiling > 0 ? (fish.position.y - bounds.floorY) / ceiling : 0
-            lurkerHeight += String(format: "  lurker@%.2f", share)
+            // The bend as the angle the body is turned through end to end, which is the number
+            // `maxBendAngle` is stated in — a curvature in radians per metre means nothing on
+            // its own for an animal whose length depends on the tank it was drawn into.
+            lurkerHeight += String(format: "  lurker@%.2f bend %+.2f/%+.2f", share,
+                                   fish.bendYaw * fish.length, fish.bendPitch * fish.length)
         }
         let states = counts.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }
             .joined(separator: "  ") + lurkerHeight
@@ -773,14 +818,18 @@ final class School {
         // turn is made of, so how hard a fish is turning is the other half of how loud it is —
         // see `noteSwish`.
         fish.yawRate = yawRate
-        _ = Steering.turn(&fish.pitch, toward: targetPitch,
-                          rate: fish.limits.pitchRate * authority, dt: dt)
+        fish.pitchRate = Steering.turn(&fish.pitch, toward: targetPitch,
+                                       rate: fish.limits.pitchRate * authority, dt: dt)
+        if fish.isLurker { bend(fish, dt: dt) }
 
         // Bank into the turn. A fish rolls its back toward the inside of a curve, and without
         // it a hard turn reads as the model being spun about a pole. The sign follows from the
-        // model's axes: nose +X and up +Y put the fish's left along +Z, a positive yaw rate
-        // turns it to its right, and a positive roll about the nose tips its up-vector toward
-        // +Z — the wrong way — so the rate is negated.
+        // model's axes: nose +X and up +Y put the fish's *right* along +Z (left is `up ×
+        // forward`, which is -Z), and `Steering.direction` turns the nose toward -Z as yaw
+        // grows — so a positive yaw rate is a turn to the fish's **left**. A positive roll about
+        // the nose tips its up-vector toward +Z, which is banking right, so the rate is negated.
+        // The two halves of that were stated the other way round here for a while and cancelled;
+        // the bend in `bend(_:dt:)` is derived from the same axes and does not cancel anything.
         let bank = min(max(-yawRate * 0.42, -0.5), 0.5)
         fish.roll += (bank - fish.roll) * min(1, 6 * dt)
 
@@ -803,6 +852,55 @@ final class School {
         let target = fish.cruiseSpeed * fish.brain.targetSpeedFactor
         let limit = fish.cruiseSpeed * fish.limits.acceleration * dt
         fish.speed += min(max(target - fish.speed, -limit), limit)
+    }
+
+    /// The most a body may bend end to end, in radians.
+    ///
+    /// A moray can coil far tighter than this; the limit is the deformation, not the animal. The
+    /// arc is a lateral offset applied to a mesh that was modelled straight, so a cross-section
+    /// stays normal to the model's own X rather than to the curve — which past about a right
+    /// angle makes the tail read as thickening rather than as bending, and the fins splay. A
+    /// little over a quarter circle is where that is still invisible, and it is already far more
+    /// bend than a fish under way ever asks for: a quarter circle over half a metre of eel is a
+    /// turn radius of 30 cm.
+    private static let maxBendAngle: Float = 1.7
+
+    /// How much of the path's curvature the body has taken up, per second of easing. The same
+    /// 6 the bank uses, and for the same reason: the per-step turn rate is noisy, and a body
+    /// that tracked it exactly would shiver rather than bend.
+    private static let bendEasing: Float = 6
+
+    /// Bends the body onto the path the head is taking.
+    ///
+    /// A swimming snake is its own trail: every part of it is where the head was a moment ago,
+    /// so to a first approximation the body's curvature *is* the path's curvature, which is turn
+    /// rate over speed in radians per metre. That is the whole model — one number per axis,
+    /// constant along the body, composed with the swim wave rather than replacing it.
+    ///
+    /// Two guards, and both are about the same thing. Curvature is a ratio to speed, so an
+    /// animal that has slowed to a hover and pivots on the spot produces an unbounded one: the
+    /// speed is floored at half the fish's own cruise, and the total bend is then eased toward
+    /// its ceiling with a `tanh` rather than cut off at it. Easing rather than clipping matters
+    /// because a slow fish spends most of a turn *past* the ceiling — a hard clamp would make
+    /// the bend snap on and off as the rate wobbles across the threshold, where this saturates
+    /// smoothly and leaves small curvatures exactly as they were (`tanh x ≈ x`).
+    private func bend(_ fish: Fish, dt: Float) {
+        let pace = max(fish.speed, fish.cruiseSpeed * 0.5, 1e-3)
+        // Both axes at once: the ceiling is on how far the *body* is bent, and a fish diving
+        // into a turn is bending in both at the same time.
+        var curvature = SIMD2<Float>(fish.yawRate, fish.pitchRate) / pace
+        let ceiling = School.maxBendAngle / max(fish.length, 1e-3)
+        let magnitude = simd_length(curvature)
+        if magnitude > 1e-5 {
+            curvature *= ceiling * tanh(magnitude / ceiling) / magnitude
+        }
+        // Positive yaw turns the fish to its left (see the bank in `steer`, whose sign is the
+        // same derivation), and the body lies toward the inside of the turn — so a positive yaw
+        // rate bends the body toward the mesh's +y, which is the fish's left. Positive pitch is
+        // nose-up and +z is up, so the vertical term carries the same sign for the same reason.
+        let ease = min(1, School.bendEasing * dt)
+        fish.bendYaw += (curvature.x - fish.bendYaw) * ease
+        fish.bendPitch += (curvature.y - fish.bendPitch) * ease
     }
 
     /// Writes the frame. Everything above runs on the fixed step; this runs once per frame,
@@ -829,9 +927,23 @@ final class School {
         // what makes the deformation read from the front-on view of the tank.
         let effort = min(max(fish.speed / max(fish.cruiseSpeed, 1e-4), 0.25), 1.8)
         let amplitude = fish.baseAmplitude * min(max(0.45 + 0.55 * effort, 0.45), 1.6)
+        // The turn arc is in the mesh's units, where the curvature carried on the fish is in
+        // world ones — a curvature is a reciprocal length, so it takes the pivot's scale rather
+        // than its reciprocal.
+        //
+        // **Written for a lurker and for nothing else.** Every other fish keeps the zero its
+        // materials were built with and is provably untouched by this: no code path writes
+        // either uniform for a fish whose `isLurker` is false.
+        let bend = fish.isLurker
+            ? SIMD2<Float>(fish.bendYaw, fish.bendPitch) * fish.modelScale
+            : nil
         for material in fish.materials {
             material.setValue(NSNumber(value: fish.swimPhase), forKey: "swimPhase")
             material.setValue(NSNumber(value: amplitude), forKey: "swimAmplitude")
+            if let bend {
+                material.setValue(NSNumber(value: bend.x), forKey: "bendYaw")
+                material.setValue(NSNumber(value: bend.y), forKey: "bendPitch")
+            }
         }
     }
 
@@ -895,6 +1007,10 @@ final class School {
                 material.setValue(NSNumber(value: 1.15), forKey: "swimWaves")
                 material.setValue(NSNumber(value: model.minBound.x), forKey: "bodyMinX")
                 material.setValue(NSNumber(value: model.length), forKey: "bodyLength")
+                // Straight, and for everything but a lurker this is the last time either is
+                // written.
+                material.setValue(NSNumber(value: 0.0), forKey: "bendYaw")
+                material.setValue(NSNumber(value: 0.0), forKey: "bendPitch")
             }
             node.geometry = copy
             materials.append(contentsOf: copy.materials)
@@ -929,7 +1045,7 @@ final class School {
                     // body does — including the cap that shrinks an eel to fit a glass tank,
                     // which is what lets the capped animal through holes the declared one could
                     // not enter.
-                    girth: model.girth * scale, isLurker: isLurker)
+                    girth: model.girth * scale, isLurker: isLurker, modelScale: scale)
     }
 
     /// Puts a fish somewhere to begin, and — in open water only — puts it back when it leaves.
