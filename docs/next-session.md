@@ -29,6 +29,18 @@ floor now" if you are touching the school; the section after it is the one open 
 
 ## State
 
+**The voice is now heard in the tank, and the audible is tied to the visible.** Signed off on the
+installed build at full screen: *"Yes now I can see the fish dashing and hear the noise associated
+with it. And yes I can hear the more dense bubbles when a bubbler activates. Sounds pretty good."*
+Two things came out of getting there and both are in `docs/tank-sound.md`:
+
+- **A prop letting go is an event now** (`tools/audio/soundlib/puff.py`), not a rise in bed
+  density. One every ten seconds on a two-emitter tank, panned at the prop.
+- **A dart is visible, and is the only thing that makes a fish sound.** The old dart held its
+  heading and was over in half a second, which nobody ever saw. It turns 26–66° now, which buys a
+  bank for free. Dart entries went 4 → 20 per 150 s, and swishes 19 played against **1** refused
+  where it had been 36 against 29 — that ratio was the cooldown talking, not the fish.
+
 **The tank has a voice, it is off by default, and the sound is signed off.** Phase 1 of the
 audio track landed: a bubble bed and a swish when a fish works. Judged by the user on the
 rendered preview — *"the aq-4-tank sample now sounds pretty realistic. The bubbles are nice and

@@ -354,6 +354,12 @@ rm "$D/aquarium-audio-debug"      # and it is inert again
 
 ## Tying the audible to the visible
 
+**Signed off by the user on the installed build**, at full screen, with the tank in front of
+them: *"Yes now I can see the fish dashing and hear the noise associated with it. And yes I can
+hear the more dense bubbles when a bubbler activates. Sounds pretty good."* Both halves of the
+brief below were judged together, and the fish half was a change to the *tank* rather than to
+the sound.
+
 The first build with sound was judged working and *disconnected*:
 
 > "Right now I hear a fairly steady bubble bed... what would be interesting is to keep the
