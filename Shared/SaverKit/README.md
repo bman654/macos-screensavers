@@ -159,7 +159,7 @@ not have to know about it.
 
 | Hazard | Handled in |
 |---|---|
-| `isPreview` is unreliable — and so is every other size-derived signal, because the picker's live preview is a *full-screen-sized* view shown at two inches | `HostContext.quality`, decided from the window level — see below |
+| `isPreview` is unreliable — and so is size, screen fraction, occlusion *and* the window level, because the picker's live preview is a full-screen, presenting window shown at two inches | `HostContext.quality`, decided from the screensaver session — see "Quality" below |
 | Bounds are routinely zero at `init`; GPU resources sized from them are built wrong | host creation deferred to first real layout |
 | `CAMetalLayer` does not track its own bounds, and does not inherit the window's scale | `updateDrawableSize()`, called synchronously from the resize callbacks |
 | `makeBackingLayer()` runs synchronously inside `wantsLayer = true`, so later layer config is silently ignored | all layer setup is in `makeBackingLayer()` |

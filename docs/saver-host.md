@@ -321,6 +321,11 @@ Yours to get right:
 
 - **Build GPU resources in `makeHost(_:)`, never in `init`.** Bounds are routinely zero at `init`
   on Tahoe.
+- **Read `HostContext.quality`, and never re-derive it.** Every signal a view can read about
+  itself has been measured and none of them work — `isPreview`, bounds, screen fraction,
+  occlusion and the window level all pass the picker's two-inch tile as a full-screen
+  screensaver. SaverKit decides it once, from the ladder in §2, and hands down the answer.
+  A `.reduced` host draws the *same composition* more cheaply; it does not draw less.
 - **Release everything in `RenderHost.teardown()`** — it is the only teardown hook `SaverView`
   calls on the host. `SceneKitHost.teardown()` is the model, and note that it explicitly nils
   `overlaySKScene`, which is "exactly the kind of thing the leaked-view bug dragged along".
