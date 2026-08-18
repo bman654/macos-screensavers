@@ -40,11 +40,12 @@ decline a frame nobody can see (`hasAudience()`, spike 008 §6).
 Extended 2026-08-17 (later) by the session that gave the fish a second layer of motion: every
 fish's pectoral fins beat, and the eel snakes along its own path through a turn — see "The eel
 snakes and the pectorals beat" below, `spikes/009-part-channel/` for the channel the fins ride
-and `spikes/010-shader-uniform-block/` for how the eel's spine reaches the GPU. **The pectorals
-are judged and liked while a fish grazes** ("I love the way they look... they cycle while the
-fish is grazing"); the eel's first version — a constant-curvature arc — was judged *not* visible
-("he still just kind of turns like a log") and was replaced the same session by the trail spine,
-which is installed and **not yet judged**.
+and `spikes/010-shader-uniform-block/` for how the eel's spine reaches the GPU. **Both are signed
+off by the user on the installed build**: *"That eel moves so much smoother than before. It really
+looks real now. And the pectorals, I can see them moving while the fish are swimming."* The eel's
+first version — a constant-curvature arc — had been judged "still just turns like a log" and was
+replaced the same session by the trail spine; the pectorals' grazing stroke was liked at once and
+the cruising stroke needed one nudge (0.20 → 0.30 rad) before it could be seen on a moving fish.
 
 ## State
 
@@ -745,7 +746,9 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 
 ## Next, in order
 
-**Item 1 is the agreed next task; item 2 landed on 2026-08-17.** They are two halves of one
+**Item 1 is the agreed next task; item 2 landed on 2026-08-17.** (The fish-motion track — eel
+bend and pectorals — was pulled ahead of it the same day and is done and signed off; item 3 is
+what that track unblocked, and is the natural thing to do after item 1.) They are two halves of one
 observation — the host keeps views it is not really showing, and a saver currently treats them
 as though it were. Read `docs/saver-host.md` §2 first; it holds the measurements both start
 from, and the list of signals already proven useless.
@@ -807,12 +810,22 @@ from, and the list of signals already proven useless.
 
 3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
    twelve did not (independent dorsal spines; a curled prehensile tail). **The animation half of
-   both is now unblocked**: the part channel that drives the pectorals is the same channel a
+   both is now unblocked, and proven on the tank**: the part channel that drives the pectorals is the same channel a
    lionfish's spines and fans, and a seahorse's fluttering dorsal, would ride — a new part is a
    new id in `_PECTORAL_IDS`' family and a term in `SwimDeformation.swift`. Lionfish first: it
    reuses the fish body pipeline and only adds parts, while the seahorse also needs an upright
    pose and a locomotion model in `School` that is not a lateral body wave at all. The modelling
-   half (spines, the curled tail) is untouched by any of this.
+   half (spines, the curled tail) is untouched by any of this. Two things learned this session
+   bear on it directly: a new animated part must fit in the **16 bytes of uniform headroom** left
+   in the shader's argument block (spike 010) — one more float — so a lionfish's spines will want
+   their phase derived from existing uniforms rather than a new one, or the block re-packed; and
+   the seahorse's upright locomotion is a `School` change (its position-is-head, trail-following
+   lurker path is a closer starting point than the ordinary fish's).
+
+4. **Split `School.swift`.** 1365 lines against the 750 guideline, and it grew by two features
+   today. `spineMatrices` and the lurker-only code belong beside `SpineTrail`; the census and the
+   transit walker are each a file's worth on their own. Do it before the next feature lands in it,
+   not during.
 
 ### Done, kept for what they record
 
@@ -911,7 +924,7 @@ from, and the list of signals already proven useless.
   controller, and neither is worth it for a prop that already reads correctly.
 - ~~**The pectoral fins never move.**~~ **They beat now, and the grazing stroke is signed off** — see "The
   eel snakes and the pectorals beat". The cruising stroke was nudged 0.20 → 0.30 rad after the
-  user could not see it on a moving fish; not yet re-judged. What is left of this item: `SwimLimits.pivotFloor` still lets a hovering fish keep 18% of
+  user could not see it on a moving fish, and is now signed off too. What is left of this item: `SwimLimits.pivotFloor` still lets a hovering fish keep 18% of
   its turning authority on the argument that a real one reorients on its pectorals; the animation
   that number was standing in for exists now, so if a hovering fish ever reads as pivoting too
   freely, that is the number to revisit. And a fin's hinge is a rotation of its *rest offset
