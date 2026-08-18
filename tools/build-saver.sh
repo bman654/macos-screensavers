@@ -7,9 +7,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# A release tag is `<saver>-<version>`, so this string is the one the tag, the GitHub release
+# and the version the picker shows all have to agree on. --version overrides it per build.
+DEFAULT_VERSION="1.0.0"
+
 usage() {
   cat <<EOF
 usage: $0 <Name|path> [-i|--install] [--install-dir DIR] [--sign IDENTITY] [--out DIR]
+                      [--version X.Y.Z]
 
   Name               builds Savers/Name
   path               builds that saver directory directly
@@ -17,6 +22,7 @@ usage: $0 <Name|path> [-i|--install] [--install-dir DIR] [--sign IDENTITY] [--ou
   --install-dir DIR  with --install, uses DIR instead (for isolated testing)
   --sign IDENTITY    signs with IDENTITY instead of an ad-hoc identity (-)
   --out DIR          writes the bundle into DIR (default: $ROOT/build)
+  --version X.Y.Z    marketing version written to Info.plist (default: $DEFAULT_VERSION)
 EOF
 }
 
@@ -32,6 +38,7 @@ fi
 SAVER_ARGUMENT="$1"
 shift
 INSTALL=false
+VERSION="$DEFAULT_VERSION"
 INSTALL_DIR="$HOME/Library/Screen Savers"
 SIGN_IDENTITY="-"
 OUT_DIR="$ROOT/build"
@@ -64,6 +71,18 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       OUT_DIR="$2"
+      shift 2
+      ;;
+    --version)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "error: --version requires a version string" >&2
+        exit 2
+      fi
+      if [[ ! "$2" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+        echo "error: --version must be dot-separated digits, got: $2" >&2
+        exit 2
+      fi
+      VERSION="$2"
       shift 2
       ;;
     -h|--help)
@@ -175,9 +194,9 @@ cat > "$BUNDLE/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>$VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>26.0</string>
   <key>NSPrincipalClass</key>
