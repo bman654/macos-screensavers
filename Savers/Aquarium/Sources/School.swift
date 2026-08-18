@@ -43,11 +43,6 @@ private final class Fish {
     /// fits a hole — see `ModelCache.LoadedModel.girth`.
     let girth: Float
     let isLurker: Bool
-    /// World metres per unit of the mesh's own object space — the pivot's scale. The bend is
-    /// computed in world terms and applied in the shader's, and this is the whole of the
-    /// conversion between them. Held per fish because the length cap makes it species- *and*
-    /// tank-dependent: the moray in a glass tank is not the moray in open water.
-    let modelScale: Float
 
     var position = SIMD3<Float>(repeating: 0)
     /// The heading, carried as angles rather than as a vector. See `Steering.shortestDelta` for
@@ -97,18 +92,22 @@ private final class Fish {
 
     /// This step's yaw rate, kept from `steer` because the bank and the sound both want it.
     var yawRate: Float = 0
-    /// This step's pitch rate. Only the bend wants it, and only a lurker bends.
-    var pitchRate: Float = 0
 
-    /// The curvature of the path the head is on, in radians per world metre, smoothed — the
-    /// shape the body takes if it follows that path. Maintained for a lurker and nothing else,
-    /// and left at zero for everything else for the life of the fish.
-    var bendYaw: Float = 0
-    var bendPitch: Float = 0
+    /// The path the head has taken, for a lurker and nothing else. **For a lurker `position` is
+    /// the head, not the centre** — the body lies along this trail behind it, so the point that
+    /// is steered and clamped is the point that leads. Every other fish keeps `position` as its
+    /// centre and this stays nil for its whole life.
+    var trail: SpineTrail?
+    /// Mesh space from the fish node's space: the inverse of the pivot and the centring offset
+    /// `makeFish` builds. Only the trail uses it, to state the head's path in the space the
+    /// shader works in.
+    let meshFromBody: simd_float4x4
+    /// Harness-only balls on the trail samples, under `AQUARIUM_EEL_TRAIL`.
+    var trailMarkers: SpineTrailMarkers?
 
     init(node: SCNNode, materials: [SCNMaterial], length: Float, depthBand: Span,
          laneRange: ClosedRange<Int>, baseAmplitude: Float, girth: Float, isLurker: Bool,
-         modelScale: Float) {
+         meshFromBody: simd_float4x4) {
         self.node = node
         self.materials = materials
         self.length = length
@@ -118,7 +117,7 @@ private final class Fish {
         self.baseAmplitude = baseAmplitude
         self.girth = girth
         self.isLurker = isLurker
-        self.modelScale = modelScale
+        self.meshFromBody = meshFromBody
     }
 
     /// Screen-space speed is what the eye judges, and that is angular — so world speed grows
@@ -326,11 +325,27 @@ final class School {
         for fish in fishes where fish.isLurker {
             let ceiling = bounds.ceilingY(atDepth: -fish.position.z) - bounds.floorY
             let share = ceiling > 0 ? (fish.position.y - bounds.floorY) / ceiling : 0
-            // The bend as the angle the body is turned through end to end, which is the number
-            // `maxBendAngle` is stated in — a curvature in radians per metre means nothing on
-            // its own for an animal whose length depends on the tank it was drawn into.
-            lurkerHeight += String(format: "  lurker@%.2f bend %+.2f/%+.2f", share,
-                                   fish.bendYaw * fish.length, fish.bendPitch * fish.length)
+            // The body's shape, from the trail it is lying along: how far it departs from the
+            // head's own axis in body lengths, and the angle between the heading and the path
+            // one body length back — see `SpineTrail.shape`. Zero for a whole run means the
+            // spine is not doing anything, whatever the picture looks like.
+            let shape = fish.trail?.shape(bodyLength: fish.length)
+                ?? (deviation: 0, turnedDegrees: 0)
+            // **`lurker@` measures the nose, which is the number this line exists to adjudicate.**
+            // "The eel lies on the floor" is a claim about the animal, and with the body laid on
+            // a trail the head can be at the target share of the column while most of the eel is
+            // still above it. The middle of the body is reported beside it so the two can
+            // disagree where a reader can see it.
+            let body = fish.trail.map { ($0.midpoint(bodyLength: fish.length).y - bounds.floorY) }
+            let bodyShare = ceiling > 0 ? (body ?? 0) / ceiling : 0
+            // And where the head is in the frame, as fractions from the top left, so a turn the
+            // census reports can be found in the screenshot taken at that second.
+            let depth = max(-fish.position.z, 1e-3)
+            let u = 0.5 + 0.5 * fish.position.x / tank.halfWidth(atDepth: depth)
+            let v = 0.5 - 0.5 * fish.position.y / tank.halfHeight(atDepth: depth, aspect: aspect)
+            lurkerHeight += String(
+                format: "  lurker@%.2f body@%.2f at (%.2f,%.2f) spine dev %.2fL turned %3.0f°",
+                share, bodyShare, u, v, shape.deviation, shape.turnedDegrees)
         }
         let states = counts.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }
             .joined(separator: "  ") + lurkerHeight
@@ -491,8 +506,12 @@ final class School {
 
             steer(fish, bounds: bounds, dt: dt)
 
-            fish.position += Steering.direction(yaw: fish.yaw, pitch: fish.pitch) * fish.speed * dt
+            let heading = Steering.direction(yaw: fish.yaw, pitch: fish.pitch)
+            fish.position += heading * fish.speed * dt
             Avoidance.clamp(position: &fish.position, girth: fish.girth, bounds: bounds)
+            // After the clamp, so the trail records where the head actually is: a head the wall
+            // moved would otherwise stretch the neck by exactly the correction.
+            fish.trail?.record(head: fish.position, forward: heading)
 
             // Effort, not speed: the tail works hardest in a dart and idles in a hover, and the
             // ratio to cruise is what says which. Floored well above zero because a fish holding
@@ -540,7 +559,6 @@ final class School {
             : fish.brain.waypoint
         let target = route.waypoints[step]
         let world = SIMD3<Float>(target.x, bounds.floorY + target.y, target.z)
-        let offset = world - fish.position
 
         // **Reached is a question about the route, not about absolute distance**, and getting
         // that wrong is why this feature was counted as working and never seen.
@@ -555,9 +573,30 @@ final class School {
         // the route's own *axis* and has crossed the plane through the waypoint normal to it.
         // That is what threading a hole is, and it cannot be satisfied from above.
         let axis = routeAxis(route, at: step, reversed: fish.brain.passageReversed)
+        let isExit = fish.brain.waypoint == count - 1
+
+        // **For a lurker the exit is a claim about the animal, and `position` is only its nose.**
+        // The body lies on the trail a full length behind the head, so a plane crossed by the
+        // head ends the transit — counting the crossing, re-enabling prop avoidance, taking the
+        // cooldown and releasing the fish on the exit heading — with the whole eel still inside
+        // the wreck. The exit is therefore asked of the *tail*.
+        //
+        // Asked as two conditions against the waypoint's own plane rather than as one condition
+        // against a plane moved a body length down the route, because a moved plane is a place
+        // and a place can be outside the water: a passage that ends near the glass, the sand or
+        // the surface would put it past a clamp the head can never cross, and the transit would
+        // grind against the wall until it timed out. The waypoint the model author placed is
+        // always somewhere a fish can be; nothing derived from it is.
+        let lead: Float = isExit && fish.trail != nil ? fish.length : 0
+        let offset = world - fish.position
         let fromWaypoint = -offset
         let along = simd_dot(fromWaypoint, axis)
         let lateral = simd_length(fromWaypoint - axis * along)
+        // The pursuit point *is* carried down the route, because a carrot behind the head is the
+        // reversal the exit fix exists to make impossible — and it is clamped into the water, so
+        // the head can always reach it. Only the steering follows it; nothing waits on it.
+        var goal = world + axis * lead
+        if lead > 0 { Avoidance.clamp(position: &goal, girth: fish.girth, bounds: bounds) }
         // Deliberately the full radius rather than `radius - girth`, though the fish is not a
         // point and that subtraction is what containment really means. Held to `radius - girth`
         // the eel could not satisfy it at all — crossings on `AQUARIUM_SEED=4` went from three per
@@ -576,10 +615,25 @@ final class School {
         // arch and clipping the rock on the way round. Crossing the plane through it is enough:
         // the only way to satisfy that is to keep going forward, so the exit cannot ask for a
         // reversal however far off-axis the fish drifted on the way out.
-        let isExit = fish.brain.waypoint == count - 1
-        let reached = isExit
-            ? along > 0 || simd_length(offset) < max(route.radius, fish.girth * 2)
-            : (lateral < route.radius && along > 0) || simd_length(offset) < route.radius
+        //
+        // For a lurker the same plane is asked of the whole animal: the tail sample has crossed
+        // it, or the head is a body length past it — whichever comes first, because a head that
+        // turns away after clearing the mouth stops advancing `along` while the tail keeps
+        // coming through, and a tail that is pushed off the axis still ends up beside the
+        // waypoint. The near test is taken at the tail for the same reason the plane is: the
+        // head being close to the exit point is precisely the "arrived at" this replaced.
+        let near = max(route.radius, fish.girth * 2)
+        let reached: Bool
+        if isExit, let trail = fish.trail {
+            let tail = trail.tailSample()
+            reached = simd_dot(tail - world, axis) > 0
+                || along > lead
+                || simd_length(tail - world) < near
+        } else {
+            reached = isExit
+                ? along > 0 || simd_length(offset) < near
+                : (lateral < route.radius && along > 0) || simd_length(offset) < route.radius
+        }
         if reached {
             waypointsReached += 1
             fish.brain.waypoint += 1
@@ -615,7 +669,7 @@ final class School {
         // The fish is steered at its own projection onto the current leg, carried a lookahead
         // forward — so being off-axis produces a correction toward the axis rather than a heading
         // that merely happens to end at the right place.
-        let carrot = pursuitPoint(on: route, toward: world, traversal: fish.brain.waypoint,
+        let carrot = pursuitPoint(on: route, toward: goal, traversal: fish.brain.waypoint,
                                   reversed: fish.brain.passageReversed, from: fish.position,
                                   floorY: bounds.floorY)
         let toCarrot = carrot - fish.position
@@ -789,15 +843,37 @@ final class School {
         // cannot. Applied to pitch as well, or a stationary fish would still snap vertically.
         let authority = SwimLimits.authority(
             effort: fish.speed / max(fish.cruiseSpeed, 1e-4))
-        let yawRate = Steering.turn(&fish.yaw, toward: targetYaw,
-                                    rate: fish.limits.yawRate * authority, dt: dt)
+        var yawLimit = fish.limits.yawRate * authority
+        var pitchLimit = fish.limits.pitchRate * authority
+        // **A lurker's head cannot turn tighter than its body can follow.** With the body laid
+        // along the head's path, the turn rate *is* the path's curvature times the speed, and
+        // the length-derived rate that suits a fish which pivots about its centre — 2.6 rad/s
+        // for the tank's eel, a full turn in under three seconds while advancing a hand's width
+        // — would coil the animal into a knot three centimetres across. Bounding the rate by
+        // speed over a radius the body can lie on is what makes the eel move like a snake
+        // rather than a log: an eel that wants to come round has to swim round, and one that is
+        // hovering barely turns at all, which is what a hovering eel does.
+        //
+        // **The cap is about coiling at speed, and it must not pin a stationary animal.** A
+        // hovering fish reorients on the spot — that is what its pectorals are for, and it is
+        // exactly what a moray in a hole does. Taken at the literal speed, a hover's 0.04 of
+        // cruise gives about 1.7°/s on *both* axes, and two things then break outright: an eel
+        // nose-on to the glass cannot turn away, because a push over 0.35 rewrites its target to
+        // the heading it already has and it grinds along the pane; and the height controller,
+        // whose only actuator is pitch, cannot climb or descend at all. The constant-curvature
+        // arc this replaced carried the same floor, and it was dropped along with it.
+        if fish.isLurker {
+            let pace = max(fish.speed, fish.cruiseSpeed * 0.35)
+            let tightest = pace / (School.lurkerTurnRadius * fish.length)
+            yawLimit = min(yawLimit, tightest)
+            pitchLimit = min(pitchLimit, tightest)
+        }
+        let yawRate = Steering.turn(&fish.yaw, toward: targetYaw, rate: yawLimit, dt: dt)
         // Kept, because the sound wants it as well as the bank does. A tail stroke is what a
         // turn is made of, so how hard a fish is turning is the other half of how loud it is —
         // see `noteSwish`.
         fish.yawRate = yawRate
-        fish.pitchRate = Steering.turn(&fish.pitch, toward: targetPitch,
-                                       rate: fish.limits.pitchRate * authority, dt: dt)
-        if fish.isLurker { bend(fish, dt: dt) }
+        _ = Steering.turn(&fish.pitch, toward: targetPitch, rate: pitchLimit, dt: dt)
 
         // Bank into the turn. A fish rolls its back toward the inside of a curve, and without
         // it a hard turn reads as the model being spun about a pole. The sign follows from the
@@ -805,8 +881,7 @@ final class School {
         // forward`, which is -Z), and `Steering.direction` turns the nose toward -Z as yaw
         // grows — so a positive yaw rate is a turn to the fish's **left**. A positive roll about
         // the nose tips its up-vector toward +Z, which is banking right, so the rate is negated.
-        // The two halves of that were stated the other way round here for a while and cancelled;
-        // the bend in `bend(_:dt:)` is derived from the same axes and does not cancel anything.
+        // The two halves of that were stated the other way round here for a while and cancelled.
         let bank = min(max(-yawRate * 0.42, -0.5), 0.5)
         fish.roll += (bank - fish.roll) * min(1, 6 * dt)
 
@@ -831,24 +906,17 @@ final class School {
         fish.speed += min(max(target - fish.speed, -limit), limit)
     }
 
-    /// The most a body may bend end to end, in radians.
+    /// The tightest path a lurker's head may take, as a radius in body lengths.
     ///
-    /// A moray can coil far tighter than this; the limit is the deformation, not the animal. The
-    /// arc is a lateral offset applied to a mesh that was modelled straight, so a cross-section
-    /// stays normal to the model's own X rather than to the curve — which past about a right
-    /// angle makes the tail read as thickening rather than as bending, and the fins splay. A
-    /// little over a quarter circle is where that is still invisible, and it is already far more
-    /// bend than a fish under way ever asks for: a quarter circle over half a metre of eel is a
-    /// turn radius of 30 cm.
-    private static let maxBendAngle: Float = 1.7
+    /// A moray comes round in about a body length: a U-turn on a radius of a fifth to a quarter
+    /// of its length is a tight but ordinary one, and the body lying on it is a hairpin, which
+    /// the spine can draw and the arc it replaced could not. At the tank eel's cruise of about
+    /// 8 cm/s this is 0.75 rad/s — a reversal in four seconds — and a dart at three times cruise
+    /// gets the whip. Smaller reads as a coil, larger as the log this exists to be rid of.
+    private static let lurkerTurnRadius: Float = 0.22
 
-    /// How much of the path's curvature the body has taken up, per second of easing. The same
-    /// 6 the bank uses, and for the same reason: the per-step turn rate is noisy, and a body
-    /// that tracked it exactly would shiver rather than bend.
-    private static let bendEasing: Float = 6
-
-    /// How fast the pectorals open and close, per second of easing. Slower than the bank and the
-    /// bend, because those follow the path and this follows a *decision*: a fish coming out of a
+    /// How fast the pectorals open and close, per second of easing. Slower than the bank,
+    /// because that follows the path and this follows a *decision*: a fish coming out of a
     /// hover takes the better part of a second to fold its fins away, and easing it faster is the
     /// snap the easing exists to prevent.
     private static let finEasing: Float = 3.5
@@ -881,46 +949,9 @@ final class School {
         return (base.amplitude * tuck, base.hertz * size)
     }
 
-    /// Bends the body onto the path the head is taking.
-    ///
-    /// A swimming snake is its own trail: every part of it is where the head was a moment ago,
-    /// so to a first approximation the body's curvature *is* the path's curvature, which is turn
-    /// rate over speed in radians per metre. That is the whole model — one number per axis,
-    /// constant along the body, composed with the swim wave rather than replacing it.
-    ///
-    /// Two guards, and both are about the same thing. Curvature is a ratio to speed, so an
-    /// animal that has slowed to a hover and pivots on the spot produces an unbounded one: the
-    /// speed is floored at half the fish's own cruise, and the total bend is then eased toward
-    /// its ceiling with a `tanh` rather than cut off at it. Easing rather than clipping matters
-    /// because a slow fish spends most of a turn *past* the ceiling — a hard clamp would make
-    /// the bend snap on and off as the rate wobbles across the threshold, where this saturates
-    /// smoothly and leaves small curvatures exactly as they were (`tanh x ≈ x`).
-    private func bend(_ fish: Fish, dt: Float) {
-        let pace = max(fish.speed, fish.cruiseSpeed * 0.5, 1e-3)
-        // Both axes at once: the ceiling is on how far the *body* is bent, and a fish diving
-        // into a turn is bending in both at the same time.
-        var curvature = SIMD2<Float>(fish.yawRate, fish.pitchRate) / pace
-        let ceiling = School.maxBendAngle / max(fish.length, 1e-3)
-        let magnitude = simd_length(curvature)
-        if magnitude > 1e-5 {
-            curvature *= ceiling * tanh(magnitude / ceiling) / magnitude
-        }
-        // Positive yaw turns the fish to its left (see the bank in `steer`, whose sign is the
-        // same derivation), and the body lies toward the inside of the turn — so a positive yaw
-        // rate bends the body toward the mesh's +y, which is the fish's left. Positive pitch is
-        // nose-up and +z is up, so the vertical term carries the same sign for the same reason.
-        let ease = min(1, School.bendEasing * dt)
-        fish.bendYaw += (curvature.x - fish.bendYaw) * ease
-        fish.bendPitch += (curvature.y - fish.bendPitch) * ease
-    }
-
     /// Writes the frame. Everything above runs on the fixed step; this runs once per frame,
     /// because a transform written twice in one frame is a transform written once.
     private func pose(_ fish: Fish, time: CFTimeInterval) {
-        let bob = sin(School.wrappedPhase(time, rate: fish.bobRate, offset: fish.bobPhase))
-            * fish.bobAmplitude
-        fish.node.simdPosition = fish.position + SIMD3<Float>(0, bob, 0)
-
         // Yaw about world up, then pitch about the body's lateral axis, then roll about the
         // nose. Composed as quaternions rather than as Euler angles because `eulerAngles`
         // fixes an order this does not want and gets silently reinterpreted the moment a
@@ -930,7 +961,22 @@ final class School {
         let pitch = simd_quatf(angle: fish.pitch + fish.brain.inspect,
                                axis: SIMD3<Float>(0, 0, 1))
         let roll = simd_quatf(angle: fish.roll, axis: SIMD3<Float>(1, 0, 0))
-        fish.node.simdOrientation = yaw * pitch * roll
+        let orientation = yaw * pitch * roll
+        fish.node.simdOrientation = orientation
+
+        if fish.trail != nil {
+            // The node is placed so that the undeformed mesh's nose sits on the head, and the
+            // shader then puts every vertex on the trail — so the node's own transform decides
+            // nothing about where the body appears; it only has to agree with the transform the
+            // trail is stated in. No bob: the body is exactly its trail, and a bob that moved
+            // the whole spine off the path the head recorded would put the nose off its head.
+            let forward = orientation.act(SIMD3<Float>(1, 0, 0))
+            fish.node.simdPosition = fish.position - forward * (fish.length / 2)
+        } else {
+            let bob = sin(School.wrappedPhase(time, rate: fish.bobRate, offset: fish.bobPhase))
+                * fish.bobAmplitude
+            fish.node.simdPosition = fish.position + SIMD3<Float>(0, bob, 0)
+        }
 
         // The recoil in the yaw above: the wave displaces the body laterally, which for a fish
         // swimming across the frame is almost straight into the camera and therefore nearly
@@ -938,16 +984,10 @@ final class School {
         // what makes the deformation read from the front-on view of the tank.
         let effort = min(max(fish.speed / max(fish.cruiseSpeed, 1e-4), 0.25), 1.8)
         let amplitude = fish.baseAmplitude * min(max(0.45 + 0.55 * effort, 0.45), 1.6)
-        // The turn arc is in the mesh's units, where the curvature carried on the fish is in
-        // world ones — a curvature is a reciprocal length, so it takes the pivot's scale rather
-        // than its reciprocal.
-        //
-        // **Written for a lurker and for nothing else.** Every other fish keeps the zero its
-        // materials were built with and is provably untouched by this: no code path writes
-        // either uniform for a fish whose `isLurker` is false.
-        let bend = fish.isLurker
-            ? SIMD2<Float>(fish.bendYaw, fish.bendPitch) * fish.modelScale
-            : nil
+        // **Written for a lurker and for nothing else.** Every other fish keeps `spineOn` at
+        // the zero its materials were built with and is provably untouched by this: no code
+        // path writes a spine matrix for a fish whose `trail` is nil.
+        let spine = fish.trail.map { spineMatrices(for: fish, trail: $0) }
         for material in fish.materials {
             material.setValue(NSNumber(value: fish.swimPhase), forKey: "swimPhase")
             material.setValue(NSNumber(value: amplitude), forKey: "swimAmplitude")
@@ -955,11 +995,54 @@ final class School {
             // reading absent `texcoords[1]` (which makes the fish vanish), so no fin id matches.
             material.setValue(NSNumber(value: fish.finPhase), forKey: "finPhase")
             material.setValue(NSNumber(value: fish.finAmplitude), forKey: "finAmplitude")
-            if let bend {
-                material.setValue(NSNumber(value: bend.x), forKey: "bendYaw")
-                material.setValue(NSNumber(value: bend.y), forKey: "bendPitch")
+            if let spine {
+                for (index, matrix) in spine.enumerated() {
+                    material.setValue(NSValue(scnMatrix4: SCNMatrix4(matrix)),
+                                      forKey: "spine\(index)")
+                }
             }
         }
+    }
+
+    /// The trail as the shader wants it: its samples in the mesh's own space, packed three
+    /// floats to a sample straight through the columns of `SpineTrail.matrixCount` matrices, the
+    /// head first. The transform is the inverse of exactly what the node was just given plus the
+    /// pivot `makeFish` built, so the head lands on the mesh's nose and every older sample lands
+    /// where the head actually was.
+    private func spineMatrices(for fish: Fish, trail: SpineTrail) -> [simd_float4x4] {
+        let meshFromSchool = fish.meshFromBody * simd_inverse(fish.node.simdTransform)
+        let samples = trail.samples()
+        if SpineTrailMarkers.enabled {
+            if fish.trailMarkers == nil {
+                fish.trailMarkers = SpineTrailMarkers(
+                    parent: node, radius: CGFloat(max(fish.girth * 0.35, 0.006)))
+            }
+            fish.trailMarkers?.show(samples)
+        }
+        var flat: [Float] = []
+        flat.reserveCapacity(SpineTrail.matrixCount * 16)
+        for sample in samples {
+            let point = meshFromSchool * SIMD4<Float>(sample, 1)
+            flat.append(point.x)
+            flat.append(point.y)
+            flat.append(point.z)
+        }
+        // The matrices are filled slot by slot below, so the run has to be as long as they are.
+        // It is exactly as long today — sixteen samples fill three matrices — but the two counts
+        // are separate constants and the failure if one moves is a read off the end of an array.
+        flat.append(contentsOf:
+            repeatElement(0, count: max(0, SpineTrail.matrixCount * 16 - flat.count)))
+        var matrices: [simd_float4x4] = []
+        matrices.reserveCapacity(SpineTrail.matrixCount)
+        for base in stride(from: 0, to: SpineTrail.matrixCount * 16, by: 16) {
+            func column(_ c: Int) -> SIMD4<Float> {
+                SIMD4<Float>(flat[base + c], flat[base + c + 1], flat[base + c + 2],
+                             flat[base + c + 3])
+            }
+            matrices.append(simd_float4x4(columns: (column(0), column(4), column(8),
+                                                    column(12))))
+        }
+        return matrices
     }
 
     private func context(for fish: Fish, bounds: WaterBounds,
@@ -1027,10 +1110,11 @@ final class School {
                 material.setValue(NSNumber(value: 1.15), forKey: "swimWaves")
                 material.setValue(NSNumber(value: model.minBound.x), forKey: "bodyMinX")
                 material.setValue(NSNumber(value: model.length), forKey: "bodyLength")
-                // Straight, and for everything but a lurker this is the last time either is
-                // written.
-                material.setValue(NSNumber(value: 0.0), forKey: "bendYaw")
-                material.setValue(NSNumber(value: 0.0), forKey: "bendPitch")
+                // The spine. Off, and for everything but a lurker this is the last time it is
+                // written; the matrices are only ever set for a fish that has a trail.
+                material.setValue(NSNumber(value: isLurker ? 1.0 : 0.0), forKey: "spineOn")
+                material.setValue(NSNumber(value: model.center.y), forKey: "spineY")
+                material.setValue(NSNumber(value: model.center.z), forKey: "spineZ")
                 // Fins folded until the first step decides otherwise, which keeps the very first
                 // frame from showing a school caught mid-stroke in unison.
                 material.setValue(NSNumber(value: 0.0), forKey: "finPhase")
@@ -1050,7 +1134,9 @@ final class School {
         //
         // The correction being on the *pivot* is what lets the fish node be oriented in three
         // axes: in the fish node's space the model's nose is +X, its up is +Y and its left is
-        // +Z, which is the frame every angle in this file is stated in.
+        // **-Z**, which is the frame every angle in this file is stated in. The -90° about X
+        // sends the mesh's +Y (its left) to -Z and its +Z (its up) to +Y — the same handedness
+        // the bank in `steer` is derived from, and this line said +Z for a while.
         let pivot = SCNNode()
         pivot.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
         let bodyLength = min(spec.bodyLength, lengthCap)
@@ -1062,14 +1148,34 @@ final class School {
 
         let node = SCNNode()
         node.addChildNode(pivot)
-        return Fish(node: node, materials: materials, length: bodyLength,
-                    depthBand: spec.depthBand, laneRange: lanes.lanes(in: spec.depthBand),
-                    baseAmplitude: model.length * 0.11,
-                    // Girth is measured in the model's own units, so it takes the same scale the
-                    // body does — including the cap that shrinks an eel to fit a glass tank,
-                    // which is what lets the capped animal through holes the declared one could
-                    // not enter.
-                    girth: model.girth * scale, isLurker: isLurker, modelScale: scale)
+        let fish = Fish(node: node, materials: materials, length: bodyLength,
+                        depthBand: spec.depthBand, laneRange: lanes.lanes(in: spec.depthBand),
+                        baseAmplitude: model.length * 0.11,
+                        // Girth is measured in the model's own units, so it takes the same scale
+                        // the body does — including the cap that shrinks an eel to fit a glass
+                        // tank, which is what lets the capped animal through holes the declared
+                        // one could not enter.
+                        girth: model.girth * scale, isLurker: isLurker,
+                        meshFromBody: simd_inverse(pivot.simdTransform * instance.simdTransform))
+        if isLurker {
+            let trail = SpineTrail(bodyLength: bodyLength)
+            fish.trail = trail
+            for material in materials {
+                material.setValue(NSNumber(value: trail.spacing / scale), forKey: "spineSpacing")
+            }
+            // A body laid along a curved trail leaves the box the straight mesh was measured in,
+            // by up to its own length in a hairpin. SceneKit culls by that box, so without this
+            // an eel whose head is in frame and whose body is doubled back could vanish whole.
+            instance.enumerateHierarchy { child, _ in
+                guard let geometry = child.geometry else { return }
+                let pad = SIMD3<Float>(repeating: model.length)
+                let box = geometry.boundingBox
+                geometry.boundingBox = (
+                    min: SCNVector3(SIMD3<Float>(box.min) - pad),
+                    max: SCNVector3(SIMD3<Float>(box.max) + pad))
+            }
+        }
+        return fish
     }
 
     /// Puts a fish somewhere to begin, and — in open water only — puts it back when it leaves.
@@ -1151,6 +1257,27 @@ final class School {
             : ceiling
         let height = rand.inRange(min(sand, ceiling), max(top, min(sand, ceiling)))
         fish.position = SIMD3<Float>(x, bounds.floorY + height, -depth)
+        // A lurker's position is its head, and the placement above was worked out for a centre:
+        // moving the head half a length forward puts the body where the centre was going to be.
+        //
+        // **Cleared and re-seeded here, in one act.** A cleared trail with no path yet answers
+        // `samples()` with the head repeated, and a spline through sixteen coincident points has
+        // a zero derivative — `normalize(0)` — so every vertex of the fish becomes NaN. `pose`
+        // can run before the next fixed step (a frame that is due zero steps, or the opening
+        // frame), so "the first `record` will seed it" is not a guarantee. `samples()` now also
+        // refuses to return that cloud, but the trail a respawn should have is the one behind
+        // the head it was actually given.
+        //
+        // Clamped first: the half-length push forward is applied after the placement chose an x
+        // inside the glass, and it can put the head through it — the trail would then be seeded
+        // on a head the next frame's clamp moves, which is a kink in the neck on frame one.
+        if fish.trail != nil {
+            let forward = Steering.direction(yaw: fish.yaw, pitch: 0)
+            fish.position += forward * (fish.length / 2)
+            Avoidance.clamp(position: &fish.position, girth: fish.girth, bounds: bounds)
+            fish.trail?.clear()
+            fish.trail?.record(head: fish.position, forward: forward)
+        }
         fish.brain.targetHeight = height
         fish.speed = fish.cruiseSpeed
         fish.brain.targetYaw = fish.yaw
@@ -1197,12 +1324,26 @@ final class School {
             fish.position.y = newFloor + (fish.position.y - oldFloor) * scale
             fish.brain.targetHeight *= scale
             fish.bobAmplitude *= scale
+            // A lurker's body is its trail, so moving the head alone would stretch the animal
+            // from its new nose back to where the water used to be. The same map, applied to the
+            // whole path — and applied *here* rather than deferred, because `AquariumScene` calls
+            // this before `school.update` and an update that is due no fixed steps poses straight
+            // from the trail. Transformed rather than cleared: clearing straightens the animal.
+            fish.trail?.rescale(oldFloor: oldFloor, newFloor: newFloor, scale: scale)
         }
     }
 
     private func hasLeftTank(_ fish: Fish, bounds: WaterBounds) -> Bool {
         let depth = -fish.position.z
-        if depth < tank.depthCullNear || depth > tank.depthCullFar { return true }
+        // How much further the animal reaches behind `position` than the margins below already
+        // allow for. Zero for an ordinary fish, whose `position` is its centre and whose margins
+        // were sized around that; a lurker's `position` is its *head* and the trail carries the
+        // rest of it a full `SpineTrail.coverage` body lengths back, so those same margins
+        // teleport an eel with a fifth of its tail still in shot. Added rather than substituted,
+        // so every other species crosses the frame on exactly the numbers it always has.
+        let bodyLead = fish.trail != nil ? fish.length * SpineTrail.coverage : 0
+        if depth < tank.depthCullNear - bodyLead
+            || depth > tank.depthCullFar + bodyLead { return true }
         // Vertical as well as horizontal. A fish holds no fixed height any more, but it can
         // still climb out of the top of a frustum that is much shorter near the camera than it
         // is at the back, and a crossing only ever *ends* horizontally — so without this it
@@ -1214,9 +1355,9 @@ final class School {
         // just above the sand there satisfies it. Nothing used to put a fish there. Foraging
         // does, and the fish would vanish and respawn while sitting on the gravel in shot.
         if fish.position.y > tank.halfHeight(atDepth: depth, aspect: aspect)
-            + fish.length { return true }
-        if fish.position.y < bounds.floorY - fish.length { return true }
-        let edge = tank.halfWidth(atDepth: depth) + fish.length * 1.25
+            + fish.length + bodyLead { return true }
+        if fish.position.y < bounds.floorY - fish.length - bodyLead { return true }
+        let edge = tank.halfWidth(atDepth: depth) + fish.length * 1.25 + bodyLead
         // Heading out, not merely outside: a fish that has turned back is on its way in.
         let outward = fish.position.x * cos(fish.yaw)
         return abs(fish.position.x) > edge && outward > 0
