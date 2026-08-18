@@ -788,8 +788,7 @@ tank as the same seed with the shipped one.
 
 ## Next, in order
 
-**Item 5 is the only one still open.** Items 1-4 are done; item 2 has one judgement left that
-needs the user's eyes rather than a measurement, and it is written at the end of that entry.
+**Item 5 is the only one still open.** Items 1-4 are done and signed off.
 
 1. ~~**The seahorse has no bony rings.**~~ **Done, 2026-08-18 — and it cost a library rebuild.**
    The plan below was right about where to draw the rings and wrong about one thing, and the
@@ -907,10 +906,14 @@ needs the user's eyes rather than a measurement, and it is written at the end of
    `docs/saver-host.md` §2 "Quality: the tile draws the whole saver, at a fraction of the pixels"
    is the rule, and `Shared/SaverKit/README.md` §"Quality" the API.
 
-   **Left for the user's eyes, and it is the reason this is not signed off:** open the picker and
-   the settings sheet on the installed build and answer "is this still the tank" — a judgement
-   rather than a measurement. Then click Preview from the sheet and confirm it comes up full
-   quality, which is the case a naive test would get wrong.
+   **Signed off on the installed build, 2026-08-18.** The user judged all three thumbnails good
+   — the static tile, the picker's live preview and the settings sheet's — and one pass through
+   the picker under `SAVERKIT_LIFECYCLE` verified every case: the live preview drops to 720x405
+   one second after it appears, the sheet's preview runs at 384x216 beside it, **clicking
+   Preview posts `didstart` and restores full quality in the same second**, dismissing it
+   returns to reduced after the two-second hold, and every leftover falls to `level=0`,
+   `frames=0` and hibernates. Audio was compared against a build of the previous code on the
+   same seed: identical bubble count, voices and spectrum in every band.
 
 3. ~~**An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**~~
    **Done, 2026-08-17 — the view cannot be freed, and it no longer needs to be.** `leaks
