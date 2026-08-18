@@ -37,10 +37,14 @@ real host and taught `SaverView` to hand its render graph back while it waits �
 release never firing because the leftover's frames never stop, and `SaverView` learned to
 decline a frame nobody can see (`hasAudience()`, spike 008 §6).
 
-Extended 2026-08-17 (later) by the session that gave the fish a second layer of motion: the eel
-bends its body into a turn instead of swinging round like a log, and every fish's pectoral fins
-beat — see "The eel bends and the pectorals beat" below, and `spikes/009-part-channel/` for the
-one piece of tech it took. **Both are built and installed but not yet judged by the user.**
+Extended 2026-08-17 (later) by the session that gave the fish a second layer of motion: every
+fish's pectoral fins beat, and the eel snakes along its own path through a turn — see "The eel
+snakes and the pectorals beat" below, `spikes/009-part-channel/` for the channel the fins ride
+and `spikes/010-shader-uniform-block/` for how the eel's spine reaches the GPU. **The pectorals
+are judged and liked while a fish grazes** ("I love the way they look... they cycle while the
+fish is grazing"); the eel's first version — a constant-curvature arc — was judged *not* visible
+("he still just kind of turns like a log") and was replaced the same session by the trail spine,
+which is installed and **not yet judged**.
 
 ## State
 
@@ -429,27 +433,71 @@ sample — nothing ever leaves a closed tank — and every behaviour entered: wa
 hover 52, forage 29, dart 4. Foraging is picked on 7% of decisions against 23% of its weight, which
 is right: a fish high in the column is not eligible for it.
 
-## The eel bends and the pectorals beat
+## The eel snakes and the pectorals beat
 
 Two changes, one shader. `SwimDeformation.swift` now holds the geometry modifier that used to sit
-at the top of `School.swift`, and it is **three composing terms** — each a displacement of the same
-undeformed vertex, added: the body wave that was always there, a turn arc, and a pectoral hinge.
-The header states the mesh frame (nose +X, up +Z, **+Y is the fish's left**), because two axis
-comments in `School.swift` had been wrong in ways that cancelled and this work found them.
+at the top of `School.swift`. For every ordinary fish it is two composing terms — the body wave
+that was always there and a pectoral hinge — each a displacement of the same undeformed vertex.
+For the eel it is something else: the vertex is *placed* on a spline. The header states the mesh
+frame (nose +X, up +Z, **+Y is the fish's left**), because two axis comments in `School.swift` had
+been wrong in ways that cancelled and this work found them.
 
-**The eel bends into a turn.** A fish's tail follows the path its head is on, so the body's
-curvature is the path's — `turnRate / speed`, per axis, smoothed like the bank — and the shader
-lays each vertex `κ·s²/2` off the nose's axis, toward the *inside* of the turn (a chord lies on
-the centre side of its tangent). Clamped through `tanh` at `School.maxBendAngle` = 1.7 rad end to
-end, because past about a right angle the offset form thickens the tail rather than bending it,
-and `tanh` rather than a clip so a slow eel that spends a whole turn past the ceiling does not
-snap on and off. **Only the eel writes the two bend uniforms** — `if fish.isLurker` in `steer` and
-`pose`; every other species keeps the zero it was built with, since a fish five girths long
-already reads as natural. Judge it on `AQUARIUM_STYLE=aquarium AQUARIUM_SEED=4`; the census
-prints `bend +x.xx/+y.yy` per lurker. If the coil reads too strong, `maxBendAngle` is the one
-knob and 1.2 rad is the next thing to try. Known limit: constant curvature cannot do an S-bend —
-a snake reversing mid-turn has its tail still on the old arc — and that would need a spine of past
-head positions passed as a uniform array. Not built; see whether anyone misses it first.
+**The eel follows its own path.** The first attempt was a constant-curvature arc — curvature =
+turn rate / speed, tanh-clamped at 1.7 rad end to end — and it was measured saturating at 90° for
+seconds at a time on seed 4 while the user watched it "still just turn like a log". The reason is
+worth keeping: the arc bent the mesh, but the node still **pivoted rigidly about its centre**, so
+the head swung one way and the tail swept the other. A snake's tail passes through where its head
+was, and nothing in that model could produce it. Worse, the capped 0.49 m eel had a yaw authority
+of 2.6 rad/s at 8 cm/s — a 3 cm turning radius — so it genuinely *did* spin about its middle.
+
+What is built instead (`SpineTrail.swift`, and the `spineOn` branch of the shader):
+
+- **A lurker's `fish.position` is its head.** It is what is steered, clamped and recorded; the body
+  follows behind. `SpineTrail` is a ring of knots at fixed chord spacing behind the head,
+  resampled to sixteen points at exact multiples of that spacing, so samples slide continuously as
+  the head advances. The shader lays each vertex on a Catmull-Rom spline through the four
+  bracketing samples at its arc length behind the nose, and carries its lateral offsets, the swim
+  wave and (had it any) the pectoral vector in the spline's local frame. S-bends fall out for free.
+- **The samples reach the GPU packed through the columns of three `float4x4`s**, because
+  `spikes/010-shader-uniform-block/` measured that an array in the argument block does not compile
+  and the vertex-stage block silently breaks past ~240 bytes. The block is 240 B with 16 B of
+  headroom — **exactly one more float** before the cliff. Read that spike before adding a uniform.
+- **A lurker turn cap**, `School.lurkerTurnRadius` = 0.22 body lengths, bounds yaw and pitch rate
+  by speed (floored at 0.35 × cruise so a hovering eel can still turn away from the glass), or the
+  head loops with a 3 cm radius and the body coils into a knot. Cruise reversal ≈ 4 s.
+- **Everything that reads a lurker's position learned it is a nose.** Transit exit is declared when
+  the *tail sample* crosses the exit plane (or the head is a length past it), with the pursuit
+  carrot pushed a length ahead and clamped into the water, so the wreck's shove does not switch
+  back on while half the animal is inside the hull; `hasLeftTank` allows for the trailing body;
+  `adoptAspect` remaps the trail with the head instead of leaving it behind; `place()` clamps and
+  re-seeds the trail in one act (a cleared, unseeded trail is a spline of NaNs — that was found
+  and fixed on the open-water respawn path); the lurker geometry's bounding box is padded so a
+  doubled-back body is not culled.
+- **The census now prints `lurker@0.14 body@0.16 at (u,v) spine dev 0.72L turned 110°`** — the
+  head's column share *and* the trail midpoint's (the 0.18 lurker target and every signed-off eel
+  number were measured at the centre, so `body@` is the number to compare them to), the head's
+  frame position, the trail's max deviation from the head axis, and the heading turned over the
+  last body length. On seed 4 it reports 172–179° hairpins.
+
+**How to see it — the thing the user asked for.** `AQUARIUM_EEL_TRAIL=1` draws sixteen depth-tested
+balls on the samples, green head to red tail, like `AQUARIUM_PASSAGE_MARKERS`:
+
+```bash
+AQUARIUM_STYLE=aquarium AQUARIUM_SEED=4 AQUARIUM_EEL_TRAIL=1 AQUARIUM_SCHOOL_STATS=2 \
+    tools/run-saver.swift Aquarium --size 1600x900 --seconds 120
+```
+
+Watch x ≈ 0.25 of the frame at t ≈ 16, 38, 62, 88 s — the left-wall U-turns, where the head comes
+toward the camera while the tail stays on the old line and then sweeps through. Seed 4's eel is
+small (length-capped), lives at the back wall and is often behind the wreck; the other lurker seeds
+in reach are aquarium 33, shallowReef 20 and 32 (open water, uncapped), deepOcean 20. Its turns at
+the back wall are toward the camera, so stills foreshorten them; watching is the judge. Measured:
+aquarium/4 over 150 s, `crossings 3`, `waypoints 15`, `outside 0` throughout, 60 fps at 3990×2516
+with GPU 6.3 ms mean.
+
+**Knob:** `lurkerTurnRadius`. **Debt:** `School.swift` is 1365 lines against the 750 guideline; the
+spine packing (`spineMatrices`) is the natural next thing to move into `SpineTrail.swift`, and the
+per-frame `[Float]`/`NSValue` boxes for one fish are small but avoidable.
 
 **The pectorals beat, and the tech is a per-vertex part channel.** The shader has to know which
 vertices are a fin and how far out along it they sit, and the joined single-material mesh gave it
@@ -861,8 +909,9 @@ from, and the list of signals already proven useless.
   height controller lags behind it; the rock arch, whose route is level, does not show it. The
   honest fix is either more waypoints on the climb or a feed-forward term on the height
   controller, and neither is worth it for a prop that already reads correctly.
-- ~~**The pectoral fins never move.**~~ **They beat now** — see "The eel bends and the pectorals
-  beat". What is left of this item: `SwimLimits.pivotFloor` still lets a hovering fish keep 18% of
+- ~~**The pectoral fins never move.**~~ **They beat now, and the grazing stroke is signed off** — see "The
+  eel snakes and the pectorals beat". The cruising stroke was nudged 0.20 → 0.30 rad after the
+  user could not see it on a moving fish; not yet re-judged. What is left of this item: `SwimLimits.pivotFloor` still lets a hovering fish keep 18% of
   its turning authority on the argument that a real one reorients on its pectorals; the animation
   that number was standing in for exists now, so if a hovering fish ever reads as pivoting too
   freely, that is the number to revisit. And a fin's hinge is a rotation of its *rest offset
