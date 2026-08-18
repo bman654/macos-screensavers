@@ -34,6 +34,15 @@ struct Rand {
         return Rand(seed: state ^ 0xD1B5_4A32_D192_ED03)
     }
 
+    /// A uniform index into `count` items.
+    ///
+    /// The clamp is the point: `next()` is documented as below 1, but one rounding away from it
+    /// would index off the end, and this is drawn per fish and per prop rather than once.
+    mutating func index(count: Int) -> Int {
+        guard count > 1 else { return 0 }
+        return min(Int(next() * Float(count)), count - 1)
+    }
+
     /// Index into `items` with probability proportional to `weight`. Returns nil only when
     /// every candidate weighs nothing, which is the caller's cue that the pool is exhausted
     /// rather than a reason to trap.

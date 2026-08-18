@@ -8,6 +8,9 @@ build/
 # Run tools/build-library.py before tools/build-saver.sh on a fresh clone.
 Savers/*/Assets/*.usdz
 Savers/*/Assets/*.json
+# ...including a species' alternate colourway atlases, which are baked from the same
+# scripts and land beside the model rather than inside it.
+Savers/*/Assets/*.png
 
 # Generated grain library. Sounds are code too — a bubble's pitch follows from its
 # radius alone, so the source of truth is tools/build-audio.py and these WAVs are its

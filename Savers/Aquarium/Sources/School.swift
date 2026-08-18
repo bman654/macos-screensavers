@@ -14,6 +14,7 @@
 // from `frame.time` rather than accumulating `deltaTime` is the whole of it — after t seconds
 // exactly `floor(t / step)` steps have run, at any frame rate.
 
+import CoreGraphics
 import Foundation
 import SceneKit
 import simd
@@ -224,9 +225,20 @@ final class School {
             let speciesCap = max(2, Int(Float(count) * School.maxSpeciesShare))
             let size = max(1, min(min(count - spawned, wanted), speciesCap))
             for member in 0..<size {
+                // Drawn per individual rather than per species: a seahorse's colour is a fact
+                // about the weed it is holding on to, so two of them in one tank being the same
+                // amber is the tell. The draw is taken even when the image fails to load, so a
+                // half-built library changes how the tank looks but not how it is laid out.
+                var colorwayBaseColor: CGImage?
+                if !spec.colorways.isEmpty {
+                    let colorway = spec.colorways[self.rand.index(count: spec.colorways.count)]
+                    colorwayBaseColor = cache.baseColor(manifestName: manifest.name,
+                                                        colorway: colorway)
+                }
                 let fish = makeFish(from: model, spec: spec, lanes: lanes,
                                     isLurker: manifest.isLurker,
-                                    isDrifter: manifest.isDrifter)
+                                    isDrifter: manifest.isDrifter,
+                                    colorwayBaseColor: colorwayBaseColor)
                 // A site-attached species belongs to an anemone if the launch drew one, and
                 // swims like anything else if it did not. Every member of the school takes the
                 // same host: a shoal of clownfish spread over three anemones is three pairs,
@@ -1095,7 +1107,8 @@ final class School {
     }
 
     private func makeFish(from model: ModelCache.LoadedModel, spec: FishSpec,
-                          lanes: SwimLanes, isLurker: Bool, isDrifter: Bool) -> Fish {
+                          lanes: SwimLanes, isLurker: Bool, isDrifter: Bool,
+                          colorwayBaseColor: CGImage?) -> Fish {
         let instance = model.template.clone()
 
         // `clone()` shares geometry *and* materials with the original. Each fish needs its
@@ -1108,6 +1121,9 @@ final class School {
                   let copy = geometry.copy() as? SCNGeometry else { return }
             copy.materials = geometry.materials.compactMap { $0.copy() as? SCNMaterial }
             for material in copy.materials {
+                if let colorwayBaseColor {
+                    material.diffuse.contents = colorwayBaseColor
+                }
                 // A model built before the part channel existed gets the variant that never
                 // touches `texcoords[1]` — see `swimModifierSource`. The whole fish still swims;
                 // only its fins are still.

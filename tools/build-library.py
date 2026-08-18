@@ -37,6 +37,11 @@ _USD_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 _FISH_RESOLUTION = 256
 _PROP_RESOLUTION = 256
 _RESOLUTION_BY_NAME = {
+    # The one plated animal in the library. Its bony rings and the ridges crossing them
+    # are drawn into the atlas rather than into the mesh, and there are about fifty of
+    # them down a body that unwraps into a long thin island: at 256 the tail's rings land
+    # two or three pixels apart and moire rather than read.
+    "seahorse": 512,
     # These articulated/showpiece decorations carry readable authored detail at close range.
     "clamshell": 512,
     "diving_suit": 512,
@@ -260,6 +265,65 @@ def _validate_outputs(name, category, asset, manifest):
         print(f"    [validate] primvars:st1 U ids {present}; no reserved white fill")
 
 
+def _colorways(manifest):
+    """The colourway names a built fish manifest declares, in order."""
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BuildFailure(f"{manifest.name} is unreadable: {exc}") from None
+    return list((data.get("fish") or {}).get("colorways") or [])
+
+
+def _build_colorways(name, staging, resolution):
+    """Bake one extra base-colour atlas per colourway, beside the species' own.
+
+    A colourway repaints an animal without reshaping it, so every scheme shares the mesh,
+    the normal map and the roughness map already inside the `.usdz` — only the base colour
+    differs, and it ships as one loose PNG the runtime swaps onto an individual fish.
+
+    The UV layout has to be identical across schemes or a repaint would land on the wrong
+    part of the animal, and it is: the mesh is built from the same numbers and unwrapped by
+    the same deterministic pass, checked by baking one fish twice in separate processes and
+    diffing the images.
+
+    Every scheme is baked, including the first, rather than copying the species' own atlas
+    for it. Copying would be free and would hold only for as long as the first scheme
+    happened to repaint nothing — a silent dependency on the order of a dict.
+    """
+    names = _colorways(staging / f"{name}.json")
+    if not names:
+        return []
+
+    built = []
+    for colorway in names:
+        target = staging / f"{name}_{colorway}_base_color.png"
+        spare = staging / f"{name}_{colorway}"
+        _run([
+            os.fspath(_RUN_BLENDER),
+            os.fspath(_MODELS / "build_fish.py"),
+            "--",
+            "--species", name,
+            "--colorway", colorway,
+            "--export", os.fspath(spare.with_suffix(".usdz")),
+            "--bake",
+            "--textures", os.fspath(staging / f"{name}_{colorway}_textures"),
+            "--resolution", str(resolution),
+        ], f"{name} ({colorway})")
+        # Only the base colour is wanted; the mesh and the other two maps are the ones
+        # already shipping inside the species' own archive.
+        os.replace(
+            staging / f"{name}_{colorway}_textures" / f"{name}_{colorway}_base_color.png",
+            target,
+        )
+        spare.with_suffix(".usdz").unlink(missing_ok=True)
+        spare.with_suffix(".json").unlink(missing_ok=True)
+        if target.stat().st_size == 0:
+            raise BuildFailure(f"{target.name} is empty")
+        built.append(target)
+    print(f"    colourways: {', '.join(names)}")
+    return built
+
+
 def _build_one(name, category, staging):
     resolution = _resolution(name, category)
     asset = staging / f"{name}.usdz"
@@ -321,7 +385,11 @@ def _build_one(name, category, staging):
     print(f"[{category}] {name} ({resolution}x{resolution})")
     _run(command, name)
     _validate_outputs(name, category, asset, manifest)
-    return asset.stat().st_size
+    size = asset.stat().st_size
+    if category == "fish":
+        size += sum(path.stat().st_size
+                    for path in _build_colorways(name, staging, resolution))
+    return size
 
 
 def _human_size(size):
@@ -350,12 +418,40 @@ def _write_index(all_names):
     return True
 
 
+def _installed_colorways(name):
+    """The colourways the *installed* manifest declares, before it is replaced.
+
+    Removing yesterday's PNGs by name rather than by a `{name}_*` glob, because the glob
+    also matches a species whose own name starts with this one — a `seahorse_pygmy` would
+    lose its textures every time the seahorse was rebuilt.
+    """
+    manifest = _ASSETS / f"{name}.json"
+    if not manifest.is_file():
+        return []
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list((data.get("fish") or {}).get("colorways") or [])
+
+
+def _installed_size(names):
+    total = 0
+    for name in names:
+        paths = [_ASSETS / f"{name}.usdz", _ASSETS / f"{name}.json"]
+        paths += [_ASSETS / f"{name}_{colorway}_base_color.png"
+                  for colorway in _installed_colorways(name)]
+        total += sum(path.stat().st_size for path in paths if path.is_file())
+    return total
+
+
 def _library_size(all_names):
     paths = [
         _ASSETS / filename
         for name in all_names
         for filename in (f"{name}.usdz", f"{name}.json")
     ]
+    paths.extend(_ASSETS.glob("*_base_color.png"))
     paths.append(_ASSETS / "index.json")
     return sum(path.stat().st_size for path in paths if path.is_file())
 
@@ -402,18 +498,49 @@ def main():
             staged_total = sum(
                 path.stat().st_size
                 for path in staging.iterdir()
-                if path.suffix in (".usdz", ".json")
+                if path.suffix in (".usdz", ".json", ".png")
             )
-            if full_build and staged_total > _BUDGET_BYTES:
+            # What the library will weigh once this build is installed, rather than what
+            # this build weighs. A partial build was previously exempt, which is the same
+            # as having no budget at all: colourways arrive a few hundred KB at a time and
+            # every one of them lands through `--only`.
+            index = _ASSETS / "index.json"
+            projected = (
+                staged_total
+                + _installed_size([name for name in all_names if name not in set(selected)])
+                + (index.stat().st_size if index.is_file() else 0)
+            )
+            if projected > _BUDGET_BYTES:
                 raise BuildFailure(
-                    f"staged library is {_human_size(staged_total)}, over the "
-                    f"{_human_size(_BUDGET_BYTES)} budget"
+                    f"this build would leave the library at {_human_size(projected)}, over "
+                    f"the {_human_size(_BUDGET_BYTES)} budget"
                 )
 
             for name in selected:
+                # A colourway dropped from a species leaves an orphan PNG that the runtime
+                # would never ask for and the budget would keep paying for, so yesterday's
+                # set is named from the manifest still installed and removed before the new
+                # manifest replaces it.
+                stale = _installed_colorways(name)
                 os.replace(staging / f"{name}.usdz", _ASSETS / f"{name}.usdz")
+                for colorway in stale:
+                    (_ASSETS / f"{name}_{colorway}_base_color.png").unlink(missing_ok=True)
+                for painted in staging.glob(f"{name}_*_base_color.png"):
+                    os.replace(painted, _ASSETS / painted.name)
                 os.replace(staging / f"{name}.json", _ASSETS / f"{name}.json")
                 shutil.rmtree(_ASSETS / f"{name}_textures", ignore_errors=True)
+
+            if full_build:
+                # Self-healing, for the orphan a rename or an interrupted build leaves
+                # behind: after a whole library lands, the manifests describe every
+                # colourway there should be.
+                wanted = {f"{name}_{colorway}_base_color.png"
+                          for name in all_names
+                          for colorway in _installed_colorways(name)}
+                for path in _ASSETS.glob("*_base_color.png"):
+                    if path.name not in wanted:
+                        print(f"    removing orphaned {path.name}")
+                        path.unlink()
     except BuildFailure as exc:
         parser.exit(1, f"build-library: {exc}\n")
 

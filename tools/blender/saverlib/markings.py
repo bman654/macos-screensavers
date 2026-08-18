@@ -11,16 +11,22 @@ The low-level node helpers (`_set`, `_ramp`, `_math`, `_mix_color`, ...) live he
 than in `materials.py` so the dependency runs one way: markings never import materials.
 They stay importable from `materials` as well, which is where `surfaces.py` gets them.
 
-Everything is generated from shader nodes in object space rather than painted onto a UV
-map. That keeps a species definition to a handful of numbers, lets one material serve a
-whole school with per-object colour variation, and avoids shipping texture images.
+Everything is generated from shader nodes rather than painted into an image, which keeps
+a species definition to a handful of numbers and means no marking ships as a texture
+authored by hand. Almost all of it is placed in *object space*, so a marking is stated in
+the same metres the body's own control points are.
 
-The vocabulary — bands, stripes, diagonal stripes, spots, patches, an eye ring and a
-two-tone split — is picked from and placed explicitly by a species. Explicit placement
-rather than a tuned periodic frequency is the load-bearing decision here: real markings
-sit at particular places on an animal and do not repeat, so landing three bars correctly
-by adjusting a wave frequency is guesswork. The one marking that is genuinely periodic on
-the animal, the angelfish's diagonal ruling, is the one marking specified by spacing.
+`rings` is the exception, and it is the exception on purpose: it is placed in the UV a
+swept body writes for itself, because object space cannot say "along the animal" on one
+that doubles back — a seahorse's tail tip is back under its chest. See `_add_rings`.
+
+The vocabulary — bands, stripes, diagonal stripes, spots, patches, bony rings, an eye
+ring and a two-tone split — is picked from and placed explicitly by a species. Explicit
+placement rather than a tuned periodic frequency is the load-bearing decision here: real
+markings sit at particular places on an animal and do not repeat, so landing three bars
+correctly by adjusting a wave frequency is guesswork. The two genuinely periodic
+markings — the angelfish's diagonal ruling and a seahorse's rings — are the two stated by
+spacing, and even the rings take a curve saying where the count is spent.
 
 Node socket names moved around in Blender 4.0 (Specular -> Specular IOR Level, and so
 on), so inputs are set through `_set` which ignores names the current build does not
@@ -97,6 +103,20 @@ def _ramp_node(nt, fac, stops, location=(0, 0), interpolation="LINEAR"):
     node.color_ramp.interpolation = interpolation
     nt.links.new(fac, node.inputs["Fac"])
     return node.outputs["Color"]
+
+
+def _uv(nt, layer, location=(0, 0)):
+    """The named UV layer's coordinate.
+
+    Never `ShaderNodeTexCoord`'s `UV` output, which means "whichever layer is currently
+    marked for render" — and during a texture bake that is the atlas's own layer rather
+    than the authored one. See `bake.py`'s module docstring for what that silently does
+    to anything drawn against a UV.
+    """
+    node = nt.nodes.new("ShaderNodeUVMap")
+    node.location = location
+    node.uv_map = layer
+    return node.outputs["UV"]
 
 
 def _mix_color(nt, base_color, factor, color, location=(0, 0), blend="MIX"):
@@ -510,3 +530,175 @@ def _add_split(nt, flank, base_color, params):
              (min(1.0, max(center + fade, 0.999)), _WHITE)]
     mask = _ramp_node(nt, flank.t, stops, (-420, 320), interpolation="EASE")
     return _mix_color(nt, base_color, mask, p["color"], flank.slot())
+
+
+# -- bony rings ----------------------------------------------------------------------
+
+
+def _wrap01(nt, value, location):
+    node = nt.nodes.new("ShaderNodeMath")
+    node.operation = "WRAP"
+    node.location = location
+    nt.links.new(value, node.inputs[0])
+    node.inputs[1].default_value = 1.0
+    node.inputs[2].default_value = 0.0
+    return node.outputs[0]
+
+
+def _repeat_mask(nt, coordinate, count, offset, width, location):
+    """A mask that is 1 on a line every 1/`count` of `coordinate` and 0 between them.
+
+    Repetition is a wrap and a ramp rather than a ramp per line, because these markings
+    are counted in dozens: `MAX_RAMP_STOPS` puts about seven explicitly-placed intervals
+    in one ramp, and a seahorse carries nearly fifty rings. The wrap folds every one of
+    them onto the same four stops.
+
+    The line straddles the fold — the ramp is 1 at both ends of the wrapped range — so
+    `offset` names where a line sits rather than where the gap between two of them does.
+    """
+    scaled = nt.nodes.new("ShaderNodeMath")
+    scaled.operation = "MULTIPLY_ADD"
+    scaled.location = location
+    nt.links.new(coordinate, scaled.inputs[0])
+    scaled.inputs[1].default_value = float(count)
+    scaled.inputs[2].default_value = -float(offset) * float(count)
+    wrapped = _wrap01(nt, scaled.outputs[0], (location[0] + 180, location[1]))
+    half = min(max(float(width), 1e-3), 0.98) * 0.5
+    return _ramp_node(nt, wrapped,
+                      [(0.0, _WHITE), (half, _BLACK), (1.0 - half, _BLACK),
+                       (1.0, _WHITE)],
+                      (location[0] + 360, location[1]), interpolation="EASE")
+
+
+def _add_rings(nt, uv, base_color, params, location=(-1000, -2100)):
+    """A plated animal's armour, drawn over a swept body's own UV.
+
+    A seahorse is not a scaled fish. It is a chain of bony rings — eleven round the trunk
+    and three dozen more down the tail — each one a plate with a hard joint at its edge,
+    with longitudinal ridges running the length of the animal and a tubercle wherever a
+    ridge crosses a joint. All three are periodic in coordinates no other marking here
+    has: `U` along the path and `V` round the section, written by the sweep itself (see
+    `SweptTube.build`). Everything else in this module is placed in object space, which
+    on a curled animal is not a position along the body.
+
+    Returns `(base_color, height)`. The height is a relief field for a bump node rather
+    than a mask, because these are ridges and grooves before they are markings: a
+    seahorse photographed under flat light is still visibly plated.
+
+    `spacing` is the one parameter worth explaining. Rings are not evenly spread along a
+    seahorse — the trunk's eleven cover most of the first half of the animal and the
+    tail's thirty-six the rest — so a plain count lays them out at one wrong density or
+    the other. It is a list of `(u, fraction of the rings passed)` stops:
+    `[(0, 0), (0.41, 0.23), (1, 1)]` reads as "eleven of the forty-seven rings are in the
+    first 41% of the body", and is the same explicit placement the rest of the vocabulary
+    is stated in.
+    """
+    p = _fields(params, ("count",),
+                dict(spacing=None, ridges=4, ridge_offset=0.125, joint_width=0.34,
+                     keel_width=0.20, color=None, keel_color=None, contrast=0.55,
+                     depth=1.0, keel_depth=0.7, tubercle=0.0),
+                "rings")
+    count = float(p["count"])
+    if count < 1.0:
+        raise ValueError("rings: count must be at least 1")
+    ridges = int(p["ridges"])
+    if ridges < 0:
+        raise ValueError("rings: ridges cannot be negative")
+
+    separate = nt.nodes.new("ShaderNodeSeparateXYZ")
+    separate.location = location
+    nt.links.new(uv, separate.inputs["Vector"])
+    along, around = separate.outputs["X"], separate.outputs["Y"]
+
+    if p["spacing"]:
+        along = _ramp_node(nt, along, _spacing_stops(p["spacing"]),
+                           (location[0] + 180, location[1] + 200))
+
+    # Half a plate out of phase, so U=0 and U=1 land mid-plate. A `spacing` curve is a
+    # ColorRamp and a ColorRamp clamps, so everything past either end of the body reads as
+    # exactly one coordinate — and with a joint at 0 that would paint the whole snout tip
+    # and the whole tail tip as one solid groove.
+    joint = _repeat_mask(nt, along, count, 0.5 / count, p["joint_width"],
+                         (location[0] + 380, location[1] + 200))
+    # A ridge belongs on a corner of the section, not on a flat: the body is swept
+    # through a superellipse whose exponent already squares it off, and `ring_angles`
+    # starts V at the flank, so the corners of a four-sided section are an eighth of the
+    # way round and every quarter after that. That is what `ridge_offset` defaults to.
+    keel = _repeat_mask(nt, around, ridges, float(p["ridge_offset"]), p["keel_width"],
+                        (location[0] + 380, location[1] - 300)) if ridges else None
+
+    contrast = min(max(float(p["contrast"]), 0.0), 1.0)
+    if p["color"] and contrast > 0.0:
+        shade = _math(nt, "MULTIPLY", joint, contrast, (location[0] + 760, location[1] + 200))
+        base_color = _mix_color(nt, base_color, shade, p["color"],
+                                (location[0] + 940, location[1] + 200))
+    if p["keel_color"] and keel is not None and contrast > 0.0:
+        shade = _math(nt, "MULTIPLY", keel, contrast, (location[0] + 760, location[1] - 300))
+        base_color = _mix_color(nt, base_color, shade, p["keel_color"],
+                                (location[0] + 940, location[1] - 300))
+
+    # The joint is a groove and the ridges stand out of the plate, so the two pull the
+    # surface opposite ways; a tubercle is the lump where they cross, and it has to be
+    # added back on top of the groove it sits in or the spines disappear into it.
+    height = _math(nt, "MULTIPLY", joint, -float(p["depth"]),
+                   (location[0] + 760, location[1] - 620))
+    if keel is not None:
+        raised = _math(nt, "MULTIPLY", keel, float(p["keel_depth"]),
+                       (location[0] + 760, location[1] - 800))
+        height = _math(nt, "ADD", height, raised, (location[0] + 940, location[1] - 700))
+        if float(p["tubercle"]) != 0.0:
+            crossing = _math(nt, "MULTIPLY", joint, keel,
+                             (location[0] + 760, location[1] - 980))
+            crossing = _math(nt, "MULTIPLY", crossing, float(p["tubercle"]),
+                             (location[0] + 940, location[1] - 980))
+            height = _math(nt, "ADD", height, crossing,
+                           (location[0] + 1120, location[1] - 800))
+    return base_color, height
+
+
+def _spacing_stops(spacing):
+    """`rings.spacing` as ColorRamp stops, checked rather than trusted.
+
+    Every check here exists because the failure it prevents renders rather than raises. A
+    ramp silently reorders stops that are not increasing, so a typo comes back as rings
+    that bunch and reverse somewhere down the tail. A ramp also *clamps* outside its first
+    and last stop, so a curve that does not reach both ends leaves a stretch of body at one
+    frozen coordinate — a single plate the length of a snout, or a solid groove. And a flat
+    interior segment is the same thing in the middle of the animal.
+    """
+    stops = []
+    previous = None
+    for entry in spacing:
+        u, passed = float(entry[0]), float(entry[1])
+        if not 0.0 <= u <= 1.0:
+            raise ValueError(f"rings: spacing u must be in 0..1, got {u}")
+        if not 0.0 <= passed <= 1.0:
+            raise ValueError(f"rings: spacing fraction must be in 0..1, got {passed}")
+        if previous is not None and (u <= previous[0] or passed <= previous[1]):
+            raise ValueError(
+                "rings: spacing must step forward along the body and pass at least one "
+                f"more ring at every stop, got {(u, passed)} after {previous}. A stop that "
+                "repeats its fraction freezes the ring coordinate over that whole stretch, "
+                "which draws one plate across it rather than none."
+            )
+        previous = (u, passed)
+        stops.append((u, (passed, passed, passed, 1.0)))
+    if len(stops) < 2:
+        raise ValueError("rings: spacing needs at least two stops")
+    if len(stops) > MAX_RAMP_STOPS:
+        raise ValueError(
+            f"rings: spacing holds at most {MAX_RAMP_STOPS} stops and this one has "
+            f"{len(stops)}; it is a curve saying where the rings are spent, so it wants "
+            f"a handful of anatomical landmarks rather than one entry per ring"
+        )
+    if stops[0][0] != 0.0 or stops[0][1][0] != 0.0:
+        raise ValueError(
+            f"rings: spacing must start at (0, 0) — the nose, before any ring — got "
+            f"{(stops[0][0], stops[0][1][0])}"
+        )
+    if stops[-1][0] != 1.0 or stops[-1][1][0] != 1.0:
+        raise ValueError(
+            f"rings: spacing must end at (1, 1) — the tail tip, with every ring spent — "
+            f"got {(stops[-1][0], stops[-1][1][0])}"
+        )
+    return stops

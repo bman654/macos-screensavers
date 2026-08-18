@@ -28,6 +28,13 @@ renders perfectly.
 The body is **not** given `bands` or `stripes`. Those are placed by X, and on a curled
 animal X is not a position along the body — the tail's tip is back under the chest. The
 mottling is `spots` and `patches`, which are placed in object space and stay correct.
+
+The plating is `rings`, which is the one marking placed along the body's own swept
+coordinate rather than in object space, and the reason that coordinate exists at all. A
+seahorse has no scales: it is a chain of bony rings, about eleven round the trunk and
+three dozen down the tail, with four ridges running the length of it and a tubercle
+wherever a ridge crosses a ring. Everything else here is a fish wearing a seahorse's
+outline; this is what makes it a seahorse.
 """
 
 import math
@@ -108,14 +115,14 @@ def _arc_fractions(points, indices):
 # profile below is pinned to them and an inserted point would otherwise slide the belly
 # into the tail without changing a single number.
 _TRUNK = [
-    (0.0510, 0.0, -0.0432),   # 0  snout tip
-    (0.0508, 0.0, -0.0366),
-    (0.0503, 0.0, -0.0300),
-    (0.0496, 0.0, -0.0236),   # 3  the snout is still a thin tube to here
-    (0.0484, 0.0, -0.0176),
-    (0.0464, 0.0, -0.0122),   # 5  the head swells, fast
-    (0.0430, 0.0, -0.0076),
-    (0.0384, 0.0, -0.0044),   # 7  the cheek, the deepest part of the head
+    (0.0512, 0.0, -0.0384),   # 0  snout tip
+    (0.0509, 0.0, -0.0330),
+    (0.0504, 0.0, -0.0276),
+    (0.0497, 0.0, -0.0222),   # 3  the snout is still a thin tube to here
+    (0.0486, 0.0, -0.0170),
+    (0.0466, 0.0, -0.0120),   # 5  the head swells, fast
+    (0.0432, 0.0, -0.0076),
+    (0.0386, 0.0, -0.0044),   # 7  the cheek, the deepest part of the head
     (0.0328, 0.0, -0.0028),
     (0.0268, 0.0, -0.0030),   # 9  the nape: a pinch, and the bend is finished
     (0.0202, 0.0, -0.0038),
@@ -156,6 +163,116 @@ def _tail(fraction):
     return _VENT + (1.0 - _VENT) * fraction
 
 
+# Where the dark marks sit. This is shape rather than colour — every colourway paints the
+# same saddles in its own tones — so it lives out here and each scheme only says what
+# colour to paint them. Radii in metres; the Y radius is far past the body's half-width on
+# purpose, because anything merely equal to it lands on one flank and fades to a smudge
+# before it reaches the other.
+_SADDLES = [
+    ((0.0350, 0.0, -0.0020), (0.0058, 0.060, 0.0056), 0.30),   # behind the eye
+    ((0.0150, 0.0, -0.0044), (0.0055, 0.060, 0.0064), 0.34),
+    ((-0.0075, 0.0, -0.0122), (0.0055, 0.060, 0.0064), 0.34),
+    ((0.0360, 0.0, 0.0055), (0.0056, 0.050, 0.0036), 0.26),    # the coronet
+]
+
+# The rings, less the two colours a scheme decides. `spacing` is why this is not just a
+# count: the rings are nothing like evenly spread — a couple of wide plates over the head,
+# eleven across the trunk, and the rest packed into the tail, which is what makes a tail
+# read as a tail and not as a striped rope. The four ridges sit on the corners of the
+# section rather than on its flats, which is where `ridge_offset`'s default puts them and
+# where the exponent has already put a corner.
+_PLATING = dict(
+    count=50,
+    spacing=[(0.0, 0.0), (_AT["snout_base"], 0.02), (_AT["nape"], 0.08),
+             (_VENT, 0.30), (1.0, 1.0)],
+    ridges=4,
+    joint_width=0.40,
+    keel_width=0.18,
+    contrast=0.45,
+    depth=1.0,
+    keel_depth=1.0,
+    tubercle=1.6,
+)
+
+
+def _look(belly, mid, back, dark, pale, fin, fin_tip):
+    """One colourway, from the seven colours a seahorse's paint job actually needs.
+
+    A wild seahorse's colour says more about the weed it is gripping than about its
+    species: one *Hippocampus kuda* is honey, the next lemon, cream or near-black. So the
+    animal is authored once and painted several times, and a scheme is these seven colours
+    rather than a second copy of every marking. `dark` does all the work of shadow —
+    mottle, saddles, ring joints, eye ring and the gape — and `pale` all the work of
+    highlight, which is what keeps a scheme coherent instead of seven unrelated choices.
+    """
+    return dict(
+        colors=(belly, mid, back),
+        fin_color=fin,
+        fin_style=dict(tip_color=fin_tip, opacity=0.88, ray_count=18.0,
+                       ray_contrast=0.95),
+        # Mottling and a scatter of lighter flecks, both placed in object space — a curled
+        # animal has no nose-to-tail X for a band or a stripe to be placed against.
+        spots=[
+            dict(color=dark, count=26.0, size=0.44, coverage=0.62, softness=0.45,
+                 seed=5.0),
+            dict(color=pale, count=34.0, size=0.30, coverage=0.35, softness=0.55,
+                 seed=17.0),
+        ],
+        patches=[dict(center=center, radii=radii, color=dark, softness=softness)
+                 for center, radii, softness in _SADDLES],
+        rings=dict(_PLATING, color=dark, keel_color=pale),
+        mouth_color=tuple(channel * 0.55 for channel in dark),
+        eye_ring=dict(color=dark, width=0.60, softness=0.28),
+    )
+
+
+# The schemes, in the order the runtime draws from. Amber is first because it is what the
+# `.usdz` itself is baked in, so a build or a runtime that knows nothing about colourways
+# still shows the animal this species was art-directed as.
+_COLORWAYS = {
+    # Honey over a dark back: the textbook *kuda*, and a warm animal reads against blue
+    # water where a grey-brown one does not.
+    "amber": _look(
+        belly=(0.735, 0.455, 0.080), mid=(0.585, 0.320, 0.052),
+        back=(0.360, 0.180, 0.034), dark=(0.250, 0.130, 0.030),
+        pale=(0.780, 0.585, 0.215), fin=(0.585, 0.410, 0.145),
+        fin_tip=(0.700, 0.520, 0.200)),
+    # The bright yellow that a well-fed captive one turns, and the loudest of these.
+    "lemon": _look(
+        belly=(0.900, 0.720, 0.110), mid=(0.820, 0.560, 0.060),
+        back=(0.560, 0.330, 0.040), dark=(0.300, 0.165, 0.030),
+        pale=(0.940, 0.800, 0.300), fin=(0.800, 0.600, 0.150),
+        fin_tip=(0.900, 0.740, 0.260)),
+    # *H. reidi* in its red form, which is nearly the colour of the gorgonian it holds.
+    "crimson": _look(
+        belly=(0.640, 0.180, 0.075), mid=(0.480, 0.095, 0.045),
+        back=(0.280, 0.045, 0.030), dark=(0.170, 0.028, 0.022),
+        pale=(0.780, 0.360, 0.180), fin=(0.480, 0.140, 0.080),
+        fin_tip=(0.660, 0.300, 0.150)),
+    # Cream, with the mottle showing as grey rather than as brown. The palest scheme that
+    # still survives the tank's depth fog, which takes the colour out of a small animal.
+    "ivory": _look(
+        belly=(0.880, 0.845, 0.760), mid=(0.760, 0.700, 0.590),
+        back=(0.520, 0.460, 0.370), dark=(0.300, 0.255, 0.195),
+        pale=(0.930, 0.900, 0.830), fin=(0.760, 0.715, 0.620),
+        fin_tip=(0.880, 0.845, 0.760)),
+    # Mossy green over brown: the camouflaged one, which is what most wild seahorses are
+    # and what makes a pair of them look like two animals rather than two copies.
+    "jade": _look(
+        belly=(0.430, 0.470, 0.190), mid=(0.300, 0.340, 0.130),
+        back=(0.165, 0.195, 0.075), dark=(0.110, 0.125, 0.050),
+        pale=(0.560, 0.590, 0.260), fin=(0.310, 0.350, 0.150),
+        fin_tip=(0.470, 0.500, 0.220)),
+    # Dusky purple, again *reidi*. Rare enough in life to be worth having and common
+    # enough not to be a fantasy.
+    "plum": _look(
+        belly=(0.470, 0.230, 0.360), mid=(0.330, 0.140, 0.250),
+        back=(0.190, 0.070, 0.145), dark=(0.115, 0.040, 0.090),
+        pale=(0.610, 0.360, 0.480), fin=(0.340, 0.165, 0.270),
+        fin_tip=(0.500, 0.270, 0.400)),
+}
+
+
 SEAHORSE = Species(
     name="seahorse",
     body_length_m=0.16,
@@ -172,77 +289,70 @@ SEAHORSE = Species(
     length=0.115,
     path=_PATH,
     # Thin at the snout, swelling through the head and the pot belly, then tapering the
-    # whole length of the tail to a point.
+    # whole length of the tail to a point. The stop just past `snout_base` is what makes
+    # the jaw an angle rather than a cone: without it the profile reads the snout and the
+    # cheek as one smooth swell and the animal ends up muzzled like an eel.
     radius=[
-        (0.000, 0.0016),
-        (_AT["snout_base"] * 0.5, 0.0021),
-        (_AT["snout_base"], 0.0026),
-        (_AT["head"], 0.0104),
-        (_AT["nape"], 0.0082),
-        (_AT["chest"], 0.0098),
+        (0.000, 0.0014),
+        (_AT["snout_base"] * 0.5, 0.0019),
+        (_AT["snout_base"], 0.0024),
+        (_AT["snout_base"] * 1.45, 0.0052),
+        (_AT["head"], 0.0094),
+        (_AT["nape"], 0.0078),
+        (_AT["chest"], 0.0096),
         (_AT["belly"], 0.0106),
-        (_VENT, 0.0066),
-        (_tail(0.20), 0.0050),
-        (_tail(0.44), 0.0036),
-        (_tail(0.68), 0.0024),
+        (_VENT, 0.0064),
+        (_tail(0.20), 0.0048),
+        (_tail(0.44), 0.0034),
+        (_tail(0.68), 0.0023),
         (_tail(0.87), 0.0014),
         (1.000, 0.0007),
     ],
-    # Narrower across than through: a seahorse is a slab-sided animal, and the trunk is
-    # the most compressed part of it.
-    section=([(0.0, 0.95), (_AT["head"], 0.80), (_AT["belly"], 0.74), (1.0, 0.86)],
-             1.0),
-    # The bony rings. A seahorse has no scales — it is plated, and the plates give it a
-    # section that is closer to a rounded square than to an oval, most obviously along the
-    # tail. Past about 4 the section reads as a rectangle and catches light wrongly, so
+    # Narrower across than through, and not symmetric about the path: a seahorse carries a
+    # crown of bone over the back of its head and a pot belly under its trunk, and neither
+    # is a radius — a radius would put the crown on the throat too. So the section reaches
+    # further up than down over the head and the other way over the trunk. "Up" here is the
+    # frame's binormal, which is the top of the snout at the nose and the animal's back
+    # behind the bend; see the module docstring's axis table.
+    section=(
+        [(0.0, 0.95), (_AT["snout_base"], 0.86), (_AT["head"], 0.76),
+         (_AT["nape"], 0.74), (_AT["belly"], 0.72), (_VENT, 0.80), (1.0, 0.90)],
+        [(0.0, 1.00), (_AT["snout_base"], 1.00), (_AT["head"], 1.12),
+         (_AT["head"] * 1.16, 1.22), (_AT["nape"], 1.04), (_AT["chest"], 0.96),
+         (_AT["belly"], 0.92), (_VENT, 0.98), (1.0, 1.00)],
+        [(0.0, 1.00), (_AT["snout_base"], 0.96), (_AT["head"], 0.90),
+         (_AT["nape"], 1.02), (_AT["chest"], 1.16), (_AT["belly"], 1.24),
+         (_VENT, 1.02), (1.0, 1.00)],
+    ),
+    # A seahorse has no scales — it is plated, and the plates give it a section that is
+    # closer to a rounded square than to an oval, most obviously along the tail and behind
+    # the jaw. Past about 4 the section reads as a rectangle and catches light wrongly, so
     # this stops short of it.
-    exponent=[(0.0, 2.3), (_AT["head"], 2.8), (_AT["belly"], 3.4),
-              (_VENT, 3.6), (1.0, 3.6)],
+    exponent=[(0.0, 2.2), (_AT["snout_base"], 2.6), (_AT["head"], 3.5),
+              (_AT["nape"], 3.5), (_AT["belly"], 3.6), (_VENT, 3.8), (1.0, 3.8)],
     # The frame's up is checked against +Z at a point on the straight part of the trunk,
     # where the answer is not in doubt. See `CurvedBodySpec`.
     body_up=(0.0, -1.0, 0.0),
     dorsal_at=_AT["belly"],
-    # Amber and honey, darkening over the back. Seahorses take the colour of what they are
-    # holding on to, and a warm one reads against blue water where a grey-brown does not.
-    colors=((0.735, 0.455, 0.080), (0.585, 0.320, 0.052), (0.360, 0.180, 0.034)),
-    fin_color=(0.585, 0.410, 0.145),
-    # No bands and no stripes — see the module docstring. Mottling and a few darker
-    # saddles, both placed in object space.
-    spots=[
-        dict(color=(0.250, 0.130, 0.030), count=26.0, size=0.44, coverage=0.62,
-             softness=0.45, seed=5.0),
-        dict(color=(0.760, 0.560, 0.180), count=34.0, size=0.30, coverage=0.35,
-             softness=0.55, seed=17.0),
-    ],
-    patches=[
-        # The dark blotch behind the eye and two saddles over the trunk. The Y radius is
-        # far past the body's half-width on purpose: anything merely equal to it lands on
-        # one flank and fades to a smudge before it reaches the other.
-        dict(center=(0.0350, 0.0, -0.0020), radii=(0.0058, 0.060, 0.0056),
-             color=(0.230, 0.115, 0.026), softness=0.30),
-        dict(center=(0.0150, 0.0, -0.0044), radii=(0.0055, 0.060, 0.0064),
-             color=(0.250, 0.135, 0.032), softness=0.34),
-        dict(center=(-0.0075, 0.0, -0.0122), radii=(0.0055, 0.060, 0.0064),
-             color=(0.250, 0.135, 0.032), softness=0.34),
-        # The crown of bony spines on top of the head, which is the coronet.
-        dict(center=(0.0360, 0.0, 0.0055), radii=(0.0056, 0.050, 0.0036),
-             color=(0.300, 0.170, 0.045), softness=0.26),
-    ],
+    # The paint job. Amber is the species' own look; the rest of the table is the same
+    # animal repainted, and the runtime picks one per individual — see `_look` and
+    # `Species.colorways`.
+    **_COLORWAYS["amber"],
+    colorways=_COLORWAYS,
     # The tubular snout ends in a small round mouth rather than a gape.
-    mouth=((0.0510, 0.0, -0.0430), (0.0013, 0.0022, 0.0013)),
-    mouth_color=(0.155, 0.070, 0.030),
-    # Plated, not scaled: enough relief to break up the specular, no scale pattern.
+    mouth=((0.0512, 0.0, -0.0382), (0.0013, 0.0022, 0.0013)),
+    # Plated, not scaled. The rings carry the whole of this animal's relief, so the scale
+    # field is left as barely more than a texture break on the specular.
     scale_count=26.0,
-    scale_depth=0.06,
-    eye=(_AT["head"] * 1.02, 0.34, 0.038),
-    eye_ring=dict(color=(0.290, 0.150, 0.035), width=0.60, softness=0.28),
+    scale_depth=0.03,
+    eye=(_AT["head"] * 1.02, 0.34, 0.032),
     # The dorsal fin, and the whole of the animal's propulsion: a small fan on the back
     # over the trunk-to-tail junction, which in life beats fast enough to blur. It is the
     # part the shader ripples — see `SwimDeformation.swift`.
-    dorsal=Fin(t0=_AT["chest"] * 1.02, t1=_VENT * 1.03,
-               span=[(0.00, 0.0032), (0.20, 0.0134), (0.50, 0.0158),
-                     (0.80, 0.0126), (1.00, 0.0030)],
-               rake=0.0018, sink=0.24, samples_u=30, samples_v=10,
+    dorsal=Fin(t0=_AT["belly"] * 0.97, t1=_VENT * 1.03,
+               span=[(0.00, 0.0024), (0.25, 0.0080), (0.58, 0.0092),
+                     (0.86, 0.0068), (1.00, 0.0018)],
+               rake=0.0018, sink=0.24, samples_u=26, samples_v=10,
                ripples=True),
     # Small pectorals just behind the gill plate, which steer. They beat on the same
     # channel every other fish's do.
@@ -254,6 +364,4 @@ SEAHORSE = Species(
     caudal=None,
     pelvic=None,
     anal=None,
-    fin_style=dict(tip_color=(0.760, 0.590, 0.250), opacity=0.70,
-                   ray_count=22.0, ray_contrast=0.75),
 )

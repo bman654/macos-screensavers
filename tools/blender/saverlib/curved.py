@@ -18,6 +18,11 @@ knowing which kind of body they are on.
 coordinate, and on a curled body X is not a position along the animal. Those are silently
 wrong here rather than refused, because the marking code has no way to know. Use `spots`
 and `patches`, which are placed in object space and stay correct.
+
+**And what it gets back.** `build` writes the sweep's own `(along, around)` coordinate
+into a UV layer, which *is* a position along the animal, and `rings` is drawn in it. The
+same UV would carry a band or a stripe on a curled body if one were ever wanted; nothing
+but the marking code's habit of reading object X stands in the way.
 """
 
 from math import pi
@@ -34,7 +39,10 @@ class CurvedBodySpec:
     `path` is anything `SweptTube` accepts — a callable over 0..1 or a sequence of points —
     running from the nose to the tail tip. `radius` is the half-thickness along it, and
     `section` scales that independently across the body and through its depth, so a flank
-    that is flatter than it is deep is a section rather than a second radius profile.
+    that is flatter than it is deep is a section rather than a second radius profile. It
+    is `(width, height)`, or `(width, up, down)` where the two differ: the axis is the
+    path and cannot be off-centre in its own frame, so a crest over the head and a pot
+    belly under the trunk are a section reaching further one way than the other.
 
     `up` seeds the parallel-transported frame, and it is a real choice rather than a
     default worth taking on trust: it decides which way round the section's "up" ends up
@@ -47,7 +55,7 @@ class CurvedBodySpec:
                  up=(0.0, -1.0, 0.0), dorsal_at=0.5, samples=400):
         self.path = path
         self.radius = as_profile(radius)
-        self.section = (as_profile(section[0]), as_profile(section[1]))
+        self.section = tuple(as_profile(entry) for entry in section)
         self.exponent = as_profile(exponent)
         self.up = tuple(up)
         self.dorsal_at = float(dorsal_at)
@@ -96,8 +104,16 @@ class CurvedBody:
 
     # -- mesh construction ----------------------------------------------------------
 
-    def build(self, name="Body", subsurf=1):
-        return self.tube.build(name, subsurf=subsurf)
+    def build(self, name="Body", subsurf=1, uv=None):
+        """Build the body mesh, optionally writing its own (along, around) UV.
+
+        That UV is the answer to what this module's header gives up. A marking placed by
+        nose-to-tail position is measured from object X everywhere else, and on a curled
+        animal X is not a position along the body; U here is, because the sweep resamples
+        the path by arc length. It is written at build time because it is the only moment
+        both numbers exist.
+        """
+        return self.tube.build(name, subsurf=subsurf, uv=uv)
 
     def bounds(self):
         """World-axis extents of the swept surface, sampled around every ring.

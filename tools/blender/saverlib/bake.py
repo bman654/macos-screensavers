@@ -1,4 +1,17 @@
-"""Bake procedural materials into a single texture atlas for USD export."""
+"""Bake procedural materials into a single texture atlas for USD export.
+
+**A material that reads a UV must name the layer it reads.** The bake adds its own
+`ATLAS_UV` layer and makes it the render layer, because that is the space the atlas is
+written in — so a `ShaderNodeTexCoord`'s `UV` output means the atlas during a bake and
+the authored layer at every other time. A material that samples it therefore paints
+something different into the atlas than it drew in the viewport, silently and with no
+error: fin rays baked this way came out as a flat wash, because a fin's island covers a
+fraction of atlas space and three cycles of a ray wave across the whole square is a
+fraction of one cycle across the island. Read authored coordinates through a
+`ShaderNodeUVMap` naming the layer instead; the layers an object arrived with survive
+the bake for exactly that reason, and are removed afterwards so the export still carries
+only the atlas layer.
+"""
 
 import math
 import os
@@ -10,6 +23,9 @@ import bpy
 DEFAULT_RESOLUTION = 2048
 DEFAULT_MARGIN = 32
 DEFAULT_UV_MARGIN = 0.02
+
+# The layer the atlas is unwrapped into, and the only UV layer left on a baked object.
+ATLAS_UV = "AtlasUV"
 
 
 def ensure_cycles(device_name=None):
@@ -170,6 +186,7 @@ def bake_atlas_objects(
         for polygon in obj.data.polygons:
             polygon.material_index = 0
 
+    _drop_authoring_uvs(objects)
     return paths
 
 
@@ -233,9 +250,23 @@ def _activate_all(objects):
 
 def _unwrap(objects, island_margin, bake_margin, resolution):
     for obj in objects:
-        while obj.data.uv_layers:
-            obj.data.uv_layers.remove(obj.data.uv_layers[0])
-        obj.data.uv_layers.new(name="AtlasUV")
+        layers = obj.data.uv_layers
+        existing = layers.get(ATLAS_UV)
+        if existing is not None:
+            layers.remove(existing)
+        # Blender caps a mesh at eight UV layers and `new()` returns None past it, which
+        # would fail later as a missing attribute rather than as this.
+        atlas = layers.new(name=ATLAS_UV)
+        if atlas is None:
+            raise RuntimeError(
+                f"'{obj.name}' already carries {len(layers)} UV layers and has no room "
+                f"for the atlas layer"
+            )
+        # Both, and they are different settings: `active` is what Smart UV Project writes
+        # and what the bake targets, `active_render` is what an unnamed texture coordinate
+        # samples. The authored layers stay put — see this module's docstring.
+        layers.active = atlas
+        atlas.active_render = True
 
     if len(objects) == 1:
         _smart_project(objects, island_margin)
@@ -248,6 +279,24 @@ def _unwrap(objects, island_margin, bake_margin, resolution):
     for obj in objects:
         _smart_project([obj], island_margin)
     _pack_object_tiles(objects, bake_margin, resolution)
+
+
+def _drop_authoring_uvs(objects):
+    """Leave each baked object with the atlas layer and nothing else.
+
+    The authored layers have done their job by now — the atlas holds what they drew — and
+    keeping them would change what the USD export names `st`, which the runtime reads the
+    part channel out of as `st1`.
+    """
+    for obj in objects:
+        layers = obj.data.uv_layers
+        # By name, and one lookup at a time. Removing a layer compacts the mesh's custom
+        # data, so a list of layer wrappers collected beforehand can point at moved or
+        # freed entries after the first removal — which would drop the atlas instead.
+        for name in [layer.name for layer in layers if layer.name != ATLAS_UV]:
+            layers.remove(layers[name])
+        layers.active = layers[0]
+        layers[0].active_render = True
 
 
 def _smart_project(objects, island_margin):

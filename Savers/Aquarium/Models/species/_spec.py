@@ -23,7 +23,94 @@ The numbers here are the animal's *shape*. How it moves is `pose`, `swim` and
 `fin_rate` at the bottom, which the runtime reads out of the manifest — those three are
 the difference between a fish and an animal that stands upright, holds its body rigid
 and drives itself with one fin.
+
+`colorways` is the one field that makes a species more than one animal on screen. A wild
+seahorse's colour is a fact about the weed it is holding on to rather than about its
+species — the same *Hippocampus kuda* is honey, lemon, cream or near-black — so one of
+them in a tank is a lie the moment there are two. A colourway names a repaint: only the
+colour fields differ, so every scheme shares one mesh and one normal map and costs a
+single extra base-colour image. `Species.colorway(name)` hands back the repainted animal
+as an ordinary `Species`, which is why nothing downstream of here knows about any of it.
 """
+
+import copy
+
+
+# Which fields a colourway may repaint. Everything here is skin, fin or marking colour;
+# nothing here is shape. That line is the whole point of the list: two colourways of one
+# animal have to be the same animal, or the mesh baked once and shared between them would
+# be wrong for all but the first.
+_COLORWAY_FIELDS = frozenset({
+    "colors", "fin_color", "caudal_color", "fin_style", "caudal_style",
+    "bands", "band_color", "outline_color", "stripes", "stripe_color",
+    "diagonal_stripes", "spots", "patches", "rings", "split",
+    "mouth_color", "eye_ring",
+})
+
+
+def _colour_leaves_only(base, painted, where):
+    """Check that `painted` differs from `base` only under keys that name a colour.
+
+    Naming a colour field is not enough on its own, because the colour fields are compound:
+    `rings` also carries how deep its grooves cut, `spots` how many there are and how big,
+    `patches` where they sit. Only the base-colour atlas is rebaked per scheme — the normal
+    map, the roughness map and the mesh are the default's — so a scheme that quietly moved
+    a saddle or deepened a ring would ship a colour that no longer lines up with the relief
+    underneath it, and would render perfectly.
+    """
+    if isinstance(base, dict) and isinstance(painted, dict):
+        for key in sorted(set(base) | set(painted)):
+            if "color" in key:
+                continue
+            if key not in base or key not in painted:
+                raise ValueError(
+                    f"{where}: a colourway may not add or drop {key!r}; only colour differs"
+                )
+            _colour_leaves_only(base[key], painted[key], f"{where}.{key}")
+        return
+    if isinstance(base, (list, tuple)) and isinstance(painted, (list, tuple)):
+        if len(base) != len(painted):
+            raise ValueError(
+                f"{where}: a colourway may not change how many entries there are "
+                f"({len(base)} to {len(painted)}); only colour differs"
+            )
+        for index, (one, other) in enumerate(zip(base, painted)):
+            _colour_leaves_only(one, other, f"{where}[{index}]")
+        return
+    if base != painted:
+        raise ValueError(
+            f"{where}: {base!r} became {painted!r}, and that is not a colour. Every scheme "
+            f"shares one mesh and one normal map, so anything but colour would be wrong "
+            f"for all of them but the one the model was baked from."
+        )
+
+
+def _checked_colorways(colorways, species):
+    """Validate `Species.colorways` at construction, where the name is still to hand."""
+    if not colorways:
+        return {}
+    checked = {}
+    for name, overrides in colorways.items():
+        if not isinstance(overrides, dict):
+            raise ValueError(f"colourway {name!r} must be a dict of field overrides")
+        unknown = sorted(set(overrides) - _COLORWAY_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"colourway {name!r} would change {unknown}, which is not colour. A "
+                f"colourway may only repaint {sorted(_COLORWAY_FIELDS)}."
+            )
+        for field, value in overrides.items():
+            base = getattr(species, field)
+            if base is None and value is not None:
+                raise ValueError(
+                    f"colourway {name!r} adds {field!r}, which the species does not have. "
+                    f"A marking that only some schemes carry is a difference in the mesh's "
+                    f"relief, not in its colour."
+                )
+            if "color" not in field:
+                _colour_leaves_only(base, value, f"colourway {name!r}: {field}")
+        checked[str(name)] = dict(overrides)
+    return checked
 
 
 class Fin:
@@ -96,6 +183,7 @@ class Species:
         diagonal_stripes=None,
         spots=None,
         patches=None,
+        rings=None,
         split=None,
         mouth=None,
         mouth_color=(0.10, 0.035, 0.025),
@@ -119,6 +207,7 @@ class Species:
         pose="level",
         swim=1.0,
         fin_rate=1.0,
+        colorways=None,
     ):
         lofted = width is not None and top is not None and bottom is not None
         swept = path is not None and radius is not None
@@ -175,6 +264,16 @@ class Species:
         self.diagonal_stripes = diagonal_stripes  # dict or [dict]: angle/spacing/colour
         self.spots = spots                    # dict or [dict]: count/size/colour
         self.patches = patches                # [dict]: centre/radii/colour in metres
+        # A plated animal's bony rings, ridges and tubercles. Unlike every other marking
+        # this one is placed in the body's own (along, around) coordinate rather than in
+        # object space, so it is available only to a swept body — which is checked here
+        # rather than rendering as a stripeless animal with no explanation.
+        if rings is not None and not swept:
+            raise ValueError(
+                "rings are placed along the body's own swept coordinate, which only a "
+                "path/radius body writes; a lofted body has no such coordinate"
+            )
+        self.rings = rings                    # dict: count/spacing/ridges/depth/colour
         self.split = split                    # dict: t/colour/hardness
         self.mouth = mouth                    # ((cx, cy, cz), (rx, ry, rz)) in metres
         # The mouth's own colour. The default is a dark red gape, which is right on a
@@ -191,6 +290,7 @@ class Species:
         self.caudal = caudal
         self.caudal_spread = caudal_spread
         self.caudal_color = caudal_color or fin_color
+        self._caudal_inherits_color = caudal_color is None
         # Extra keyword arguments for `fin_material`: tip_color, along_colors,
         # edge_color, edge_width, opacity, spots, ray_count, ray_contrast. The tail
         # inherits the body fins' styling unless it asks for its own, since a fish whose
@@ -198,6 +298,7 @@ class Species:
         # single fin with `Fin(color=..., style=...)`.
         self.fin_style = fin_style
         self.caudal_style = fin_style if caudal_style is None else caudal_style
+        self._caudal_inherits_style = caudal_style is None
         self.eye = eye                        # (t, height 0=flank 1=spine, radius/length)
         # A ring of skin round the eye socket: an RGB colour, or a dict adding `width`
         # (ring thickness as a fraction of the eye's radius, default 0.55) and
@@ -212,6 +313,37 @@ class Species:
         self.pose = pose
         self.swim = swim
         self.fin_rate = fin_rate
+        # Last, because a colourway is checked against the values it is repainting.
+        self.colorways = _checked_colorways(colorways, self)
+
+    def colorway(self, name):
+        """This species repainted, as a species in its own right.
+
+        A colourway states only the fields it changes, so a scheme reads as the handful
+        of colours that differ rather than as a second copy of the animal — and a change
+        to the shape reaches every scheme without being restated. The result is a real
+        `Species`, so everything downstream of here is unaware that colourways exist.
+        """
+        if name not in self.colorways:
+            raise KeyError(
+                f"{self.name} has no colourway {name!r}; it has "
+                f"{sorted(self.colorways) or 'none'}"
+            )
+        painted = copy.copy(self)
+        for field, value in self.colorways[name].items():
+            setattr(painted, field, value)
+        # The caudal's colour and style were resolved from the body fins' at construction
+        # if they were not stated, and a repaint of `fin_color` has to carry them with it —
+        # otherwise a blue fish keeps a red tail and nothing says why.
+        if self._caudal_inherits_color:
+            painted.caudal_color = painted.fin_color
+        if self._caudal_inherits_style:
+            painted.caudal_style = painted.fin_style
+        # A repaint is one look of one animal, not a species of its own: leaving the
+        # colourways on the copy would let `colorway()` be called on a result and quietly
+        # compose two schemes.
+        painted.colorways = {}
+        return painted
 
     def manifest(self, asset):
         """The JSON the runtime reads for sizing, population, and species-specific motion.
@@ -231,6 +363,11 @@ class Species:
             fish["swim"] = self.swim
         if self.fin_rate != 1.0:
             fish["finRate"] = self.fin_rate
+        if self.colorways:
+            # The runtime picks one of these per individual and swaps in the base-colour
+            # atlas baked for it; the first is the one already inside the `.usdz`, so a
+            # runtime that ignores the key still draws a fish that was actually authored.
+            fish["colorways"] = list(self.colorways)
         return {
             "name": self.name,
             "asset": asset,

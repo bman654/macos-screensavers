@@ -1,10 +1,16 @@
 """The materials a fish is made of: skin, fin membrane, eye.
 
-Each one assembles shader nodes in object space rather than sampling a painted texture,
-so a species is a handful of numbers and one material can serve a whole school. The
-marking vocabulary those numbers are spent on — bands, stripes, spots, patches, an eye
-ring, a two-tone split — lives in `markings.py`, along with the node helpers both
-modules use; this file is what turns those masks into a shaded surface.
+Each one assembles shader nodes rather than sampling a painted texture, so a species is a
+handful of numbers and no marking ships as an image authored by hand. The marking
+vocabulary those numbers are spent on — bands, stripes, spots, patches, bony rings, an eye
+ring, a two-tone split — lives in `markings.py`, along with the node helpers both modules
+use; this file is what turns those masks into a shaded surface.
+
+Almost all of it is placed in object space. The exceptions read a UV, and they read it
+through `markings._uv`, which names the layer: a bake replaces the render layer with the
+atlas's own, so a material that asks for "the UV" paints something different into the
+atlas than it drew in the viewport. `bake.py`'s docstring has the full story and what it
+already cost.
 
 `_ramp` and `_set` are re-exported here deliberately: `surfaces.py` imports them from
 this module and they are the two helpers every material in the package needs.
@@ -16,9 +22,15 @@ import bpy
 
 from .markings import (  # noqa: F401  (_ramp/_set are re-exported for surfaces.py)
     _BLACK, _WHITE, _Flank, _add_bands, _add_diagonals, _add_eye_ring, _add_patches,
-    _add_split, _add_spots, _add_stripes, _as_dicts, _fields, _mask_stops, _math,
-    _mix_color, _patch_mask, _ramp, _ramp_node, _set, _spot_mask,
+    _add_rings, _add_split, _add_spots, _add_stripes, _as_dicts, _fields, _mask_stops,
+    _math, _mix_color, _patch_mask, _ramp, _ramp_node, _set, _spot_mask, _uv,
 )
+
+# The UV layer every authored coordinate is written into: the fin grid's (along, out),
+# and a swept body's (along, around). One layer, because Blender's join merges layers by
+# name and a second one would leave each material reading whichever the join happened to
+# mark for render. `build_fish.py` writes it; the default is here so the two cannot drift.
+AUTHORED_UV = "UVMap"
 
 
 def fish_material(
@@ -41,6 +53,8 @@ def fish_material(
     diagonal_stripes=None,
     spots=None,
     patches=None,
+    rings=None,
+    uv_layer=AUTHORED_UV,
     split=None,
     mouth=None,
     mouth_color=(0.10, 0.035, 0.025),
@@ -71,9 +85,15 @@ def fish_material(
     * `patches` last, because they are placed by hand for a reason: a face mask or a
       saddle is meant to cover whatever is underneath it.
 
-    `mouth` and `eye_ring` are drawn after all of those, on the same reasoning: they
-    belong to a feature that exists at a fixed place on the head, so nothing scattered
-    over the flank may cross them.
+    `rings` comes after even those, because it is not paint. A bony ring's joint is a
+    crease in the animal, and a crease crosses whatever happens to be painted over it —
+    which is also why it is the one marking that returns a height as well as a colour.
+    It needs `uv_layer` to exist on the mesh, which today means a swept body; see
+    `_add_rings`.
+
+    `mouth` and `eye_ring` are drawn last of all, on the same reasoning as `patches` but
+    stronger: they belong to a feature that exists at a fixed place on the head, so
+    nothing scattered over the flank may cross them.
     """
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
@@ -114,6 +134,11 @@ def fish_material(
         base_color = _add_spots(nt, flank, base_color, spots)
     if patches:
         base_color = _add_patches(nt, flank, base_color, patches)
+    ring_height = None
+    if rings:
+        base_color, ring_height = _add_rings(
+            nt, _uv(nt, uv_layer, (-1200, -2100)), base_color, rings
+        )
     if mouth:
         center, radii = mouth
         mask = _patch_mask(nt, coord, center, radii, location=(-1000, -680))
@@ -159,6 +184,21 @@ def fish_material(
     _set(bump, "Strength", scale_depth)
     _set(bump, "Distance", body_length * 0.02)
     links.new(voronoi.outputs["Distance"], bump.inputs["Height"])
+    surface_normal = bump.outputs["Normal"]
+
+    if ring_height is not None:
+        # Chained rather than summed into the scale height: the two reliefs are at
+        # different depths and in different units — one is a Voronoi distance, the other a
+        # signed ridge field — and adding them would make either one's depth a function of
+        # the other's. `rings.depth` and its siblings are the weights within the ring
+        # relief; this is how deep the whole of it cuts.
+        ring_bump = nodes.new("ShaderNodeBump")
+        ring_bump.location = (-360, -420)
+        _set(ring_bump, "Strength", 1.0)
+        _set(ring_bump, "Distance", body_length * 0.010)
+        links.new(ring_height, ring_bump.inputs["Height"])
+        links.new(surface_normal, ring_bump.inputs["Normal"])
+        surface_normal = ring_bump.outputs["Normal"]
 
     # Iridescence: a grazing-angle sheen only. The Facing output covers everything
     # pointing at the camera, which washes the whole animal out; Fresnel confines the
@@ -211,7 +251,7 @@ def fish_material(
     _set(bsdf, "Subsurface Radius",
          (body_length * 0.020, body_length * 0.012, body_length * 0.008))
     links.new(sheen, bsdf.inputs["Base Color"])
-    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    links.new(surface_normal, bsdf.inputs["Normal"])
 
     output = nodes.new("ShaderNodeOutputMaterial")
     output.location = (460, 60)
@@ -248,7 +288,8 @@ def _along_stops(entries, color, tip_color):
 
 def fin_material(name, color, tip_color=None, along_colors=None, edge_color=None,
                  edge_width=0.10, opacity=0.92, spots=None, ray_count=26.0,
-                 ray_contrast=0.5, roughness=0.52, translucency=0.08):
+                 ray_contrast=0.5, roughness=0.52, translucency=0.08,
+                 uv_layer=AUTHORED_UV):
     """A fin membrane: root-to-tip gradient, bright margin, fin rays, optional spots.
 
     Colour is driven by the fin's own UV, whose V runs 0 at the root to 1 at the
@@ -281,12 +322,11 @@ def fin_material(name, color, tip_color=None, along_colors=None, edge_color=None
     nodes, links = nt.nodes, nt.links
     nodes.clear()
 
-    coord = nodes.new("ShaderNodeTexCoord")
-    coord.location = (-1100, 0)
+    coordinate = _uv(nt, uv_layer, (-1100, 0))
 
     uv = nodes.new("ShaderNodeSeparateXYZ")
     uv.location = (-920, 0)
-    links.new(coord.outputs["UV"], uv.inputs["Vector"])
+    links.new(coordinate, uv.inputs["Vector"])
     along, out = uv.outputs["X"], uv.outputs["Y"]
 
     # Rays run root to tip, so they are bands across U. The wave texture's scale is in
@@ -299,7 +339,7 @@ def fin_material(name, color, tip_color=None, along_colors=None, edge_color=None
     _set(rays, "Scale", ray_count * pi / 20.0)
     _set(rays, "Distortion", 0.8)
     _set(rays, "Detail", 1.0)
-    links.new(coord.outputs["UV"], rays.inputs["Vector"])
+    links.new(coordinate, rays.inputs["Vector"])
 
     lo = 1.0 - 0.35 * ray_contrast
     ray_shade = _ramp_node(nt, rays.outputs["Fac"],
@@ -348,7 +388,7 @@ def fin_material(name, color, tip_color=None, along_colors=None, edge_color=None
             p = _fields(params, ("color",),
                         dict(count=7.0, size=0.34, coverage=0.8, softness=0.4, seed=0.0),
                         "fin spots")
-            mask = _spot_mask(nt, coord.outputs["UV"], float(p["count"]), p["size"],
+            mask = _spot_mask(nt, coordinate, float(p["count"]), p["size"],
                               p["coverage"], p["softness"], float(p["seed"]),
                               location=(-900, -900))
             color_out = _mix_color(nt, color_out, mask, p["color"], (60, 60))

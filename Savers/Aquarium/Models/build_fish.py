@@ -25,6 +25,7 @@ from saverlib import (  # noqa: E402
     dorsal_root, eye_material, fin_material, fish_material, flank_root, studio,
     ventral_root,
 )
+from saverlib import materials  # noqa: E402
 from saverlib.bake import (  # noqa: E402
     DEFAULT_MARGIN,
     DEFAULT_RESOLUTION,
@@ -58,6 +59,14 @@ _EYE_RINGS = 12
 # middle of the pipeline and a UV set is the only one that survives the end of it.
 _PART_CHANNEL = "displayColor"
 _PART_UV = "st1"
+
+# The layer every authored surface coordinate goes into: the fin grid's (along, out), the
+# eye spheres' own sphere UV, and a swept body's (along, around). One name, because
+# Blender's join merges UV layers by name — a second layer would leave each material
+# reading whichever one the join happened to mark for render — and because a material has
+# to *name* the layer it samples or a bake silently redirects it to the atlas's own
+# coordinates (`saverlib.bake`'s module docstring has what that costs).
+_MATERIAL_UV = materials.AUTHORED_UV
 
 # Part ids ride in R. Both ends of the range are reserved: 0 is "no part", and 1 is what
 # Blender's join fills in for a mesh that arrived without the attribute at all — so a real id
@@ -116,7 +125,10 @@ def build(spec):
     root = bpy.data.objects.new(f"Fish_{spec.name}", None)
     bpy.context.collection.objects.link(root)
 
-    body_obj = body.build(f"{spec.name}_body", subsurf=_BODY_SUBSURF)
+    # A swept body writes its own (along, around) coordinate; a lofted one has no need of
+    # one, because every marking it can carry is placed in object space. See `_add_rings`.
+    body_obj = body.build(f"{spec.name}_body", subsurf=_BODY_SUBSURF,
+                          **({"uv": _MATERIAL_UV} if spec.is_swept else {}))
     body_obj.parent = root
 
     belly, mid, back = spec.colors
@@ -138,6 +150,8 @@ def build(spec):
         diagonal_stripes=spec.diagonal_stripes,
         spots=spec.spots,
         patches=spec.patches,
+        rings=spec.rings,
+        uv_layer=_MATERIAL_UV,
         split=spec.split,
         mouth=spec.mouth,
         mouth_color=spec.mouth_color,
@@ -154,6 +168,11 @@ def build(spec):
     for obj in _build_eyes(spec, body):
         obj.parent = root
         assign(obj, iris)
+
+    # A material that samples `_MATERIAL_UV` gets zeros, not an error, if the mesh never
+    # wrote it — which draws every ring joint and keel at full strength over the whole
+    # animal, or a fin with no rays at all. Both look like a design choice.
+    _require_uv(body_obj, when="rings" if spec.rings else None)
 
     # Everything that is not a labelled moving part still has to say so. A mesh that reaches
     # the join without the channel is filled *white* by Blender, which is the id the shader
@@ -312,7 +331,18 @@ def _part_uv(joined):
     return channel
 
 
-def _fin_uv(obj, samples_u, samples_v, name="UVMap"):
+def _require_uv(obj, when):
+    """Refuse a mesh whose material will read a UV layer the mesh does not carry."""
+    if when and _MATERIAL_UV not in obj.data.uv_layers:
+        raise RuntimeError(
+            f"'{obj.name}' carries {[layer.name for layer in obj.data.uv_layers]} but its "
+            f"material reads '{_MATERIAL_UV}' for {when}; a missing layer samples as zero "
+            f"and renders as a marking drawn everywhere at once"
+        )
+    return obj
+
+
+def _fin_uv(obj, samples_u, samples_v, name=_MATERIAL_UV):
     """Write the fin's own (along-root, root-to-tip) coordinate into a UV layer.
 
     `build_fin` lays its grid out as one column of v per u, so a vertex's index still
@@ -409,7 +439,7 @@ def _build_fins(spec, body):
                 _hinged_channel(obj, f, root, _PECTORAL_IDS[side])
             fins.append((obj, attr, f))
 
-    return [(_fin_uv(obj, f.samples_u, f.samples_v), kind, f)
+    return [(_require_uv(_fin_uv(obj, f.samples_u, f.samples_v), when="fin rays"), kind, f)
             for obj, kind, f in fins]
 
 
@@ -517,6 +547,10 @@ def _join(fish, spec):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--species", default="clownfish", choices=sorted(CATALOG))
+    parser.add_argument("--colorway", default=None,
+                        help="build this species repainted in one of its colourways; the "
+                             "baked atlas is named after it, so a colourway's textures "
+                             "land beside the default's instead of overwriting them")
     parser.add_argument("--out", default=os.path.join(_REPO, "build", "fish"))
     parser.add_argument("--render", action="store_true", help="studio turntable")
     parser.add_argument("--preview", action="store_true", help="underwater lighting")
@@ -547,6 +581,14 @@ def main():
         parser.error("--export requires the production joined mesh; remove --no-join")
 
     spec = CATALOG[args.species]
+    # A colourway is a repaint of one animal, so it is resolved to an ordinary species
+    # here and nothing below this line is aware of the distinction. The atlas keeps the
+    # colourway in its name; the mesh is identical either way, which is the whole reason
+    # a colourway can ship as one image rather than as a second model.
+    atlas_name = spec.name
+    if args.colorway:
+        spec = spec.colorway(args.colorway)
+        atlas_name = f"{spec.name}_{args.colorway}"
 
     studio.reset_scene()
     studio.setup_render(resolution=(900, 700), samples=args.samples)
@@ -568,7 +610,7 @@ def main():
         paths = bake_atlas(
             joined,
             texture_dir,
-            atlas_name=spec.name,
+            atlas_name=atlas_name,
             resolution=args.resolution,
             margin=args.margin,
             uv_margin=args.uv_margin,

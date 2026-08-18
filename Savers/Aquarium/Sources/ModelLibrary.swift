@@ -7,6 +7,7 @@
 // code has to survive a manifest it has never seen: one bad file skips one model, and a
 // missing index leaves an empty tank rather than a black screen.
 
+import CoreGraphics
 import Foundation
 import SceneKit
 import simd
@@ -102,9 +103,10 @@ struct FishSpec: Decodable {
     let pose: FishPose
     let swim: Float
     let finRate: Float
+    let colorways: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case bodyLength, school, depthBand, weight, pose, swim, finRate
+        case bodyLength, school, depthBand, weight, pose, swim, finRate, colorways
     }
 
     init(from decoder: Decoder) throws {
@@ -117,6 +119,7 @@ struct FishSpec: Decodable {
         pose = poseName.flatMap(FishPose.init(rawValue:)) ?? .level
         swim = try container.decodeIfPresent(Float.self, forKey: .swim) ?? 1
         finRate = try container.decodeIfPresent(Float.self, forKey: .finRate) ?? 1
+        colorways = try container.decodeIfPresent([String].self, forKey: .colorways) ?? []
     }
 }
 
@@ -236,6 +239,7 @@ struct ModelLibrary {
 final class ModelCache {
     private var loaded: [String: LoadedModel] = [:]
     private let directory: URL
+    private let colorwayImages: FishColorwayCache
 
     struct LoadedModel {
         let template: SCNNode
@@ -270,7 +274,17 @@ final class ModelCache {
         }
     }
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL) {
+        self.directory = directory
+        colorwayImages = FishColorwayCache(directory: directory)
+    }
+
+    /// The base-colour atlas for one of a species' colourways, or nil to keep the one already
+    /// baked into its model. Cached here beside the models because a colourway is drawn per
+    /// individual and a school can land on the same one many times.
+    func baseColor(manifestName: String, colorway: String) -> CGImage? {
+        colorwayImages.baseColor(manifestName: manifestName, colorway: colorway)
+    }
 
     /// Nil when the asset is missing or unreadable, which drops one model from the tank.
     func model(named asset: String) -> LoadedModel? {

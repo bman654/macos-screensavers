@@ -38,8 +38,10 @@ class SweptTube:
             raise ValueError("rings must be at least 2")
         if segments < 3:
             raise ValueError("segments must be at least 3")
-        if len(section) != 2:
-            raise ValueError("section must contain width and height scale profiles")
+        if len(section) not in (2, 3):
+            raise ValueError(
+                "section must be (width, height) or (width, up, down) scale profiles"
+            )
         if cap_rings < 1:
             raise ValueError("cap_rings must be at least 1")
 
@@ -47,7 +49,14 @@ class SweptTube:
         self.radius = as_profile(radius)
         self.rings = int(rings)
         self.segments = int(segments)
-        self.section = (as_profile(section[0]), as_profile(section[1]))
+        # Width, and the height above and below the axis. A body whose back and belly are
+        # different depths is not a radius profile — the axis is the path, and the path
+        # cannot be off-centre in its own frame — so it is a section that reaches further
+        # one way than the other. A seahorse is the case: a crest over the head and a pot
+        # belly under the trunk, on the same swept curve. Stating two profiles keeps the
+        # symmetric case unchanged.
+        self.section = (as_profile(section[0]), as_profile(section[1]),
+                        as_profile(section[2] if len(section) == 3 else section[1]))
         self.exponent = as_profile(exponent)
         self.caps = bool(caps)
         if isinstance(rounded_caps, (tuple, list)):
@@ -80,6 +89,8 @@ class SweptTube:
             raise ValueError("section width scale must stay positive")
         if min(self.section[1].ys) <= 0.0:
             raise ValueError("section height scale must stay positive")
+        if min(self.section[2].ys) <= 0.0:
+            raise ValueError("section lower height scale must stay positive")
         if min(self.exponent.ys) <= 0.0:
             raise ValueError("section exponent must stay positive")
 
@@ -119,20 +130,44 @@ class SweptTube:
         y, z = self._section_point(t, theta, 1.0)
         return self.point(t) + normal * y + binormal * z
 
-    def build(self, name="Tube", subsurf=1):
-        """Build and link the tube mesh, returning its Blender object."""
+    def build(self, name="Tube", subsurf=1, uv=None):
+        """Build and link the tube mesh, returning its Blender object.
+
+        `uv` names a UV layer to write the sweep's own coordinates into: U is the
+        normalized arc position along the path and V the fraction of the way round the
+        section, starting at the flank where `ring_angles` starts. Nothing else can
+        recover those afterwards — the sweep is the only place both numbers are known,
+        and on a body that doubles back on itself no object-space coordinate stands in
+        for either. It is what lets a marking be placed along a curled animal at all.
+
+        A rounded cap sits *past* the end of the path, so its U runs outside 0..1 — the
+        arc it adds, over the path's own length. Giving the whole cap `t` instead would
+        collapse it to one coordinate, and a marking that repeats in U would then paint
+        the entire tip with whatever it happens to draw at exactly 0 or 1.
+        """
         angles = ring_angles(self.segments)
         bm = bmesh.new()
         rings = []
+        # BMVert -> (u, segment index), or a segment index of None for a cap's pole,
+        # which sits on the axis and so has no angle of its own.
+        coordinates = {} if uv else None
+
+        def ring(t, center, frame, scale=1.0, u=None):
+            vertices = self._mesh_ring(bm, angles, t, center, frame, scale)
+            if coordinates is not None:
+                position = t if u is None else u
+                coordinates.update((vertex, (position, index))
+                                   for index, vertex in enumerate(vertices))
+            return vertices
 
         if self.caps and self.rounded_caps[0]:
-            rings.extend(self._rounded_cap_rings(bm, angles, start=True))
+            rings.extend(self._rounded_cap_rings(bm, angles, start=True, ring=ring))
 
         for index, (t, center) in enumerate(zip(self.ts, self.points)):
-            rings.append(self._mesh_ring(bm, angles, t, center, self.frames[index], 1.0))
+            rings.append(ring(t, center, self.frames[index]))
 
         if self.caps and self.rounded_caps[1]:
-            rings.extend(self._rounded_cap_rings(bm, angles, start=False))
+            rings.extend(self._rounded_cap_rings(bm, angles, start=False, ring=ring))
 
         for previous, current in zip(rings, rings[1:]):
             _bridge_rings(bm, previous, current)
@@ -148,8 +183,16 @@ class SweptTube:
                 if self.rounded_caps[1]
                 else self.points[-1]
             )
-            _cap_ring(bm, bm.verts.new(start_pole), rings[0])
-            _cap_ring(bm, bm.verts.new(end_pole), rings[-1])
+            reach = self._cap_reach()
+            for pole, position, capped in ((start_pole, -reach[0], rings[0]),
+                                           (end_pole, 1.0 + reach[1], rings[-1])):
+                vertex = bm.verts.new(pole)
+                if coordinates is not None:
+                    coordinates[vertex] = (position, None)
+                _cap_ring(bm, vertex, capped)
+
+        if uv:
+            self._write_uv(bm, coordinates, uv)
 
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
         mesh = bpy.data.meshes.new(name)
@@ -173,12 +216,13 @@ class SweptTube:
             theta,
             radius * self.section[0](t),
             radius * self.section[1](t),
-            radius * self.section[1](t),
+            radius * self.section[2](t),
             self.exponent(t),
         )
 
     def _cap_depth(self, t):
-        section_scale = math.sqrt(self.section[0](t) * self.section[1](t))
+        height = 0.5 * (self.section[1](t) + self.section[2](t))
+        section_scale = math.sqrt(self.section[0](t) * height)
         return self.radius_at(t) * section_scale
 
     def _mesh_ring(self, bm, angles, t, center, frame, scale):
@@ -189,21 +233,69 @@ class SweptTube:
             vertices.append(bm.verts.new(center + normal * y + binormal * z))
         return vertices
 
-    def _rounded_cap_rings(self, bm, angles, start):
+    def _rounded_cap_rings(self, bm, angles, start, ring=None):
         index = 0 if start else -1
         t = 0.0 if start else 1.0
         sign = -1.0 if start else 1.0
         values = range(self.cap_rings, 0, -1) if start else range(1, self.cap_rings + 1)
+        make = ring or (
+            lambda t, center, frame, scale=1.0, u=None:
+            self._mesh_ring(bm, angles, t, center, frame, scale)
+        )
+        reach = self._cap_reach()[0 if start else 1]
         rings = []
         for step in values:
             angle = 0.5 * math.pi * step / (self.cap_rings + 1)
             center = self.points[index] + self.tangents[index] * (
                 sign * self._cap_depth(t) * math.sin(angle)
             )
-            rings.append(
-                self._mesh_ring(bm, angles, t, center, self.frames[index], math.cos(angle))
-            )
+            rings.append(make(t, center, self.frames[index], math.cos(angle),
+                              u=t + sign * reach * math.sin(angle)))
         return rings
+
+    def _cap_reach(self):
+        """How far past each end a rounded cap goes, as a fraction of the path's length.
+
+        The caps are the only part of the surface with no `t` of its own, and this is what
+        gives them one: a coordinate that keeps going in the direction the path was headed.
+        """
+        length = sum((b - a).length for a, b in zip(self.points, self.points[1:]))
+        if length <= _EPSILON:
+            return (0.0, 0.0)
+        return (self._cap_depth(0.0) / length if self.rounded_caps[0] else 0.0,
+                self._cap_depth(1.0) / length if self.rounded_caps[1] else 0.0)
+
+    def _write_uv(self, bm, coordinates, name):
+        """Lay the sweep's (arc, angle) onto the built faces as a UV layer.
+
+        Per *loop* rather than per vertex, because the ring closes: the face that joins
+        the last segment back to the first shares its vertices with the face before it,
+        and a per-vertex V would have to be both 1 and 0 there. Reading segment 0 as
+        `segments` on that face alone is what makes V run cleanly 0..1 round the section
+        instead of racing back through every other value in one quad.
+        """
+        layer = bm.loops.layers.uv.new(name)
+        segments = self.segments
+        for face in bm.faces:
+            indices = [coordinates[loop.vert][1] for loop in face.loops
+                       if coordinates[loop.vert][1] is not None]
+            seam = bool(indices) and min(indices) == 0 and max(indices) == segments - 1
+            around = []
+            for loop in face.loops:
+                index = coordinates[loop.vert][1]
+                if index is None:
+                    around.append(None)
+                else:
+                    around.append(
+                        (index + segments if seam and index == 0 else index) / segments
+                    )
+            known = [value for value in around if value is not None]
+            # A pole belongs to every angle at once, so it takes the mean of the ring
+            # vertices it is capping in this face.
+            pole = sum(known) / len(known) if known else 0.0
+            for loop, value in zip(face.loops, around):
+                loop[layer].uv = (coordinates[loop.vert][0],
+                                  pole if value is None else value)
 
 
 class BranchSpec:
