@@ -12,6 +12,7 @@ outer edge trails backwards (`rake`), and how much the membrane curves out of pl
 
 import bmesh
 import bpy
+from math import pi
 from mathutils import Vector
 
 from .body import shade_smooth
@@ -116,23 +117,33 @@ def build_fin(
     return obj
 
 
-def dorsal_root(body, t0, t1, sink=0.15):
-    """Attachment along the back. `sink` pulls the root inside the body so the fin
-    emerges from the flesh instead of balancing on top of it."""
+def _seated_root(body, t0, t1, theta, sink):
+    """A root on the body's own surface at cross-section angle `theta`, pulled `sink` of
+    the way back towards the axis so the fin emerges from the flesh instead of balancing
+    on it.
+
+    Stated as "surface, moved towards the axis" rather than as "top_z minus a fraction of
+    top" because the two are the same number on a lofted body and only the first one is
+    still true on a `CurvedBody`, whose surface is not directly above its axis wherever
+    the path bends. `Body.axis_point` is the query that makes both cases one expression.
+    """
 
     def root(u):
         t = t0 + (t1 - t0) * u
-        return Vector((body.x(t), 0.0, body.top_z(t) - body.spec.top(t) * sink))
+        surface = body.surface_point(t, theta)
+        return surface + (body.axis_point(t) - surface) * sink
 
     return root
+
+
+def dorsal_root(body, t0, t1, sink=0.15):
+    """Attachment along the back."""
+    return _seated_root(body, t0, t1, pi / 2.0, sink)
 
 
 def ventral_root(body, t0, t1, sink=0.15):
-    def root(u):
-        t = t0 + (t1 - t0) * u
-        return Vector((body.x(t), 0.0, body.bottom_z(t) + body.spec.bottom(t) * sink))
-
-    return root
+    """Attachment along the belly."""
+    return _seated_root(body, t0, t1, -pi / 2.0, sink)
 
 
 def flank_root(body, t0, t1, theta, side=1.0, sink=0.25):

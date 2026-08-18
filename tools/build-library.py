@@ -18,11 +18,19 @@ _MODELS = _REPO / "Savers" / "Aquarium" / "Models"
 _ASSETS = _REPO / "Savers" / "Aquarium" / "Assets"
 _RUN_BLENDER = _REPO / "tools" / "blender" / "run.sh"
 _ERROR = re.compile(r"Error|Traceback")
-_BUDGET_BYTES = 40_000_000
+# Raised from 40 MB when the lionfish and the seahorse landed, 2026-08-18. The two of them
+# are 2.6 MB and took the library to 41.9, so the old ceiling was not a limit that had been
+# reached by waste — it was one the library had simply grown past. The headroom is deliberate:
+# set to 44 it would have to move again for the next model, and a budget that is edited every
+# time it fires is not a budget. The number that would actually hurt is the saver bundle a
+# user installs, and the props are where the weight is — `sunken_ship` alone is 5.8 MB against
+# 1.4 for the heaviest fish.
+_BUDGET_BYTES = 48_000_000
 
 # USD validation runs outside Blender, so importing `build_fish.py` would also import `bpy`.
-# Keep these coupled explicitly to build_fish.py's `_NO_PART` and `_PECTORAL_IDS` instead.
-_FISH_PART_IDS = (0.0, 0.25, 0.35)
+# Keep these coupled explicitly to build_fish.py's `_NO_PART`, `_PECTORAL_IDS` and
+# `_RIPPLE_ID` instead.
+_FISH_PART_IDS = (0.0, 0.25, 0.35, 0.45)
 _PART_ID_TOLERANCE = 1e-3
 _USD_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 

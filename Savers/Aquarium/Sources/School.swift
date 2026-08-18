@@ -39,10 +39,14 @@ private final class Fish {
     /// The swim wave's amplitude in the *model's* object space at cruise, which is where the
     /// shader works. Scaled by effort each frame.
     let baseAmplitude: Float
+    /// Species multiplier for the body wave. Zero leaves the authored body perfectly rigid.
+    let swimScale: Float
     /// Half the larger cross-section extent, in world metres. What decides whether this animal
     /// fits a hole — see `ModelCache.LoadedModel.girth`.
     let girth: Float
     let isLurker: Bool
+    let isDrifter: Bool
+    let finRate: Float
 
     var position = SIMD3<Float>(repeating: 0)
     /// The heading, carried as angles rather than as a vector. See `Steering.shortestDelta` for
@@ -106,8 +110,8 @@ private final class Fish {
     var trailMarkers: SpineTrailMarkers?
 
     init(node: SCNNode, materials: [SCNMaterial], length: Float, depthBand: Span,
-         laneRange: ClosedRange<Int>, baseAmplitude: Float, girth: Float, isLurker: Bool,
-         meshFromBody: simd_float4x4) {
+         laneRange: ClosedRange<Int>, baseAmplitude: Float, swimScale: Float, girth: Float,
+         isLurker: Bool, isDrifter: Bool, finRate: Float, meshFromBody: simd_float4x4) {
         self.node = node
         self.materials = materials
         self.length = length
@@ -115,8 +119,11 @@ private final class Fish {
         self.limits = SwimLimits(length: length)
         self.laneRange = laneRange
         self.baseAmplitude = baseAmplitude
+        self.swimScale = swimScale
         self.girth = girth
         self.isLurker = isLurker
+        self.isDrifter = isDrifter
+        self.finRate = finRate
         self.meshFromBody = meshFromBody
     }
 
@@ -218,7 +225,8 @@ final class School {
             let size = max(1, min(min(count - spawned, wanted), speciesCap))
             for member in 0..<size {
                 let fish = makeFish(from: model, spec: spec, lanes: lanes,
-                                    isLurker: manifest.isLurker)
+                                    isLurker: manifest.isLurker,
+                                    isDrifter: manifest.isDrifter)
                 // A site-attached species belongs to an anemone if the launch drew one, and
                 // swims like anything else if it did not. Every member of the school takes the
                 // same host: a shoal of clownfish spread over three anemones is three pairs,
@@ -525,7 +533,7 @@ final class School {
 
             let sculling = School.pectoralStroke(behavior: fish.brain.behavior, effort: effort,
                                                  length: fish.length)
-            fish.finPhase += sculling.hertz * 2 * .pi * dt
+            fish.finPhase += sculling.hertz * fish.finRate * 2 * .pi * dt
             if fish.finPhase > 2 * .pi { fish.finPhase -= 2 * .pi }
             fish.finAmplitude += (sculling.amplitude - fish.finAmplitude)
                 * min(1, School.finEasing * dt)
@@ -956,7 +964,8 @@ final class School {
         // nose. Composed as quaternions rather than as Euler angles because `eulerAngles`
         // fixes an order this does not want and gets silently reinterpreted the moment a
         // second axis becomes non-zero — which, before this change, none of them was.
-        let yaw = simd_quatf(angle: fish.yaw + 0.10 * sin(fish.swimPhase),
+        let yaw = simd_quatf(angle: fish.yaw
+                             + 0.10 * fish.swimScale * sin(fish.swimPhase),
                              axis: SIMD3<Float>(0, 1, 0))
         let pitch = simd_quatf(angle: fish.pitch + fish.brain.inspect,
                                axis: SIMD3<Float>(0, 0, 1))
@@ -983,7 +992,8 @@ final class School {
         // invisible. Real fish yaw their heads in recoil against the tail, and borrowing that is
         // what makes the deformation read from the front-on view of the tank.
         let effort = min(max(fish.speed / max(fish.cruiseSpeed, 1e-4), 0.25), 1.8)
-        let amplitude = fish.baseAmplitude * min(max(0.45 + 0.55 * effort, 0.45), 1.6)
+        let amplitude = fish.baseAmplitude * fish.swimScale
+            * min(max(0.45 + 0.55 * effort, 0.45), 1.6)
         // **Written for a lurker and for nothing else.** Every other fish keeps `spineOn` at
         // the zero its materials were built with and is provably untouched by this: no code
         // path writes a spine matrix for a fish whose `trail` is nil.
@@ -1050,7 +1060,8 @@ final class School {
         BehaviorContext(position: fish.position, yaw: fish.yaw, length: fish.length,
                         bounds: bounds, surface: surface, lanes: lanes,
                         laneRange: fish.laneRange, hosts: hosts, passages: passages,
-                        girth: fish.girth, isLurker: fish.isLurker)
+                        girth: fish.girth, isLurker: fish.isLurker,
+                        isDrifter: fish.isDrifter)
     }
 
     /// Evaluates `time * rate + offset` in `Double` and reduces it into one period before it
@@ -1084,7 +1095,7 @@ final class School {
     }
 
     private func makeFish(from model: ModelCache.LoadedModel, spec: FishSpec,
-                          lanes: SwimLanes, isLurker: Bool) -> Fish {
+                          lanes: SwimLanes, isLurker: Bool, isDrifter: Bool) -> Fish {
         let instance = model.template.clone()
 
         // `clone()` shares geometry *and* materials with the original. Each fish needs its
@@ -1106,7 +1117,8 @@ final class School {
                 material.setValue(NSNumber(value: 0.0), forKey: "swimPhase")
                 // Amplitude is in the model's own object space, so it scales with the source
                 // mesh, not with the fish's world size.
-                material.setValue(NSNumber(value: model.length * 0.11), forKey: "swimAmplitude")
+                material.setValue(NSNumber(value: model.length * 0.11 * spec.swim),
+                                  forKey: "swimAmplitude")
                 material.setValue(NSNumber(value: 1.15), forKey: "swimWaves")
                 material.setValue(NSNumber(value: model.minBound.x), forKey: "bodyMinX")
                 material.setValue(NSNumber(value: model.length), forKey: "bodyLength")
@@ -1138,7 +1150,19 @@ final class School {
         // sends the mesh's +Y (its left) to -Z and its +Z (its up) to +Y — the same handedness
         // the bank in `steer` is derived from, and this line said +Z for a while.
         let pivot = SCNNode()
-        pivot.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
+        if spec.pose == .upright {
+            // **The order is the animal's pose.** The existing -90° X correction sends mesh
+            // +X → +X, +Y → -Z and +Z → +Y; the additional +90° tank-Z roll is applied after
+            // it and sends those results to +Y, -Z and -X respectively. Thus the head (+X) is
+            // tank-up, the back (+Z) is tank-backward, and the lateral axis (+Y) is tank -Z.
+            let meshToTank = simd_quatf(angle: -Float.pi / 2,
+                                        axis: SIMD3<Float>(1, 0, 0))
+            let standUpright = simd_quatf(angle: Float.pi / 2,
+                                          axis: SIMD3<Float>(0, 0, 1))
+            pivot.simdOrientation = standUpright * meshToTank
+        } else {
+            pivot.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
+        }
         let bodyLength = min(spec.bodyLength, lengthCap)
         let scale = bodyLength / model.length
         pivot.scale = SCNVector3(scale, scale, scale)
@@ -1150,12 +1174,13 @@ final class School {
         node.addChildNode(pivot)
         let fish = Fish(node: node, materials: materials, length: bodyLength,
                         depthBand: spec.depthBand, laneRange: lanes.lanes(in: spec.depthBand),
-                        baseAmplitude: model.length * 0.11,
+                        baseAmplitude: model.length * 0.11, swimScale: spec.swim,
                         // Girth is measured in the model's own units, so it takes the same scale
                         // the body does — including the cap that shrinks an eel to fit a glass
                         // tank, which is what lets the capped animal through holes the declared
                         // one could not enter.
                         girth: model.girth * scale, isLurker: isLurker,
+                        isDrifter: isDrifter, finRate: spec.finRate,
                         meshFromBody: simd_inverse(pivot.simdTransform * instance.simdTransform))
         if isLurker {
             let trail = SpineTrail(bodyLength: bodyLength)
@@ -1205,6 +1230,7 @@ final class School {
         let depth = near + fraction * (far - near)
 
         fish.pace = rand.inRange(0.75, 1.3)
+            * (fish.isDrifter ? FishBrain.drifterPace : 1)
         // The lane nearest where it actually starts, so its first course is a short correction
         // rather than a march across the tank.
         fish.brain.lane = nearestLane(to: depth, in: fish.laneRange, lanes: lanes)
@@ -1247,14 +1273,18 @@ final class School {
         // at exactly the ceiling — a flat line of animals along the top of the frame. Spending
         // at most half the water on it keeps the school spread, and a big fish cruising low over
         // the gravel is what a small tank actually looks like.
-        let sand = min(ground + fish.girth * Tank.fishFloorClearance + fish.bobAmplitude,
+        let clearance = fish.isDrifter ? Tank.drifterFloorClearance : Tank.fishFloorClearance
+        let sand = min(ground + fish.girth * clearance + fish.bobAmplitude,
                        ceiling / 2)
-        // A lurker begins where it belongs. Spawning it uniformly through the column and waiting
-        // for the behaviour to bring it down wastes the opening seconds — which are the ones that
-        // get looked at — on an eel descending from mid-water like everything else.
-        let top = fish.isLurker
-            ? min(sand, ceiling) + (ceiling - min(sand, ceiling)) * FishBrain.lurkerCeiling
-            : ceiling
+        // **A low-dwelling animal begins where it belongs.** Waiting for its first decision to
+        // bring it down spends the opening seconds — the ones that get looked at — on an eel or
+        // seahorse descending through the open-water school. Their ceilings differ because one
+        // hides at the floor and the other holds among plants.
+        let ceilingFraction: Float? = fish.isLurker ? FishBrain.lurkerCeiling
+            : (fish.isDrifter ? FishBrain.drifterCeiling : nil)
+        let top = ceilingFraction.map {
+            min(sand, ceiling) + (ceiling - min(sand, ceiling)) * $0
+        } ?? ceiling
         let height = rand.inRange(min(sand, ceiling), max(top, min(sand, ceiling)))
         fish.position = SIMD3<Float>(x, bounds.floorY + height, -depth)
         // A lurker's position is its head, and the placement above was worked out for a centre:

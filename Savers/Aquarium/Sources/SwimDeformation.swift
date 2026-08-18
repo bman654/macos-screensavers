@@ -26,7 +26,10 @@ import Foundation
 ///
 /// - **the body wave** — a travelling sine down the body, which is the swimming itself;
 /// - **the pectoral beat** — the two flank fins hinging about their roots. It is zero for every
-///   vertex that is not one of those fins, which is what the part channel decides.
+///   vertex that is not one of those fins, which is what the part channel decides;
+/// - **the dorsal ripple** — a wave travelling along a membrane that undulates on its own,
+///   which is how a seahorse moves at all. Same channel, a third id, and deliberately no
+///   uniforms of its own: see the byte budget below.
 ///
 /// **The spine, for a lurker only.** `spineOn` is written once, at construction, and is 1 for
 /// a lurker and 0 for everything else, so for every other species this whole branch is the dead
@@ -154,6 +157,26 @@ float3 pectoral = reach * (
     + pectoralRight * (sin(rightAngle) * flapRight + (cos(rightAngle) - 1.0) * outRight)
 );
 
+// The rippling dorsal, which is a seahorse's whole propulsion — it does not swim with its
+// body, so if this fin is not seen to beat the animal reads as a drifting ornament. A wave
+// travels along the membrane rather than the fin flapping rigidly, so it is keyed on
+// `tailward` for position along the root and on `part.y` for how far out from the hinge a
+// vertex sits: the root stays welded to the back and the trailing edge does the moving.
+//
+// **It rides `finPhase` and `finAmplitude` rather than uniforms of its own, and that is a
+// constraint rather than a convenience.** The custom-argument block is 240 bytes against a
+// 256-byte cliff it falls off silently (`spikes/010-shader-uniform-block`), so there is
+// room for exactly one more float in the whole shader and it is not being spent here. The
+// two fins beating together is also true of the animal.
+// The 22 is a wavelength, and it is measured rather than picked: the seahorse's dorsal
+// spans 43% of its `tailward` range, so 22 puts about one and a half waves across the
+// membrane. Six waves — which is what a plausible-looking 90 gives — is not a faster fin,
+// it is a fin that reads as vibrating, and at this mesh's ring spacing it aliases. Retune
+// it against the fin's own span if a second species ever takes this id.
+float rippleFin = step(abs(part.x - 0.45), 0.04);
+float3 ripple = float3(0.0,
+    sin(finPhase * 2.0 - tailward * 22.0) * finAmplitude * reach * rippleFin, 0.0);
+
 if (spineOn > 0.5) {
     // Sample coordinate: how many spine samples back from the nose this vertex sits. The tail
     // tip lands on `SpineTrail.tipSample` by construction — `coverage` is chosen for it — so the
@@ -221,13 +244,13 @@ if (spineOn > 0.5) {
     // The vertex's own offset from the rest axis, plus the wave and the beat, carried in that
     // frame. The distance along the axis is what the spine sample already accounts for.
     float3 local = float3(0.0, _geometry.position.y - spineY + wave, _geometry.position.z - spineZ)
-        + pectoral;
+        + pectoral + ripple;
     _geometry.position.xyz = spine + local.x * forward + local.y * left + local.z * up;
     float3 n = _geometry.normal;
     _geometry.normal = n.x * forward + n.y * left + n.z * up;
 } else {
     _geometry.position.y += wave;
-    _geometry.position.xyz += pectoral;
+    _geometry.position.xyz += pectoral + ripple;
 }
 """
 }

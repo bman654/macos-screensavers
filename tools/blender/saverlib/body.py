@@ -59,6 +59,17 @@ class Body:
     def bottom_z(self, t):
         return self.spec.spine(t) - self.spec.bottom(t)
 
+    def axis_point(self, t):
+        """The centreline point a cross-section is built around.
+
+        Named so that a fin root can be written as "the surface, pulled some fraction of
+        the way back towards the axis" without knowing which kind of body it is on — see
+        `fins.dorsal_root`. For a lofted body the axis is a straight line in X offset by
+        `spine`; for a `CurvedBody` it is an arbitrary curve, and that is the whole of the
+        difference the fin attachment code has to care about.
+        """
+        return Vector((self.x(t), 0.0, self.spec.spine(t)))
+
     def surface_point(self, t, theta):
         y, z = superellipse(
             theta,

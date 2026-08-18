@@ -62,8 +62,17 @@ extension ModelManifest {
     /// Which props a site-attached fish will accept as a home.
     var isHostAnemone: Bool { ModelManifest.hostProps.contains(name) }
 
+    /// Whether this species drifts under fin power instead of swimming through open water.
+    ///
+    /// **Locomotion is species identity, not mesh pose.** The seahorse is also the first upright
+    /// fish, but making `pose` decide speed, depth and passage use would silently give every
+    /// future upright animal the seahorse's ecology. This follows the name-keyed exceptions for
+    /// site attachment and lurking because those are the same kind of behavioural fact.
+    var isDrifter: Bool { ModelManifest.driftingFish.contains(name) }
+
     private static let siteAttachedFish: Set<String> = ["clownfish"]
     private static let hostProps: Set<String> = ["anemone"]
+    private static let driftingFish: Set<String> = ["seahorse"]
 }
 
 /// Everything the decision needs to know about the world, gathered once per fish rather than
@@ -83,6 +92,8 @@ struct BehaviorContext {
     let girth: Float
     /// Whether this species would rather be under something than out in the water.
     let isLurker: Bool
+    /// Whether this species holds station and drifts rather than swimming purposefully.
+    let isDrifter: Bool
 
     /// Water between the fish and whatever is directly under it — gravel, or a rock, or a frond.
     var clearance: Float {
@@ -127,6 +138,16 @@ extension FishBrain {
     /// animal. With the field neutral near the gravel it is a real control again, and 0.18 is
     /// the height a moray actually keeps to — a head in a hole, not a very long tang.
     static let lurkerCeiling: Float = 0.18
+
+    /// The highest a drifter chooses to rise, as a fraction of the water column from the floor.
+    /// Higher than a lurker because a seahorse holds among plants rather than inside a hole, but
+    /// still low enough that it belongs to the planted bottom instead of the open-water school.
+    static let drifterCeiling: Float = 0.26
+
+    /// A seahorse's fin-driven cruise speed as a fraction of an ordinary fish's.
+    /// This scales the animal's pace rather than a decision's effort, so steering authority and
+    /// fin animation still know the difference between hovering, foraging and the rare cruise.
+    static let drifterPace: Float = 0.18
 
     /// How long a fish will keep trying to reach *one* waypoint before abandoning a route.
     ///
@@ -303,14 +324,26 @@ extension FishBrain {
                                max(span.low, column * FishBrain.lurkerCeiling))
         }
 
+        // **A drifter belongs low among the plants.** This is separate from lurking: the
+        // seahorse is not seeking cover and must never inherit the eel's attraction to passages.
+        if context.isDrifter {
+            let span = context.verticalSpan
+            let column = context.bounds.ceilingY(atDepth: -context.position.z)
+                - context.bounds.floorY
+            targetHeight = min(targetHeight,
+                               max(span.low, column * FishBrain.drifterCeiling))
+        }
+
         // Remember which way this decision asks the fish to turn, so the next one can prefer to
         // continue it.
         let delta = Steering.shortestDelta(from: context.yaw, to: targetYaw)
         if abs(delta) > 0.08 { turnSign = delta < 0 ? -1 : 1 }
 
-        // Never leave a fish idling twice running. Two stationary states back to back is a fish
-        // that has stopped rather than one that paused.
-        if previous.isStationary && behavior.isStationary {
+        // Never leave an ordinary fish idling twice running. Two stationary states back to
+        // back is a fish that has stopped rather than one that paused. A drifter is the exception:
+        // holding station and foraging are its locomotion, and shortening both would make it
+        // churn through decisions every 1.5 seconds instead of visibly committing to either.
+        if !context.isDrifter, previous.isStationary && behavior.isStationary {
             remaining = min(remaining, 1.5)
         }
     }
@@ -320,42 +353,57 @@ extension FishBrain {
     private func draw(_ context: BehaviorContext, rand: inout Rand) -> Behavior {
         var options: [(Behavior, Float)] = []
 
-        if host != nil, !context.hosts.isEmpty {
-            // A site-attached fish is not a cruising fish that happens to like an anemone. It
-            // gets the same idling states as anything else and nothing that would take it away.
-            options.append((.host, 6.0))
-            options.append((.hover, 0.9))
-        } else if context.bounds.isEnclosed {
-            // In a tank the fish lives here, so it has no reason to be going anywhere and every
-            // reason to potter. Wandering and cruising are level.
-            options.append((.cruise, 3.0))
-            options.append((.wander, 3.0))
-            options.append((.hover, 1.0))
+        if context.isDrifter {
+            // A seahorse holds station, works along the bottom, and only rarely moves with
+            // purpose. Keeping this draw separate makes darting and passage transit impossible
+            // rather than merely unlikely; neither belongs to an animal propelled by one small
+            // dorsal fin.
+            options.append((.hover, 6.0))
+            // A little wander changes lane and height; without it an animal that mostly hovers
+            // is pinned forever to the exact depth and height where it spawned.
+            options.append((.wander, 0.55))
+            options.append((.cruise, 0.18))
+            if context.clearance < context.length * FishBrain.forageReach {
+                options.append((.forage, 4.5))
+            }
         } else {
-            // In open water a fish is passing through, and the crossing is what puts it on and
-            // off the screen. Weighting cruise heavily is what keeps the ocean's composition
-            // working the way it already did.
-            options.append((.cruise, 5.0))
-            options.append((.wander, 2.0))
-            options.append((.hover, 0.35))
-        }
+            if host != nil, !context.hosts.isEmpty {
+                // A site-attached fish is not a cruising fish that happens to like an anemone. It
+                // gets the same idling states as anything else and nothing that would take it away.
+                options.append((.host, 6.0))
+                options.append((.hover, 0.9))
+            } else if context.bounds.isEnclosed {
+                // In a tank the fish lives here, so it has no reason to be going anywhere and every
+                // reason to potter. Wandering and cruising are level.
+                options.append((.cruise, 3.0))
+                options.append((.wander, 3.0))
+                options.append((.hover, 1.0))
+            } else {
+                // In open water a fish is passing through, and the crossing is what puts it on and
+                // off the screen. Weighting cruise heavily is what keeps the ocean's composition
+                // working the way it already did.
+                options.append((.cruise, 5.0))
+                options.append((.wander, 2.0))
+                options.append((.hover, 0.35))
+            }
 
-        if context.clearance < context.length * FishBrain.forageReach {
-            options.append((.forage, context.bounds.isEnclosed ? 2.2 : 1.2))
-        }
-        if dartCooldown <= 0 {
-            // Raised from 0.15 with the dart's own shape. It is the only thing in the tank that
-            // is both audible and legible as a single act, so it has to happen often enough to
-            // be caught — but it is still the rarest behaviour on offer, because a tank where
-            // something bolts every few seconds is agitated rather than alive.
-            options.append((.dart, 0.34))
-        }
-        if passageCooldown <= 0, nearestPassage(context) != nil {
-            // A lurker is here for this. For everything else a swim-through is a diversion it
-            // takes when one happens to be in front of it, which is why the weight is modest and
-            // the cooldown afterwards is long: the value of watching a fish commit to a hole is
-            // in it being a moment, not a circuit.
-            options.append((.transit, context.isLurker ? 5.0 : 1.2))
+            if context.clearance < context.length * FishBrain.forageReach {
+                options.append((.forage, context.bounds.isEnclosed ? 2.2 : 1.2))
+            }
+            if dartCooldown <= 0 {
+                // Raised from 0.15 with the dart's own shape. It is the only thing in the tank that
+                // is both audible and legible as a single act, so it has to happen often enough to
+                // be caught — but it is still the rarest behaviour on offer, because a tank where
+                // something bolts every few seconds is agitated rather than alive.
+                options.append((.dart, 0.34))
+            }
+            if passageCooldown <= 0, nearestPassage(context) != nil {
+                // A lurker is here for this. For everything else a swim-through is a diversion it
+                // takes when one happens to be in front of it, which is why the weight is modest and
+                // the cooldown afterwards is long: the value of watching a fish commit to a hole is
+                // in it being a moment, not a circuit.
+                options.append((.transit, context.isLurker ? 5.0 : 1.2))
+            }
         }
 
         guard let index = rand.weightedIndex(options, weight: { $0.1 }) else { return .cruise }

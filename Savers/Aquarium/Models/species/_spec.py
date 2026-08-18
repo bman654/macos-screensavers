@@ -7,6 +7,22 @@ numbers, not writing modelling code.
 Profile control points are (t, half-extent) with t=0 at the nose and t=1 at the tail
 base. Markings are placed explicitly in the same t coordinate. Where a value looks
 arbitrary it was arrived at by rendering and adjusting.
+
+**A body is stated one of two ways, and every species picks exactly one.** The usual one
+is `width`/`top`/`bottom` lofted along a straight X axis, which suits any animal whose
+outline is a depth above and below a straight backbone. The other is `path`/`radius`
+swept along a curve, for an animal that doubles back on itself — a seahorse's head is
+bent to a right angle and its tail curls through more than a full turn, neither of which
+is a function of a monotone X. `t` then runs along the path's arc length rather than
+along X, and markings placed by X stop meaning what they say; `saverlib.curved` spells
+out which ones. Stating both or neither is an error rather than a precedence rule,
+because the two describe the same thing and a species that gave both would be saying
+something contradictory.
+
+The numbers here are the animal's *shape*. How it moves is `pose`, `swim` and
+`fin_rate` at the bottom, which the runtime reads out of the manifest — those three are
+the difference between a fish and an animal that stands upright, holds its body rigid
+and drives itself with one fin.
 """
 
 
@@ -33,7 +49,7 @@ class Fin:
     """
 
     def __init__(self, t0, t1, span, rake=0.0, curl=0.0, flare=0.0, sink=0.15,
-                 samples_u=18, samples_v=10, color=None, style=None):
+                 samples_u=18, samples_v=10, color=None, style=None, ripples=False):
         self.t0 = t0
         self.t1 = t1
         self.span = span
@@ -45,6 +61,11 @@ class Fin:
         self.samples_v = samples_v
         self.color = color
         self.style = style
+        # Whether this fin undulates on its own, rather than only riding the body's
+        # wave. Only the dorsal honours it, and only one species asks: a seahorse does
+        # not swim with its body at all, so its dorsal fin is the whole of its
+        # propulsion and has to be seen to beat. See `_RIPPLE_ID` in `build_fish.py`.
+        self.ripples = ripples
 
 
 class Species:
@@ -52,11 +73,16 @@ class Species:
         self,
         name,
         length,
-        width,
-        top,
-        bottom,
         colors,
         fin_color,
+        width=None,
+        top=None,
+        bottom=None,
+        path=None,
+        radius=None,
+        section=(1.0, 1.0),
+        body_up=(0.0, -1.0, 0.0),
+        dorsal_at=0.5,
         spine=0.0,
         exponent=2.4,
         bands=None,
@@ -90,7 +116,17 @@ class Species:
         school=(1, 3),
         depth_band=(0.0, 1.0),
         weight=1.0,
+        pose="level",
+        swim=1.0,
+        fin_rate=1.0,
     ):
+        lofted = width is not None and top is not None and bottom is not None
+        swept = path is not None and radius is not None
+        if lofted == swept:
+            raise ValueError(
+                "a species states its body either as width/top/bottom lofted along X, or "
+                "as path/radius swept along a curve — not both and not neither"
+            )
         if body_length_m <= 0.0:
             raise ValueError("body_length_m must be positive")
         if (len(school) != 2 or not all(isinstance(value, int) for value in school)
@@ -100,9 +136,24 @@ class Species:
             raise ValueError("depth_band must satisfy 0 <= near <= far <= 1")
         if weight <= 0.0:
             raise ValueError("weight must be positive")
+        if pose not in {"level", "upright"}:
+            raise ValueError("pose must be 'level' or 'upright'")
+        if swim < 0.0:
+            raise ValueError("swim must be non-negative")
+        if fin_rate <= 0.0:
+            raise ValueError("fin_rate must be positive")
 
         self.name = name
         self.length = length
+        # A curled animal cannot be described as a depth above and below a straight
+        # backbone — see `saverlib.curved`. `is_swept` is what `build_fish` branches on,
+        # and it is derived rather than declared so the two halves cannot disagree.
+        self.is_swept = swept
+        self.path = path
+        self.radius = radius
+        self.section = section
+        self.body_up = body_up
+        self.dorsal_at = dorsal_at
         self.width = width
         self.top = top
         self.bottom = bottom
@@ -158,17 +209,31 @@ class Species:
         self.school = tuple(school)             # inclusive individuals per populated group
         self.depth_band = tuple(depth_band)     # near/far fractions of the tank depth
         self.weight = weight                    # bias in the random species draw
+        self.pose = pose
+        self.swim = swim
+        self.fin_rate = fin_rate
 
     def manifest(self, asset):
-        """The JSON the runtime reads for sizing and population."""
+        """The JSON the runtime reads for sizing, population, and species-specific motion.
+
+        Motion keys are omitted at their defaults. This keeps every existing manifest stable
+        while an older runtime naturally gets the same level pose and normal animation rates.
+        """
+        fish = {
+            "bodyLength": self.body_length_m,
+            "school": list(self.school),
+            "depthBand": list(self.depth_band),
+            "weight": self.weight,
+        }
+        if self.pose != "level":
+            fish["pose"] = self.pose
+        if self.swim != 1.0:
+            fish["swim"] = self.swim
+        if self.fin_rate != 1.0:
+            fish["finRate"] = self.fin_rate
         return {
             "name": self.name,
             "asset": asset,
             "category": "fish",
-            "fish": {
-                "bodyLength": self.body_length_m,
-                "school": list(self.school),
-                "depthBand": list(self.depth_band),
-                "weight": self.weight,
-            },
+            "fish": fish,
         }

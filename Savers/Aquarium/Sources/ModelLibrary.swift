@@ -42,6 +42,10 @@ enum ModelCategory: String, Decodable {
     case fish, coral, plant, rock, decoration
 }
 
+enum FishPose: String, Decodable {
+    case level, upright
+}
+
 /// What a prop needs to be put somewhere, in metres and degrees.
 struct PlacementSpec: Decodable {
     /// The untilted radius at scale 1.0. **The runtime adds the rest** — see `spacingRadius`.
@@ -95,9 +99,12 @@ struct FishSpec: Decodable {
     /// deep the tank is.
     let depthBand: Span
     let weight: Float
+    let pose: FishPose
+    let swim: Float
+    let finRate: Float
 
     private enum CodingKeys: String, CodingKey {
-        case bodyLength, school, depthBand, weight
+        case bodyLength, school, depthBand, weight, pose, swim, finRate
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +113,10 @@ struct FishSpec: Decodable {
         school = try container.decodeIfPresent(Span.self, forKey: .school) ?? Span(4, 9)
         depthBand = try container.decodeIfPresent(Span.self, forKey: .depthBand) ?? Span(0, 1)
         weight = try container.decodeIfPresent(Float.self, forKey: .weight) ?? 1
+        let poseName = try container.decodeIfPresent(String.self, forKey: .pose)
+        pose = poseName.flatMap(FishPose.init(rawValue:)) ?? .level
+        swim = try container.decodeIfPresent(Float.self, forKey: .swim) ?? 1
+        finRate = try container.decodeIfPresent(Float.self, forKey: .finRate) ?? 1
     }
 }
 

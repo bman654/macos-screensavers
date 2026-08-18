@@ -142,6 +142,17 @@ struct Tank {
     /// and girth track each other, and only changes the ones where they do not.
     static let fishFloorClearance: Float = 5.0
 
+    /// The same margin for an animal that holds station on the bottom rather than cruising past
+    /// it.
+    ///
+    /// **Five girths is a margin, not a clearance, and on a deep-bodied animal it is larger than
+    /// half the water column.** `School.place` clamps the spawn height to `ceiling / 2` for
+    /// safety, so a curled seahorse — as deep front to back as it is tall — came out pinned to
+    /// mid-water beside the tangs, which is the one place a seahorse never is. A drifter is
+    /// meant to be down among the plants, so it starts at the margin the runtime actually
+    /// enforces every frame (`Avoidance.clamp`) instead of the shy one a cruiser is given.
+    static let drifterFloorClearance: Float = 1.5
+
     // MARK: Prop scale — the invariance
 
     /// The width of the frame, in metres, at the middle of the band the reef stands in.

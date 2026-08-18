@@ -21,8 +21,9 @@ _REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 sys.path[:0] = [os.path.join(_REPO, "tools", "blender"), _HERE]
 
 from saverlib import (  # noqa: E402
-    Body, BodySpec, assign, build_fin, caudal_root, dorsal_root, eye_material,
-    fin_material, fish_material, flank_root, studio, ventral_root,
+    Body, BodySpec, CurvedBody, CurvedBodySpec, assign, build_fin, caudal_root,
+    dorsal_root, eye_material, fin_material, fish_material, flank_root, studio,
+    ventral_root,
 )
 from saverlib.bake import (  # noqa: E402
     DEFAULT_MARGIN,
@@ -36,6 +37,9 @@ from species import CATALOG  # noqa: E402
 # Surface relief ships in the normal atlas. At tank scale these meshes need enough geometry
 # for a clean silhouette, not enough to reproduce details that the texture already carries.
 _BODY_RINGS = 40
+# A swept body spends its rings on a path that turns through most of a circle rather
+# than on a nearly straight one, so it needs more of them to stay smooth round the bend.
+_SWEPT_RINGS = 96
 _BODY_SEGMENTS = 16
 _BODY_SUBSURF = 1
 _FIN_SUBSURF = 0
@@ -61,9 +65,38 @@ _PART_UV = "st1"
 # The shader matches with a tolerance window, never with equality.
 _NO_PART = 0.0
 _PECTORAL_IDS = {1.0: 0.25, -1.0: 0.35}
+# A dorsal membrane that undulates on its own. It rides the same `finPhase` and
+# `finAmplitude` the pectorals do rather than asking for uniforms of its own, because
+# the shader's argument block has sixteen spare bytes against a cliff it falls off
+# silently — see `spikes/010-shader-uniform-block/README.md`. A new *id* is free; a new
+# *uniform* very nearly is not.
+_RIPPLE_ID = 0.45
 
 
-def build(spec):
+def _body(spec):
+    """The body, and the height and length its skin material is scaled against.
+
+    Two shapes of animal, one interface. A lofted body is a depth above and below a
+    straight backbone; a swept one is a section carried along a curve, which is what an
+    animal that doubles back on itself needs — see `saverlib.curved`. Everything after
+    this point, fins and eyes and markings alike, asks the same questions of either.
+    """
+    if spec.is_swept:
+        body = CurvedBody(
+            CurvedBodySpec(
+                path=spec.path,
+                radius=spec.radius,
+                section=spec.section,
+                exponent=spec.exponent,
+                up=spec.body_up,
+                dorsal_at=spec.dorsal_at,
+            ),
+            rings=_SWEPT_RINGS,
+            segments=_BODY_SEGMENTS,
+        )
+        low, high = body.bounds()
+        return body, (high.z - low.z) / 2.0, high.x - low.x
+
     body_spec = BodySpec(
         length=spec.length,
         width=spec.width,
@@ -72,7 +105,13 @@ def build(spec):
         spine=spec.spine,
         exponent=spec.exponent,
     )
-    body = Body(body_spec, rings=_BODY_RINGS, segments=_BODY_SEGMENTS)
+    return (Body(body_spec, rings=_BODY_RINGS, segments=_BODY_SEGMENTS),
+            max(body_spec.top.peak, body_spec.bottom.peak),
+            spec.length)
+
+
+def build(spec):
+    body, body_height, body_length = _body(spec)
 
     root = bpy.data.objects.new(f"Fish_{spec.name}", None)
     bpy.context.collection.objects.link(root)
@@ -84,8 +123,8 @@ def build(spec):
     skin = fish_material(
         f"{spec.name}_skin",
         belly=belly, mid=mid, back=back,
-        body_height=max(body_spec.top.peak, body_spec.bottom.peak),
-        body_length=spec.length,
+        body_height=body_height,
+        body_length=body_length,
         scale_count=spec.scale_count,
         scale_depth=spec.scale_depth,
         bands=spec.bands,
@@ -201,13 +240,15 @@ def _part_channel(obj, part_id=_NO_PART, distance=None):
     return obj
 
 
-def _pectoral_channel(obj, fin, root, part_id):
-    """Label a pectoral fin with its side's id and true hinge-to-vertex distance.
+def _hinged_channel(obj, fin, root, part_id):
+    """Label a fin with its part id and true hinge-to-vertex distance.
 
-    A fin beat is a hinge about the root, so the shader needs the actual lever arm after
-    `build_fin` has applied span, flare, rake, and curl. The freshly authored mesh still has
-    both its vertex coordinates and the same `root(u)` callable used to build it; the vertex
-    index recovers u before modifiers add or interpolate geometry.
+    Both kinds of moving fin need the same measurement: a beat is a hinge about the root
+    and a ripple grows with distance from it, so either way the shader needs the actual
+    lever arm after `build_fin` has applied span, flare, rake, and curl. The freshly
+    authored mesh still has both its vertex coordinates and the same `root(u)` callable
+    used to build it; the vertex index recovers u before modifiers add or interpolate
+    geometry.
     """
     samples_u, samples_v = fin.samples_u, fin.samples_v
 
@@ -310,12 +351,16 @@ def _build_fins(spec, body):
 
     if spec.dorsal:
         f = spec.dorsal
-        fins.append((build_fin(
+        root = dorsal_root(body, f.t0, f.t1, sink=f.sink)
+        obj = build_fin(
             f"{spec.name}_dorsal",
-            root=dorsal_root(body, f.t0, f.t1, sink=f.sink),
+            root=root,
             out_dir=lambda u: up, span=f.span, rake=f.rake, curl=f.curl, flare=f.flare,
             curl_axis=(0, 1, 0), samples_u=f.samples_u, samples_v=f.samples_v, **common,
-        ), "dorsal", f))
+        )
+        if f.ripples:
+            _hinged_channel(obj, f, root, _RIPPLE_ID)
+        fins.append((obj, "dorsal", f))
 
     if spec.anal:
         f = spec.anal
@@ -361,7 +406,7 @@ def _build_fins(spec, body):
             # rather than left for the shader to infer from the sign of a vertex's y: by the
             # time the shader runs, y is a coordinate the swim wave is also displacing.
             if attr == "pectoral":
-                _pectoral_channel(obj, f, root, _PECTORAL_IDS[side])
+                _hinged_channel(obj, f, root, _PECTORAL_IDS[side])
             fins.append((obj, attr, f))
 
     return [(_fin_uv(obj, f.samples_u, f.samples_v), kind, f)
