@@ -75,20 +75,26 @@ final class AquariumScene {
     /// is attached, mirrored or unplugged.
     private var backingScale: CGFloat = 1
 
-    /// How much of the library the *reference* tank draws. The preview thumbnail runs alongside
-    /// the rest of System Settings, so it takes a thinner tank; the composition is identical.
+    /// How much of the library the *reference* tank draws.
     ///
-    /// Both counts are then adjusted for the tank actually drawn: props by the style's declared
+    /// One number, not one per tier. A `.reduced` tank draws the same thirty props and the same
+    /// twenty-two fish as a full one — see `RenderQuality.reduced`. It used to draw twelve and
+    /// eight, and the thing that paid for the difference is the resolution cap: a tile that
+    /// renders at 720 pixels instead of 2056 has already given back more than a full reef costs
+    /// it. Measured at 720x465, seed 42: the whole tank draws in 2.28 ms of GPU against the
+    /// trimmed one's 1.40, where the tile was previously asking 3.60 ms for the trimmed tank at
+    /// full resolution.
+    ///
+    /// That is not only cheaper, it is the honest picture. A preview drawn with a third of the
+    /// reef is a different tank from the one it is advertising — the settings sheet's own note
+    /// had to warn that a seed typed into it showed "that seed's look and gravel rather than a
+    /// small copy of the reef the full tank will build". It is a small copy now.
+    ///
+    /// The count is then adjusted for the tank actually drawn: props by the style's declared
     /// density, fish by the tank's own size — see `TankStyle.propDensity` and
-    /// `Tank.schoolCount`. Neither adjustment belongs here, because neither is a property of
-    /// the preview.
-    private static let propCount = (preview: 12, full: 30)
-    private static let fishCount = (preview: 8, full: 22)
-    /// The preview's share of the style's distinct-model budget, which is the launch's load
-    /// budget rather than a look. Instances are clones and cost almost nothing; each new model
-    /// is another archive to read. The school is self-limiting, since a species arrives as a
-    /// whole school.
-    private static let previewDistinctShare: Float = 0.625
+    /// `Tank.schoolCount`.
+    private static let propCount = 30
+    private static let fishCount = 22
 
     /// Locates the model library. Always resolved against the host's bundle — inside a
     /// screensaver `Bundle.main` is `legacyScreenSaver.appex`, so it silently finds nothing.
@@ -105,8 +111,11 @@ final class AquariumScene {
     /// Declared failable to match the host's expectations, and deliberately never nil: a tank
     /// with an unreadable library still renders fogged water, whereas returning nil renders an
     /// unrecoverable black screen. Every model that fails to load simply does not appear.
-    init?(modelURL: URL, bundle: Bundle, settings: AquariumSettings, isPreview: Bool,
+    init?(modelURL: URL, bundle: Bundle, settings: AquariumSettings, quality: RenderQuality,
           drawableSize: CGSize) {
+        // Named for what it means here rather than for the tier: every test below is "is this
+        // a tile", and reading `quality == .reduced` at each of them says less than this does.
+        let reduced = quality == .reduced
         let directory = modelURL.deletingLastPathComponent()
         let library = ModelLibrary.load(from: directory)
         let cache = ModelCache(directory: directory)
@@ -116,7 +125,7 @@ final class AquariumScene {
         // Never in the thumbnail. It is 384x216 in the settings sheet and smaller again in the
         // Screen Saver list, where the badge would be either illegible or — sized to stay
         // legible — a caption across a picture of a tank.
-        if settings.showsSeed && !isPreview {
+        if settings.showsSeed && !reduced {
             overlay = SeedBadge.overlay(seed: seed, drawableSize: drawableSize)
         }
 
@@ -130,17 +139,13 @@ final class AquariumScene {
 
         buildEnvironment()
         buildCamera()
-        if !isPreview && style.water.snowBirthRate > 0 { addMarineSnow() }
-        // Drawn in the preview too, unlike the marine snow.
-        //
-        // They were skipped there at first, on the reasoning that a shaft reads as a smudge at
-        // thumbnail size. That is the wrong trade for this particular feature: the settings
-        // sheet's preview exists to show what a look actually is, and the shafts are the whole
-        // of what distinguishes the deep ocean now — so a preview without them offered a choice
-        // between three tanks while showing only two of them apart. The caustics were never
-        // skipped, because they ride the key light, and the inconsistency was visible: picking
-        // the reef or the aquarium showed a dappled floor and picking the deep ocean showed
-        // nothing new at all. Snow stays out because it is texture rather than identity.
+        // Drawn in a tile as well now. It was skipped there on the reasoning that snow is
+        // texture rather than identity — true of a single fleck, and not true of the deep
+        // ocean, whose water is the only one thick enough to hold any. The argument that
+        // settled it for the god rays below settles it here: a preview exists to show what a
+        // look *is*, and the two oceans differ mostly in how much is suspended between the
+        // camera and the back wall.
+        if style.water.snowBirthRate > 0 { addMarineSnow() }
         if let rays = style.water.godRays {
             // A stream of its own, taken off the seed rather than off the launch stream. A draw
             // from `rand` here would reshuffle the reef and the school below it, so every seeded
@@ -155,54 +160,50 @@ final class AquariumScene {
         }
 
         seabed.addChildNode(TankFloor.node(style.substrate, tank: style.tank))
-        let props = isPreview ? AquariumScene.propCount.preview : AquariumScene.propCount.full
-        let budget = isPreview
-            ? max(3, Int((Float(style.distinctProps) * AquariumScene.previewDistinctShare)
-                    .rounded()))
-            : style.distinctProps
         let placements = ReefLayout.layout(
             props: library.props,
-            count: style.tank.propCount(props, density: style.propDensity, aspect: aspect),
-            anchors: isPreview ? 1 : style.anchorCount,
-            distinct: budget,
+            count: style.tank.propCount(AquariumScene.propCount,
+                                        density: style.propDensity, aspect: aspect),
+            anchors: style.anchorCount,
+            distinct: style.distinctProps,
             tank: style.tank, slack: style.spacingSlack, aspect: aspect, rand: &rand)
         let reef = Reef.build(placements: placements, cache: cache)
         seabed.addChildNode(reef.node)
 
-        // The thumbnail still runs every hinge cycle: transforms are free enough to show what the
-        // decoration is, while particle systems add setup and simulation to a preview already
-        // measured at 234–354 ms to build. Full-size tanks get both pieces of the authored act.
+        // A tile gets the bubbles too. Half of what a chest opening reads as is what comes out
+        // of it, and a lid that hinges over nothing reads as a broken prop rather than a cheap
+        // one. The streams are alpha sprites, so their cost is fill, and fill is exactly what a
+        // capped resolution has already bought back.
+        //
         // This stream is forked directly from the launch seed rather than consuming `rand`, so
         // adding animation cannot silently rename every fish and prop drawn after the reef.
         var bubblerRand = Rand(seed: seed ^ 0xB0_BB_1E_5A_71_0F)
         for prop in reef.props where prop.manifest.isAnimated {
-            bubblers.append(Bubbler(prop: prop, reefNode: reef.node,
-                                    particlesEnabled: !isPreview, rand: &bubblerRand))
+            bubblers.append(Bubbler(prop: prop, reefNode: reef.node, rand: &bubblerRand))
         }
         scene.rootNode.addChildNode(seabed)
 
-        let fish = isPreview ? AquariumScene.fishCount.preview : AquariumScene.fishCount.full
         let surface = SurfaceField(props: reef.props)
         let hosts = FishHost.hosts(in: reef.props)
         let passages = SwimPassage.passages(in: reef.props, reefNode: reef.node)
         let school = School(
             library: library, cache: cache,
-            count: style.tank.schoolCount(fish),
+            count: style.tank.schoolCount(AquariumScene.fishCount),
             tank: style.tank, aspect: aspect, surface: surface, hosts: hosts,
             passages: passages, rand: &rand)
         scene.rootNode.addChildNode(school.node)
         self.school = school
 
-        // Skipped for anything this build can tell is a thumbnail, which is not all of them.
+        // Skipped for a tile, and the test finally covers every tile there is.
         //
         // What is *heard* is decided entirely by the session gate in `SoundSession`; no property
         // of a view can answer that, and this test does not try to. It is about cost — a tile
         // has no business reading two megabytes of grains, and the settings sheet builds a fresh
-        // tank on every click. It is also known to be incomplete: the spike measured Tahoe's
-        // picker tile as a full-screen-sized view, so `isPreview` is false there and those tiles
-        // do pay for a grain library they will never play. That is the same unfixed signal that
-        // has the picker drawing full-fat tanks, and it wants one pass covering both.
-        if settings.soundEnabled && !isPreview,
+        // tank on every click. This used to leak: the picker's live preview is a full-screen-*sized*
+        // view, so every size-derived signal called it a real saver and it paid for a grain
+        // library it could never play. `RenderQuality` is what closed it, and closing it here and
+        // in the render budget was one change, as the note left here predicted it would be.
+        if settings.soundEnabled && !reduced,
            let sound = AquariumSound(bundle: bundle, seed: seed) {
             school.swishThreshold = sound.minimumEffort
             school.swishTurnShare = sound.turnShare
@@ -237,7 +238,7 @@ final class AquariumScene {
         // Three separate reasons for a silent tank, and from the front of the screen they look
         // identical: the user has it switched off, the view was judged a thumbnail, or the grain
         // library did not load out of the bundle. See `SoundLog` for how to turn this on.
-        SoundLog.write("scene built  soundEnabled=\(settings.soundEnabled) isPreview=\(isPreview)"
+        SoundLog.write("scene built  soundEnabled=\(settings.soundEnabled) reduced=\(reduced)"
                        + "  library=\(self.sound == nil ? "FAILED or skipped" : "loaded")"
                        + "  seed=\(seed)")
 

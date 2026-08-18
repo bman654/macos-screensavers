@@ -13,7 +13,7 @@ final class Bubbler {
     private let streams: [BubbleStream]
     private let cycle: PropCyclePlayer?
 
-    init(prop: PropInstance, reefNode: SCNNode, particlesEnabled: Bool, rand: inout Rand) {
+    init(prop: PropInstance, reefNode: SCNNode, rand: inout Rand) {
         var parts: [String: MovingPart] = [:]
         for spec in prop.manifest.parts {
             guard let node = prop.root.childNode(withName: spec.node, recursively: true) else {
@@ -25,14 +25,12 @@ final class Bubbler {
         }
 
         var streamsByName: [String: BubbleStream] = [:]
-        if particlesEnabled {
-            for spec in prop.manifest.emitters {
-                guard let source = prop.root.childNode(withName: spec.node, recursively: true) else {
-                    continue
-                }
-                streamsByName[spec.node] = BubbleStream(
-                    spec: spec, scale: prop.placement.scale, source: source, reefNode: reefNode)
+        for spec in prop.manifest.emitters {
+            guard let source = prop.root.childNode(withName: spec.node, recursively: true) else {
+                continue
             }
+            streamsByName[spec.node] = BubbleStream(
+                spec: spec, scale: prop.placement.scale, source: source, reefNode: reefNode)
         }
         streams = Array(streamsByName.values)
 

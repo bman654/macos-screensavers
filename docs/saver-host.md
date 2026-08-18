@@ -19,7 +19,9 @@ If you read nothing else:
    expensive it owns while staying alive, and SaverKit's does.
 2. **Never ask the view whether it is real.** Size, `isPreview`, occlusion and screen fraction all
    give the same answer for a picker tile as for a full-screen session. They have all been
-   measured. §3 has the table.
+   measured. §2 has the table. **The window level is the only thing that moves**, and it answers
+   both questions a saver has: draw at all (`hasAudience()`), and draw how well
+   (`HostContext.quality`).
 3. **Tie every side effect to frames actually being produced**, not to a callback. The failing
    case is a view nobody can reach, so a fix that needs someone to call you will not run.
 4. **A screensaver may be heard only when the system says a session is running *and* its own
@@ -305,6 +307,8 @@ Automatic — do not re-implement:
 - Releasing the render graph after 4 s without a frame, and rebuilding it on the next one.
 - Declining to draw a full-screen frame nobody can see (`hasAudience()`), which is what turns
   a leftover that keeps rendering into one the release above can catch.
+- Deciding whether a view is worth a full-quality frame (`HostContext.quality`), capping a
+  `.reduced` view's resolution and frame rate, and rebuilding the host when the answer changes.
 - `deinit` invalidates the frame link and calls `host?.teardown()`.
 - Owning the `CAMetalLayer`, drawable sizing, MSAA and depth attachments, presentation and
   command-buffer commit. **A host encodes; it never touches the layer, the drawable, or
@@ -353,7 +357,7 @@ around measuring it:
   all. Use `app.run()`, and `leaks <pid> --traceTree=<addr>`.
 - **`run-saver` proves nothing about deallocation**, because process exit does not run `deinit`.
 
-### `isPreview` is wrong in the picker, for every saver — and this is still open
+### `isPreview` is wrong in the picker, for every saver — and size cannot rescue it
 
 SaverKit never reads `ScreenSaverView.isPreview`; it derives preview-ness from size, via
 `previewWidthThreshold` (600 points) and `isPreviewSized`. **Both signals fail in the picker**,
@@ -368,14 +372,134 @@ something above the saver scales down into a tile.
 | `occlusionState` | `occluded` — and so is the real full-screen preview |
 | window level | ordinary, never `CGShieldingWindowLevel()` |
 
-The consequence is live and **unfixed**: the Aquarium renders five lights, caustics, god rays,
+The consequence was live for a long time: the Aquarium rendered five lights, caustics, god rays,
 bloom and MSAA into a tile a couple of inches wide, several alive at once in a settings pane.
-Nothing in SaverKit has been changed for it. Note that the screensaver-session notification of §3
-is **not** the fix — a thumbnail should render cheaply whether or not a screensaver is running.
 
-A warning for whoever does fix it: the sheet's own preview is created at 384x216 and
-`run-saver --preview` at 480x270, both comfortably under the threshold. **A gate tested only
-against sizes you chose yourself is a gate you have not tested.**
+**The window level does not rescue it either, and believing it did cost a round trip.** The
+quality tier was first built on the reading recorded under `hasAudience()` above — that the
+picker's live preview is a full-screen view at `.normal`. Measured in the real picker with the
+lifecycle log, it is not:
+
+```
+11:09:15  frames=41  quality=full  bounds=3840x2160  drawable=3840x2160  level=-2147483625
+```
+
+`-2147483625` is the *presenting* level, the same one a real session uses, held for the whole
+time the picker sheet was open. macOS draws the saver into a genuine full-screen window behind
+System Settings and composites the two-inch tile out of it, so `isPresenting` is true for a
+thumbnail. What the level still separates, correctly, is a **leftover**: the same log shows the
+abandoned view drop to `level=0`, go `frames=0` and hibernate four seconds later. `hasAudience()`
+is therefore sound; only the label on its last rung was wrong.
+
+**§3 had already written this down.** `SoundSession`'s own header says "a width threshold, a
+fraction-of-the-screen test, **the window level** and the occlusion state were all measured, and
+every one of them passes the thumbnail as a full-screen screensaver." Two notes in this repo
+disagreed about the same fact and the newer, narrower one was believed. When two measurements
+conflict, re-run the one you are about to build on.
+
+So the fix is the session after all, and the old objection — "a thumbnail must render cheaply
+whether or not a screensaver is running" — was answering a question nobody asks: a thumbnail and
+a real session never present at the same moment on the same view. See the next section.
+
+A warning that still stands for anyone extending this: the sheet's own preview is created at
+384x216 and `run-saver --preview` at 480x270, both comfortably under the threshold. **A gate
+tested only against sizes you chose yourself is a gate you have not tested.** The ordering of
+`renderQuality()` was got wrong once on exactly that basis — the size test sat below
+`isPresenting`, and since the harness window counts as presenting, `run-saver --preview` drew a
+full-fat frame and would have shown a developer something other than the preview they asked for.
+
+### Quality: the tile draws the whole saver, at a fraction of the pixels
+
+`HostContext.quality` is `.full` or `.reduced`, decided by `SaverView.renderQuality()` and handed
+to `makeHost(_:)`. The ladder, in order, and the order is load-bearing:
+
+| # | Test | Answer | Why here |
+| --- | --- | --- | --- |
+| 1 | `SAVERKIT_QUALITY` | as pinned | the harness cannot be the picker |
+| 2 | narrower than `previewWidthThreshold` | `.reduced` | cannot be wrong either way; nothing presents a screensaver into a 500-point view |
+| 3 | `SAVERKIT_AUDIENCE=1` | `.full` | else a developer's render is softened by whether System Settings happens to be open |
+| 4 | window is presenting | **ask the session** | a thumbnail presents too — see above |
+| 5 | level is not `.normal` | `.full` | unmeasured, so err toward quality |
+| 6 | has presented before | `.full` | a leftover; it is not drawing anyway |
+| 7 | System Settings running | `.reduced` | otherwise `.full` |
+
+Rung 4 is the one that matters, and it is `ScreenSaverSession` — the session half of the audio
+gate (§3), lifted into SaverKit when this became its second caller. A presenting window is a
+screensaver *surface*; only the session says whether it is *the* screensaver.
+
+**The two callers err in opposite directions, so `ScreenSaverSession` exposes state and decides
+nothing.** Audio must default to silence — a saver that plays into a room is worse than one that
+says nothing. Quality must default to full — a soft screensaver on a real display is worse than a
+tile that costs too much. Each reads `isRunning` with `hasSettled` and resolves the ambiguity
+itself. Do not add a convenience that picks one.
+
+**The accepted risk, and it is the mirror of the audio gate's.** `didstart` is posted before the
+host process exists, so a session that spawns a *fresh* host while System Settings happens to be
+open on some unrelated pane misses the edge, and the startup guess — "the settings pane is open,
+so this is a thumbnail" — is then wrong about a real screensaver. That costs a soft full-screen
+frame for one activation; the host is warm for every one after it and hears `didstart` properly.
+The audio gate takes the same bet and pays for it in silence. `SAVERKIT_QUALITY=full` is the
+escape hatch.
+
+`SAVERKIT_QUALITY=full|reduced` pins the tier for a process; `SAVERKIT_SESSION=0|1` asserts the
+session instead, which with `SAVERKIT_AUDIENCE=0` is how the picker's exact shape — a presenting
+full-screen window with no session behind it — is reproduced outside System Settings.
+
+**A `.reduced` frame is the same composition as a full one.** Every feature draws — the aquarium's
+five lights, its caustics, its god rays, its bloom, its marine snow and its bubble streams, and
+the same thirty props and twenty-two fish. What changes is fidelity, and almost all of it changes
+inside SaverKit:
+
+| | Full | Reduced |
+| --- | --- | --- |
+| Drawable | bounds x backing scale | capped to `reducedPixelCap`, 720 px on the long edge |
+| Frame rate | `preferredFPS` | `min(preferredFPS, reducedFPS)`, 30 |
+| `RenderTargets.backingScale` | the display's | **the scale actually rendered at** |
+
+Measured on the Aquarium at 2056x1329, seed 42, all three looks:
+
+```
+                              per frame        per second
+2056x1329  full     3.6-4.3 ms x 60 fps  =  220-260 ms
+           reduced  2.0-2.6 ms x 30 fps  =   60-78 ms     ~3.5x less
+
+3840x2160  full        6.92 ms x 60 fps  =     415 ms     <- the real picker, measured
+           reduced      2.15 ms x 30 fps  =      64 ms     6.4x less
+```
+
+**The saving grows with the display**, because the cap is absolute: a 4K panel is asking for 28x
+the pixels the tile can show, a 2056-point one for 8x. Quote the 4K figure — it is the one a real
+user on a real display gets.
+
+Ranges, not single figures, and taken across all three looks in two sessions an hour apart: the
+absolute numbers drift about 10% with the machine's temperature, so a single cold reading would
+be the most flattering one rather than the true one. The ratio held at 3.4-3.5x throughout.
+
+The tile got *more* content and still cost a third as much, because the resolution cap pays for
+the content several times over: the trimmed tank at full resolution was 3.60 ms, the whole tank
+at capped resolution is 2.28 ms. So there is no reason to draw a sparser tank, and a good reason
+not to — the settings sheet used to have to warn that a seed typed into it showed "that seed's
+look and gravel rather than a small copy of the reef the full tank will build".
+
+Three things to know before touching it:
+
+- **`RenderTargets.backingScale` is the rendered scale, not the display's.** Anything sized in
+  points must multiply by it or the cap becomes visible. `SCNCamera.bloomBlurRadius` is the case
+  that proves it: it is applied in render-target pixels, so a radius sized for a 2056-pixel frame
+  is nearly three times as wide across a 720-pixel one, and the tile would come back visibly
+  hazier than the saver it advertises.
+- **Quality changes under a live view, with no callback** — a real session reuses the picker's
+  own view. `SaverView` rebuilds through `reloadHost()`, so `didReleaseHost(.quality)` arrives and
+  a saver holding state beside its host must carry it across; the Aquarium keeps its seed, so the
+  tank the user was looking at is the one that fills the screen.
+- **Upgrades are immediate; downgrades wait two seconds.** Deliberately asymmetric. A promoted
+  view is a real screensaver on a real display the moment it presents, and two seconds of soft
+  frames there is the one failure a person would actually see; a downgrade taken on a flicker
+  costs a 234-354 ms rebuild and buys nothing. **The exception is the first answer from a view
+  that has just got a window**, which is not a flicker but the first time the level could be
+  read at all — a host is built on the first layout with usable bounds, and that routinely
+  precedes the window, so every picker preview builds `.full` and must be allowed to correct
+  itself without the hold.
 
 ### The settings sheet is a second view, and it leaks the same way
 

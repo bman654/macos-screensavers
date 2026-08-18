@@ -61,11 +61,14 @@ final class AquariumView: SaverView {
     /// models and its voice have to be let go here too, or the release frees nothing that matters.
     ///
     /// An idle release is a pause, not a request for a new tank: the seed is kept so that the
-    /// tank that comes back is the one that was being watched. A reload is the opposite — the
-    /// user asked for something new — so it forgets the seed and draws again.
+    /// tank that comes back is the one that was being watched. A quality change is the same
+    /// tank at a different budget — the picker's preview promoted to a real session is the
+    /// case, and swapping the tank at the moment it fills the screen would read as the saver
+    /// restarting rather than as the preview growing. A reload is the opposite — the user
+    /// asked for something new — so it forgets the seed and draws again.
     override func didReleaseHost(_ reason: HostReleaseReason) {
         aquarium?.silence()
-        resumeSeed = reason == .idle ? aquarium?.seed : nil
+        resumeSeed = reason == .reload ? nil : aquarium?.seed
         aquarium = nil
     }
 
@@ -92,17 +95,20 @@ final class AquariumView: SaverView {
         if settings.seed == nil, let resumeSeed { settings.seed = resumeSeed }
         guard let modelURL = AquariumScene.modelURL(in: context.bundle),
               let scene = AquariumScene(modelURL: modelURL, bundle: context.bundle,
-                                        settings: settings, isPreview: context.isPreview,
+                                        settings: settings, quality: context.quality,
                                         drawableSize: context.drawableSize)
         else { return nil }
 
-        // The thumbnail runs alongside the rest of System Settings, so it drops the fish
-        // count, the marine snow and MSAA. The composition — camera, depth range, fog — is
-        // identical, so the preview shows what the saver will actually look like.
+        // 4x everywhere, including the tile, which is the opposite of what a preview usually
+        // does — and it is the resolution cap that earns it. A `.reduced` frame is drawn at a
+        // fraction of the pixels and then *magnified* by the layer to fill the view, so every
+        // jagged edge is magnified with it; antialiasing matters more at a tile's size, not
+        // less. Four samples of a 720-pixel frame is a fraction of one sample of a 2056-pixel
+        // one, so the cheaper tier can afford the better edges.
         let host = SceneKitHost(device: context.device,
                                 scene: scene.scene,
                                 pointOfView: scene.cameraNode,
-                                sampleCount: context.isPreview ? 1 : 4,
+                                sampleCount: 4,
                                 clearColor: scene.clearColor)
         // The seed badge. It hangs on the renderer rather than on the scene, which is why the
         // scene builds it and this hands it over — see `SeedBadge`.

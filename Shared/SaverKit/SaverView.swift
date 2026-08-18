@@ -42,6 +42,9 @@ class SaverView: ScreenSaverView {
         case reload
         /// No frame was committed for `idleReleaseDelay`; the graph will be rebuilt on the next.
         case idle
+        /// The audience changed what this view is worth drawing at, and the host was built for
+        /// the other answer. Same view, same moment, a different budget — see `RenderQuality`.
+        case quality
     }
 
     /// Called after the view has released its `RenderHost`, for either reason above. Drop
@@ -77,7 +80,37 @@ class SaverView: ScreenSaverView {
     ///
     /// Size is the signal, not `ScreenSaverView.isPreview`, which is unreliable on Tahoe.
     /// The smallest real display this could run on is far wider than any preview.
+    ///
+    /// One half of the answer only. A small view is certainly a preview; a large one is not
+    /// certainly a session, because the picker's live preview is a *full-screen-sized* view
+    /// shown at two inches. `renderQuality` is where both halves meet.
     var previewWidthThreshold: CGFloat { 600 }
+
+    /// The longest edge, in pixels, a `.reduced` view renders at.
+    ///
+    /// The one saving that costs nothing anybody can see. The picker's live preview is a
+    /// 2056x1329-point view composited into a tile a couple of inches wide, so it is asking for
+    /// something like eight times the pixels it can possibly display; a `CAMetalLayer` scales a
+    /// smaller drawable up to its bounds for free, and the compositor was going to scale the
+    /// frame down anyway. Measured on the aquarium at 2056x1329: 3.60 ms of GPU per frame at
+    /// full size, and the fill half of that is gone by 720.
+    ///
+    /// Above what any preview is displayed at, deliberately — this is a ceiling on waste, not
+    /// an attempt to guess the tile's size, which nothing in the view can read.
+    ///
+    /// In **pixels**, so it is a ceiling on work rather than on apparent size: the settings
+    /// sheet's 384x216-point preview passes it untouched at 1x and is trimmed by 6% at 2x,
+    /// where it would otherwise be 768 px. That is the correct behaviour for a work ceiling and
+    /// is invisible either way; the point is that it is not "previews are exempt".
+    var reducedPixelCap: CGFloat { 720 }
+
+    /// Frame rate cap for a `.reduced` view, or 0 to keep `preferredFPS`.
+    ///
+    /// Halving the rate halves everything the resolution cap does not touch — the school's
+    /// simulation, the fin deformation, the draw calls — and a tank of drifting fish at two
+    /// inches does not read differently at 30. Applied to the live link rather than at
+    /// creation, since a view changes quality without being restarted.
+    var reducedFPS: Int { 30 }
 
     // MARK: Settings
 
@@ -106,6 +139,10 @@ class SaverView: ScreenSaverView {
 
     private(set) var host: RenderHost?
     private var hostFailed = false
+
+    /// The rendered scale last handed to the host, so a change can be noticed when the
+    /// drawable's integer size does not move. 0 until the first delivery.
+    private var deliveredScale: CGFloat = 0
 
     private var depthTexture: MTLTexture?
     private var msaaTexture: MTLTexture?
@@ -155,13 +192,50 @@ class SaverView: ScreenSaverView {
     private static let assumesAudience =
         (ProcessInfo.processInfo.environment["SAVERKIT_AUDIENCE"] as NSString?)?.boolValue ?? false
 
+    /// The tier the current host was built for. Quality is decided at build time — a saver
+    /// reads it once, from `HostContext` — so this is what a live answer has to be compared
+    /// against to know whether a rebuild is owed.
+    private var builtQuality: RenderQuality = .full
+
+    /// When the live answer first disagreed with `builtQuality`, or 0 while they agree. Only a
+    /// downgrade waits; see `applyQualityIfChanged()`.
+    private var qualityPendingSince: CFTimeInterval = 0
+
+    /// True when the current host's tier was decided from something that was not yet knowable.
+    ///
+    /// Two things are provisional early on, and both are the normal case rather than an edge:
+    /// a host is created on the first layout with usable bounds, which on Tahoe routinely
+    /// happens *before* the view is in a window; and `ScreenSaverSession` needs about a second
+    /// and a half to tell a real session from a picker thumbnail, because the host is spawned
+    /// before System Settings registers in the process table.
+    ///
+    /// Either way the tier that was built is a guess, and the first answer given once the
+    /// guess can be checked is not a flicker to be debounced — it is the first real
+    /// measurement, and it is applied at once. Without this the picker's tile would draw a
+    /// full-screen frame for three and a half seconds and *then* pay a rebuild, which is both
+    /// the cost this exists to avoid and a visible restart.
+    private var builtProvisionally = false
+
+    /// `SAVERKIT_QUALITY=full|reduced` pins the tier for every view in the process.
+    ///
+    /// The harness has an ordinary window on the developer's screen and cannot be the picker,
+    /// whose live preview is the whole case this exists for — so the one way to render that
+    /// case outside System Settings is to say so. Anything unrecognised leaves the view to
+    /// decide for itself. Cannot reach the real host, whose environment is empty.
+    private static let pinnedQuality: RenderQuality? = {
+        switch ProcessInfo.processInfo.environment["SAVERKIT_QUALITY"]?.lowercased() {
+        case "full": return .full
+        case "reduced": return .reduced
+        default: return nil
+        }
+    }()
+
     /// Latched the first time this view's window is at a presenting level. A view that has
     /// presented is a session's view: back at an ordinary level it is a leftover, whatever else
     /// is running. The picker's live preview never presents, so it never latches.
     private var hasPresented = false
 
     /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
-    /// backwards.    /// Time accumulated over previous start/stop cycles, so `FrameContext.time` never goes
     /// backwards. `SCNRenderer.render(atTime:)` takes an absolute clock: handing it a value
     /// lower than the last one re-simulates or resets particle systems, and every phase in a
     /// scene driven by that clock snaps back to where it started.
@@ -194,6 +268,10 @@ class SaverView: ScreenSaverView {
         framesSinceSignal = 0
         var fields = ["frames=\(frames)", "wants=\(wantsFrames)", "suspended=\(isSuspended)",
                       "hibernating=\(isHibernating)", "host=\(host != nil)",
+                      "session=\(ScreenSaverSession.shared.isRunning ? "running" : "idle")"
+                          + (ScreenSaverSession.shared.hasSettled ? "" : "?"),
+                      "quality=\(renderQuality() == .reduced ? "reduced" : "full")",
+                      "built=\(builtQuality == .reduced ? "reduced" : "full")",
                       "bounds=\(Int(bounds.width))x\(Int(bounds.height))",
                       "drawable=\(Int(metalLayer?.drawableSize.width ?? 0))x\(Int(metalLayer?.drawableSize.height ?? 0))",
                       "hidden=\(isHiddenOrHasHiddenAncestor)",
@@ -309,23 +387,92 @@ class SaverView: ScreenSaverView {
         }
     }
 
-    private func updateDrawableSize() {
-        guard let metalLayer else { return }
+    /// The drawable this view should be rendering into, or nil if the bounds are not yet real.
+    ///
+    /// Not simply bounds times scale: a `.reduced` view is composited at a fraction of the size
+    /// it believes it is, so it renders at a fraction of the pixels and the layer scales the
+    /// result up to fill itself. `contentsGravity` is `resize` by default and the magnification
+    /// filter is linear, so this costs nothing and needs nothing configured — it is the same
+    /// dynamic-resolution trick a game uses to hold a frame rate, applied to a view that will
+    /// never be looked at closely enough to see it.
+    private func targetDrawableSize() -> CGSize? {
+        guard let metalLayer else { return nil }
         let scale = metalLayer.contentsScale
-        let pixels = CGSize(width: (bounds.width * scale).rounded(),
-                            height: (bounds.height * scale).rounded())
+        var width = bounds.width * scale
+        var height = bounds.height * scale
+        // Zero bounds are normal at init on Tahoe. The caller leaves the previous drawable
+        // size alone and waits for a real layout.
+        guard width > 0, height > 0 else { return nil }
 
-        // Zero bounds are normal at init on Tahoe. Leave the previous drawable size alone
-        // and wait for a real layout.
-        guard pixels.width > 0, pixels.height > 0 else { return }
+        // The tier the *host* was built for while one exists, and the live answer only when one
+        // is about to be built. The two differ for as long as a downgrade is being held, and
+        // taking the live answer there lets a resize arriving mid-hold cap the drawable under a
+        // host that is still `.full` — after which, if the tier flips back before the hold
+        // expires, `applyQualityIfChanged` sees agreement, declines to rebuild, and nothing is
+        // left to restore the resolution. Sizing to the built tier keeps the drawable and the
+        // host as one decision: it changes when, and only when, the host is rebuilt, and
+        // `reloadHost` re-sizes before building precisely so that it can.
+        let quality = host == nil ? renderQuality() : builtQuality
+        if quality == .reduced, reducedPixelCap > 0 {
+            // The longest edge, so a portrait tile is capped by the edge that is actually long,
+            // and one factor for both so the aspect the camera projects into does not move.
+            let shrink = reducedPixelCap / max(width, height)
+            if shrink < 1 {
+                width *= shrink
+                height *= shrink
+            }
+        }
+        return CGSize(width: max(1, width.rounded()), height: max(1, height.rounded()))
+    }
+
+    private func updateDrawableSize() {
+        guard let metalLayer, let pixels = targetDrawableSize() else { return }
         // A hibernating view is resized by a host that is not showing it; the wake path
         // re-runs this once a frame is actually wanted.
         guard !isHibernating else { return }
-        guard pixels != metalLayer.drawableSize || depthTexture == nil else { return }
+        guard pixels != metalLayer.drawableSize || depthTexture == nil else {
+            // The attachments are already the right size, but the *scale* they are being drawn
+            // at may not be what the host was last told. Under the resolution cap two different
+            // bounds round to one drawable — 2056 and 3000 points both cap to 720 — so a
+            // proportional resize can move the rendered scale by half without moving a single
+            // pixel of the target. Nothing else would tell the host, and a radius sized in
+            // points would stay wrong until some later resize happened to change a rounded
+            // dimension. Re-state the targets; do not reallocate them.
+            deliverTargetsIfScaleChanged()
+            return
+        }
 
         metalLayer.drawableSize = pixels
         ensureHost()
         rebuildAttachments()
+    }
+
+    /// Pixels per point actually being rendered into a drawable of this size.
+    ///
+    /// Falls back to the layer's own scale only when the bounds are not yet real, which is the
+    /// state a host is never built in.
+    private func renderedScale(for drawableSize: CGSize) -> CGFloat {
+        bounds.width > 0 ? drawableSize.width / bounds.width
+                         : metalLayer?.contentsScale ?? 1
+    }
+
+    /// Hands the host its current render targets and records the scale that went with them.
+    private func deliverTargets() {
+        guard let host, let metalDevice, let metalLayer, depthTexture != nil else { return }
+        let size = metalLayer.drawableSize
+        deliveredScale = renderedScale(for: size)
+        host.hostDidResize(to: RenderTargets(drawableSize: size,
+                                             sampleCount: resolvedSampleCount,
+                                             colorPixelFormat: host.colorPixelFormat,
+                                             depthPixelFormat: host.depthPixelFormat,
+                                             backingScale: deliveredScale),
+                           device: metalDevice)
+    }
+
+    private func deliverTargetsIfScaleChanged() {
+        guard let metalLayer, host != nil, depthTexture != nil,
+              renderedScale(for: metalLayer.drawableSize) != deliveredScale else { return }
+        deliverTargets()
     }
 
     // MARK: Host lifecycle
@@ -335,9 +482,10 @@ class SaverView: ScreenSaverView {
               let metalDevice, let metalLayer,
               metalLayer.drawableSize.width > 0 else { return }
 
+        let quality = renderQuality()
         let context = HostContext(device: metalDevice,
                                   bundle: saverBundle,
-                                  isPreview: isPreviewSized,
+                                  quality: quality,
                                   drawableSize: metalLayer.drawableSize)
 
         guard let created = makeHost(context) else {
@@ -346,6 +494,12 @@ class SaverView: ScreenSaverView {
             return
         }
         host = created
+        builtQuality = quality
+        builtProvisionally = window == nil || !ScreenSaverSession.shared.hasSettled
+        qualityPendingSince = 0
+        // The rate belongs to the tier, and the link outlives a host: a view that changes
+        // quality is not restarted, so nothing else would ever revise it.
+        applyPreferredFrameRate()
         metalLayer.pixelFormat = created.colorPixelFormat
     }
 
@@ -359,11 +513,19 @@ class SaverView: ScreenSaverView {
     /// display link on the main thread and bails on a nil host, and any GPU work the old host
     /// already submitted is retained by its own command buffer.
     func reloadHost() {
-        releaseHost(.reload)
+        reloadHost(.reload)
+    }
+
+    private func reloadHost(_ reason: HostReleaseReason) {
+        releaseHost(reason)
         // A reload is a fresh chance for a host that failed to build; an idle release is not.
         hostFailed = false
+        qualityPendingSince = 0
         // A hibernating view builds its host on the next frame it is asked for, and not before.
         guard !isHibernating else { return }
+        // Resized before the host is built, not after: the resolution cap moves with the tier,
+        // and a host is handed its drawable size once, at creation.
+        if let metalLayer, let pixels = targetDrawableSize() { metalLayer.drawableSize = pixels }
         ensureHost()
         rebuildAttachments()
     }
@@ -419,6 +581,109 @@ class SaverView: ScreenSaverView {
         if hasPresented { return false }
         return HostSignals.systemSettingsIsRunning(recheckAfter: SaverView.settingsCheckInterval)
     }
+
+    /// What this view is worth drawing at, right now. Read every frame, never cached — the
+    /// host moves a view's level with no callback of any kind, so a cached answer is the truth
+    /// from before it was moved.
+    ///
+    /// The same ladder `hasAudience()` climbs, asked for a budget instead of a yes or no, and
+    /// it lands on the one rung that method does not act on: a full-screen-sized view at
+    /// `.normal` that has never presented, in a host with System Settings behind it, is the
+    /// picker's live preview — a couple of inches of tile that has been asking for a
+    /// full-screen frame since the day this saver shipped.
+    ///
+    /// Everything unmeasured resolves to `.full`. A wrong `.reduced` is a soft screensaver on a
+    /// real display, which is the failure a user would actually notice; a wrong `.full` is only
+    /// the cost this is trying to save.
+    private func renderQuality() -> RenderQuality {
+        if let pinned = SaverView.pinnedQuality { return pinned }
+        // First, and ahead of the window entirely, because it is the one test that cannot be
+        // wrong in either direction: nothing presents a screensaver into a view narrower than
+        // `previewWidthThreshold`, and every host that shows one at that size is showing a
+        // preview. Putting it after `isPresenting` was measured to make `run-saver --preview`
+        // draw a full-fat frame, since the harness window counts as presenting — a developer
+        // asking to see the preview would have been shown something else.
+        if bounds.width > 0 && isPreviewSized { return .reduced }
+        // Before the session test, not after. The harness is an ordinary process that the
+        // session's startup guess reads exactly as it reads a picker thumbnail, so without this
+        // a developer's render would be softened by whether System Settings happened to be open
+        // — the same trap `SoundSession` documents for the recording loop, where the failure is
+        // a valid WAV of silence. Here it would be a valid PNG of the wrong resolution.
+        if SaverView.assumesAudience { return .full }
+        // A presenting window is a screensaver *surface* — and so is the picker's live preview.
+        // Measured in the real picker on Tahoe: the tile at the top of the Screen Saver sheet
+        // runs at the presenting level, because macOS draws the saver into a genuine
+        // full-screen window behind System Settings and composites two inches out of it. The
+        // level cannot tell them apart, so the session is asked instead.
+        if HostSignals.isPresenting(window) {
+            hasPresented = true
+            return sessionIsIdle() ? .reduced : .full
+        }
+        guard let window, window.level == .normal else { return .full }
+        // A leftover. It is not drawing at all, so the tier is academic — but a view that has
+        // presented once may be promoted again, and coming back at full size is the right way
+        // to be wrong.
+        if hasPresented { return .full }
+        return HostSignals.systemSettingsIsRunning(recheckAfter: SaverView.settingsCheckInterval)
+            ? .reduced : .full
+    }
+
+    /// Rebuilds the host when the audience's answer no longer matches what the host was built
+    /// for. Called from the frame path, which is the only place that runs in every state a view
+    /// can be abandoned in.
+    ///
+    /// The two directions are deliberately not symmetric. An **upgrade is immediate**: a real
+    /// session reuses the picker's own full-screen view (measured, `docs/saver-host.md` §2), so
+    /// the moment that view starts presenting it is the screensaver, and waiting would put a
+    /// visibly soft frame on a real display at exactly the moment somebody starts watching. A
+    /// **downgrade has to hold**, because a rebuild is 234–354 ms of main-thread work in the
+    /// aquarium and taking one on a momentary flicker buys nothing.
+    private func applyQualityIfChanged() {
+        let wanted = renderQuality()
+        guard host != nil, wanted != builtQuality else {
+            qualityPendingSince = 0
+            // The provisional tier has just been confirmed by a reading that was not a guess,
+            // so it has stopped being one: from here on a disagreement is a real change and
+            // gets the hold like any other.
+            if window != nil && ScreenSaverSession.shared.hasSettled { builtProvisionally = false }
+            return
+        }
+        // A downgrade off a windowless guess is not a downgrade, it is the first measurement.
+        // Holding it would leave the picker's tile drawing a full-screen frame for two seconds
+        // and then rebuilding — which is both the cost this exists to avoid and a visible
+        // restart, since a rebuild draws a fresh tank.
+        if wanted == .full || builtProvisionally {
+            reloadHost(.quality)
+            return
+        }
+        let now = CACurrentMediaTime()
+        if qualityPendingSince == 0 { qualityPendingSince = now; return }
+        guard now - qualityPendingSince >= SaverView.qualityHoldDelay else { return }
+        reloadHost(.quality)
+    }
+
+    /// Is the system telling us that nothing is being screen-saved right now?
+    ///
+    /// Only ever used to *withhold* quality from a presenting view, and only on a settled
+    /// answer, because the two callers of `ScreenSaverSession` err in opposite directions:
+    /// audio must default to silence, and this must default to a full-quality frame. An
+    /// unsettled answer, or a system that could not be asked, draws at full.
+    ///
+    /// **The accepted risk, and it is the mirror of the audio gate's.** `didstart` is posted
+    /// before the host process exists, so a session that spawns a *fresh* host while System
+    /// Settings happens to be open on some unrelated pane misses the edge, and the startup
+    /// guess — "the settings pane is open, so this is a thumbnail" — is then wrong about a real
+    /// screensaver. That costs a soft full-screen frame for one activation; the host is warm
+    /// for every one after it and hears `didstart` properly. The audio gate takes the same bet
+    /// and pays for it in silence. `SAVERKIT_QUALITY=full` is the escape hatch.
+    private func sessionIsIdle() -> Bool {
+        let session = ScreenSaverSession.shared
+        guard session.hasSettled else { return false }
+        return !session.isRunning
+    }
+
+    /// How long a downgrade has to stay true before it costs a rebuild.
+    private static let qualityHoldDelay: CFTimeInterval = 2
 
     /// How often the process table is read on behalf of a never-presented view at `.normal`.
     /// The cost of a stale answer is a picker preview that starts a few seconds late; the cost
@@ -555,12 +820,13 @@ class SaverView: ScreenSaverView {
             samples /= 2
         }
 
-        host.hostDidResize(to: RenderTargets(drawableSize: size,
-                                             sampleCount: resolvedSampleCount,
-                                             colorPixelFormat: host.colorPixelFormat,
-                                             depthPixelFormat: host.depthPixelFormat,
-                                             backingScale: metalLayer.contentsScale),
-                           device: metalDevice)
+        // The scale handed over is the one actually rendered at, not the display's — they
+        // differ under a `.reduced` tier's resolution cap, and it is this one every consumer of
+        // the field wants. A bloom radius is the case that proves it: `SCNCamera.bloomBlurRadius`
+        // is applied in render-target pixels, so a radius sized for a 2056-pixel frame is nearly
+        // three times as wide across a 720-pixel one, and the tile would come back visibly
+        // hazier than the saver it is advertising. See `deliverTargets()`.
+        deliverTargets()
     }
 
     // MARK: Animation
@@ -617,16 +883,31 @@ class SaverView: ScreenSaverView {
         startTimestamp = 0
 
         let link = displayLink(target: self, selector: #selector(frameLinkFired(_:)))
-        if preferredFPS > 0 {
-            link.preferredFrameRateRange = CAFrameRateRange(
-                minimum: Float(preferredFPS), maximum: Float(preferredFPS),
-                preferred: Float(preferredFPS))
-        }
+        frameLink = link
+        applyPreferredFrameRate()
         // `.common`, not `.default`: in `.default` the callback stops during event
         // tracking, which is exactly when a preview is being scrubbed in System Settings.
         link.add(to: .main, forMode: .common)
-        frameLink = link
         lastFrameCommit = CACurrentMediaTime()
+    }
+
+    /// Asks the live link for the rate this view's tier deserves.
+    ///
+    /// Set on the existing link rather than at creation, because a view changes quality without
+    /// ever being stopped and started — the picker's preview promoted to a real session is the
+    /// case, and it has to come back to full rate as well as full size.
+    private func applyPreferredFrameRate() {
+        guard let frameLink else { return }
+        var fps = preferredFPS
+        if builtQuality == .reduced, reducedFPS > 0 {
+            fps = fps > 0 ? min(fps, reducedFPS) : reducedFPS
+        }
+        guard fps > 0 else {
+            frameLink.preferredFrameRateRange = .default
+            return
+        }
+        frameLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: Float(fps), maximum: Float(fps), preferred: Float(fps))
     }
 
     private func stopFrameLink() {
@@ -655,7 +936,15 @@ class SaverView: ScreenSaverView {
         // graph every second only to release it again — measured in the harness as a
         // hibernate/wake pair 3 ms apart on every watchdog tick.
         guard hasAudience() else { return }
+        // Before the quality check, and from here rather than from the saver, because a tank
+        // with its sound switched off still has to know whether it is a thumbnail. Throttled
+        // inside, and it stops asking the moment a notification supersedes the guess.
+        ScreenSaverSession.shared.reevaluateIfUnconfirmed()
         wakeIfHibernating()
+        // After the wake, because a hibernated view has no host to compare against and would
+        // spend the check on nothing; before the frame, so the frame that is about to be drawn
+        // is the one the audience is owed.
+        applyQualityIfChanged()
 
         // `targetTimestamp` is the vsync this frame is for, so animation driven from it is
         // one frame less latent than one driven from `timestamp`.

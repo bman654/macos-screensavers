@@ -46,7 +46,7 @@ final class AquariumSettingsSheet: NSObject {
 
     /// 16:9, and large enough that a fish is a fish rather than a mote. Below the saver's own
     /// 600-point preview threshold, so the preview renders as the System Settings thumbnail
-    /// does — fewer props, fewer fish, no marine snow, and the same composition.
+    /// does: `RenderQuality.reduced`, which is the whole tank at a fraction of the pixels.
     private static let previewSize = NSSize(width: 384, height: 216)
 
     let window: NSWindow
@@ -230,9 +230,16 @@ final class AquariumSettingsSheet: NSObject {
         guard let view = AquariumView(frame: frame, isPreview: true) else { return }
         // The one instance whose settings do not come from disk: it is showing a choice that
         // has not been made yet, and may never be. It carries the pending seed as well as the
-        // pending style, so typing a seed shows the tank it names — with the caveat that a
-        // thumbnail draws fewer props and fewer fish, so it is that seed's *look* and gravel
-        // rather than a small copy of the reef the full tank will build.
+        // pending style, so typing a seed shows the tank it names — and half of the caveat that
+        // used to live here is gone: a `.reduced` tank is no longer *trimmed*, so this draws the
+        // same thirty props and twenty-two fish the full tank will.
+        //
+        // The other half stands, for a different reason. This preview is pinned to 16:9 and the
+        // display is not, and the reef is laid out against the drawable's aspect — `Tank.propCount`
+        // scales with reef capacity and `ReefLayout` places into the frame it is given. So a
+        // seed typed here still names that seed's look, gravel and cast rather than these exact
+        // positions. The picker's own tile does not have this problem: the resolution cap is one
+        // factor on both axes, so it keeps the display's aspect.
         var override = pending
         override.style = .fixed(showing)
         view.settingsOverride = override

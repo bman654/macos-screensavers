@@ -26,125 +26,53 @@ final class SoundSession {
     static let shared = SoundSession()
 
     /// True between the screensaver starting and stopping.
-    private(set) var isScreenSaverRunning = false
+    ///
+    /// The state itself lives in `SaverKit.ScreenSaverSession`, which is this gate's session
+    /// half lifted out when `SaverView.renderQuality()` needed the same question answered. What
+    /// stays here is the *error direction*, which is not shared: audio errs toward silence, so
+    /// an unsettled answer is read as "not running" and the tank stays quiet until the system
+    /// says otherwise. Render quality errs the other way, toward a full-quality frame. Neither
+    /// caller may take the other's default.
+    var isScreenSaverRunning: Bool {
+        if let forced { return forced }
+        let session = ScreenSaverSession.shared
+        // Unsettled means the startup guess has not been re-asked yet — see `hasSettled`. A
+        // saver that trusted it would play into the picker for a second and a half.
+        guard session.hasSettled || session.isAuthoritative else { return false }
+        return session.isRunning
+    }
 
-    /// True once a `com.apple.screensaver.*` notification has been heard, after which the
-    /// startup guess is never consulted again — an edge that actually arrived beats any guess.
-    private var hasAuthoritativeState = false
+    /// `AQUARIUM_SOUND_SESSION=1` asserts the answer, for `tools/run-saver.swift` only.
+    ///
+    /// Without it this repo's ground-truth loop — record the saver, measure it, listen to it —
+    /// depends on whether System Settings happens to be open, since the harness is an ordinary
+    /// process that the startup guess reads exactly as it reads a picker thumbnail. That is a
+    /// loop whose result is decided by an unrelated window, and the failure is nearly silent:
+    /// the recording is a valid WAV of nothing. Safe because the environment is empty under
+    /// `legacyScreenSaver`, so it cannot be reached where it would matter.
+    ///
+    /// Kept here rather than folded into SaverKit's own `SAVERKIT_SESSION` because it means
+    /// something narrower: it asserts what the *audio* gate should believe, and a harness run
+    /// recording a WAV has no opinion about how many pixels the tank should be drawn at.
+    private let forced: Bool? = (ProcessInfo.processInfo.environment["AQUARIUM_SOUND_SESSION"]
+                                     as NSString?)?.boolValue
 
-    private var lastEvaluated: CFTimeInterval = 0
-    private static let reevaluationInterval: CFTimeInterval = 0.35
+    private init() {}
+
+    /// Re-runs the startup guess until a real notification supersedes it. Throttled by the
+    /// shared session; safe to call once a frame.
+    func reevaluateIfUnconfirmed() {
+        ScreenSaverSession.shared.reevaluateIfUnconfirmed()
+    }
 
     /// How long the startup guess is allowed to keep audio silent while it settles.
     ///
-    /// Free, because ambience should fade in over seconds rather than appear. See
-    /// `reevaluateIfUnconfirmed` for why the guess cannot simply be taken once at t=0.
-    static let settlingPeriod: CFTimeInterval = 1.5
-
-    private init() {
-        // The startup guess, and it is frankly a heuristic — the honest kind, which errs
-        // toward silence.
-        //
-        // `didstart` is posted *before* this process exists: the engine posts it, then spawns
-        // `legacyScreenSaver`, which then loads this bundle. So on the first activation in a
-        // fresh host the observer is installed having already missed the edge, and only
-        // `willstop`/`didstop` ever arrive — the saver would stay silent through exactly the
-        // session it was built for and learn the truth as the screen came back. It would work
-        // on every activation after that, which is the shape of bug that looks intermittent
-        // and is not: it fails on the one path every real user takes and works on every path a
-        // person testing it takes second.
-        //
-        // Everything that would answer it as *state* was measured in both a real session and
-        // an open picker, and none of it separates them: `CGSSessionScreenIsLocked` reads 1 in
-        // both, `frontmostApplication` is `com.apple.loginwindow` in both, no window ever
-        // reaches `CGShieldingWindowLevel()`, and `ScreenSaverEngine` is a launcher that has
-        // already exited by the time anything is drawn. What does differ is *why* this host was
-        // spawned, and the only readable proxy for that is whether the settings pane is open.
-        //
-        // Wrong in one direction only: a user who leaves System Settings open and walks away
-        // gets a silent screensaver. That is the direction to be wrong in.
-        // `AQUARIUM_SOUND_SESSION=1` asserts the answer, for `tools/run-saver.swift` only.
-        //
-        // Without it this repo's ground-truth loop — record the saver, measure it, listen to it —
-        // depends on whether System Settings happens to be open, since the harness is an ordinary
-        // process that the startup guess reads exactly as it reads a picker thumbnail. That is a
-        // loop whose result is decided by an unrelated window, and the failure is nearly silent:
-        // the recording is a valid WAV of nothing. Safe because the environment is empty under
-        // `legacyScreenSaver`, so it cannot be reached where it would matter.
-        if let forced = ProcessInfo.processInfo.environment["AQUARIUM_SOUND_SESSION"] {
-            isScreenSaverRunning = (forced as NSString).boolValue
-            hasAuthoritativeState = true
-        } else {
-            isScreenSaverRunning = SoundSession.settingsPaneIsClosed() ?? false
-        }
-
-        let center = DistributedNotificationCenter.default()
-        // `.deliverImmediately` is load-bearing rather than a nicety. The default suspension
-        // behaviour is `.coalesce`, which withholds notifications while the receiving
-        // application is not active — and a screensaver host is never active in that sense.
-        for name in SoundSession.watched {
-            center.addObserver(self, selector: #selector(received(_:)),
-                               name: Notification.Name(name), object: nil,
-                               suspensionBehavior: .deliverImmediately)
-        }
-    }
-
-    /// Re-runs the startup guess until a real notification supersedes it.
-    ///
-    /// The guess cannot be taken once, at t=0: the host is spawned *before* System Settings has
-    /// registered as a running process, so a probe that decided immediately concluded "no
-    /// settings pane, therefore a real screensaver" and played into the picker. Measured. The
-    /// state is only knowable a moment later, so it is asked again a moment later.
-    func reevaluateIfUnconfirmed() {
-        guard !hasAuthoritativeState else { return }
-        // Throttled, because the caller is a frame path and this is not a cheap question. Each
-        // answer is two `sysctl` calls, the second of which copies the machine's entire process
-        // table — measured at 0.22 ms and a 723 KB array for 1116 processes. Asked once a frame
-        // for a second and a half that is ninety of them, per instance, at exactly the moment a
-        // tank is being built and its shaders compiled. Four times is as good as ninety: what
-        // is being waited for is System Settings appearing in the table at all.
-        let when = CACurrentMediaTime()
-        guard when - lastEvaluated >= SoundSession.reevaluationInterval else { return }
-        lastEvaluated = when
-        // Nil is "could not tell", and it must not become "yes". Reading the kernel's process
-        // list can fail, and the negation of a failed lookup is exactly the wrong answer: it
-        // says no settings pane is open, which this guess reads as a real screensaver. The
-        // whole claim made for this heuristic is that it errs toward silence.
-        guard let running = SoundSession.settingsPaneIsClosed(),
-              running != isScreenSaverRunning else { return }
-        update(to: running)
-    }
-
-    private static let watched = [
-        "com.apple.screensaver.didstart",
-        "com.apple.screensaver.willstart",
-        "com.apple.screensaver.didstop",
-        "com.apple.screensaver.willstop",
-    ]
-
-    @objc private func received(_ notification: Notification) {
-        switch notification.name.rawValue {
-        case "com.apple.screensaver.didstart", "com.apple.screensaver.willstart":
-            hasAuthoritativeState = true
-            update(to: true)
-        case "com.apple.screensaver.didstop", "com.apple.screensaver.willstop":
-            // `willstop` deliberately silences before the screen comes back rather than at the
-            // same moment, so ambience fades out under a screensaver that is still on screen
-            // instead of being cut off by the desktop reappearing.
-            hasAuthoritativeState = true
-            update(to: false)
-        default:
-            break
-        }
-    }
-
-    private func update(to running: Bool) {
-        isScreenSaverRunning = running
-    }
+    /// Free, because ambience should fade in over seconds rather than appear.
+    static let settlingPeriod: CFTimeInterval = ScreenSaverSession.settlingPeriod
 
     /// Nil when the question could not be answered, which is not at all the same as "no".
     static func settingsPaneIsClosed() -> Bool? {
-        HostSignals.isSystemSettingsRunning().map { !$0 }
+        ScreenSaverSession.settingsPaneIsClosed()
     }
 
     // MARK: Whether *this* view is the one showing it

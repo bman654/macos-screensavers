@@ -49,6 +49,59 @@ care who is in front: under 8.3 ms holds 120 Hz, under 16.7 ms holds 60. Give th
 seconds before believing the first window; the opening frame carries shader compilation and
 asset upload and lands around 60 ms.
 
+### Quality: draw everything, draw it cheaply
+
+`HostContext.quality` is `.full` or `.reduced`. A `.reduced` view is one being composited at a
+fraction of the size it believes it is — the picker's live preview, or a settings sheet's.
+
+**A reduced frame is the same composition as a full one.** Same camera, same lights, same
+post-process, same content. Do not drop a feature here: a preview exists to show what the saver
+*is*, and one that quietly omits a look's defining effect shows the user a choice they cannot
+see. What changes is fidelity, and most of it changes without the host doing anything —
+`SaverView` has already capped the resolution to `reducedPixelCap` (720 px on the long edge) and
+the frame rate to `reducedFPS` (30) by the time a host is asked to build. What is left for a host
+to decide is whatever does *not* scale with pixels: geometry, draw calls and CPU simulation.
+
+The aquarium's answer is to change nothing at all: the cap pays for the content several times
+over. Measured in the real picker on a 3840x2160 display, the live preview went from 6.92 ms of
+GPU per frame at 60 fps to 2.15 ms at 30 — **6.4x less GPU work per second**, while drawing more
+than it used to. The tile is a small copy of the saver now rather than a sparser relative of it.
+The saving grows with the panel, since the cap is absolute.
+
+**How a `.reduced` view is recognised, since no property of the view says so.** The picker's live
+preview is a *presenting, full-screen* window — macOS draws the saver behind System Settings and
+composites the tile out of it — so size, occlusion and the window level all read exactly as a real
+session. The signal is `ScreenSaverSession`, the session half of the audio gate: a presenting
+window with no screensaver session behind it is a thumbnail. `docs/saver-host.md` §2 has the
+ladder and the one accepted failure case.
+
+Three things to know before relying on it:
+
+- **Anything sized in points must be multiplied by `RenderTargets.backingScale`,** which is the
+  scale actually *rendered* at and therefore a fraction under the cap. A bloom radius is applied
+  in render-target pixels, so one sized for a 2056-pixel frame is nearly three times as wide
+  across a 720-pixel one and the tile comes back visibly hazier than the saver it advertises.
+- **Quality is decided when the host is built, and it changes under a live view** — a session
+  reuses the picker's own view. `SaverView` rebuilds through `reloadHost()` when the answer
+  changes, so `didReleaseHost(.quality)` is delivered and a saver that keeps state beside its
+  host should carry it across. A tier built before the view had a window, or before the session
+  had settled, is a *guess*, and the first real answer replaces it at once rather than waiting.
+  **Otherwise upgrades are immediate and downgrades wait two seconds**: the
+  promoted view is a real screensaver on a real display the moment it presents, whereas a
+  downgrade taken on a flicker costs a rebuild and buys nothing.
+
+`SAVERKIT_QUALITY=full|reduced` pins the tier outright. To exercise the real ladder instead — a
+presenting full-screen window with no session behind it, which is exactly the picker — assert the
+session and drop the harness's audience shortcut:
+
+```bash
+SAVERKIT_QUALITY=reduced SAVERKIT_STATS=5 tools/run-saver.swift Aquarium \
+    --size 2056x1329 --seconds 20 --screenshot /tmp/tile.png    # pin the tier
+
+SAVERKIT_AUDIENCE=0 SAVERKIT_SESSION=0 SAVERKIT_LIFECYCLE=1 \
+    tools/run-saver.swift Aquarium --size 2056x1329 --seconds 8  # exercise the ladder
+```
+
 ### Settings
 
 A saver that has settings overrides `hasConfigureSheet` and `configureSheet`, and persists to
@@ -106,7 +159,7 @@ not have to know about it.
 
 | Hazard | Handled in |
 |---|---|
-| `isPreview` is unreliable — derive preview-ness from view size | `SaverView.isPreviewSized` |
+| `isPreview` is unreliable — and so is every other size-derived signal, because the picker's live preview is a *full-screen-sized* view shown at two inches | `HostContext.quality`, decided from the window level — see below |
 | Bounds are routinely zero at `init`; GPU resources sized from them are built wrong | host creation deferred to first real layout |
 | `CAMetalLayer` does not track its own bounds, and does not inherit the window's scale | `updateDrawableSize()`, called synchronously from the resize callbacks |
 | `makeBackingLayer()` runs synchronously inside `wantsLayer = true`, so later layer config is silently ignored | all layer setup is in `makeBackingLayer()` |

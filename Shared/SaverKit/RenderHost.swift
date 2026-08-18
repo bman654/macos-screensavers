@@ -14,6 +14,37 @@ import Foundation
 import Metal
 import QuartzCore
 
+/// How much fidelity a view's audience justifies.
+///
+/// Not a size, and deliberately not named for one. Every size-derived signal a view can read
+/// gives the same answer for the picker's two-inch live preview as for a real full-screen
+/// session — `isPreview`, bounds, screen fraction and occlusion were all measured saying
+/// "full screen" for a tile (`docs/saver-host.md` §3). What separates them is the window
+/// level, and `SaverView` is the only thing that can read it, so it decides this and hands
+/// down the answer.
+enum RenderQuality {
+
+    /// Somebody is looking at this at its own size: a screensaver session, a full-screen
+    /// Preview launched from the settings sheet, or anything unmeasured. The default a view
+    /// falls back to, because a wrong "reduced" is a soft screensaver on a real display.
+    case full
+
+    /// This view is being shown at a fraction of the size it thinks it is — the picker's live
+    /// preview, or a settings sheet's.
+    ///
+    /// **Draw everything.** A reduced frame is the same composition as a full one: the same
+    /// camera, the same lights, the same god rays, caustics and bloom, the same reef and the
+    /// same school. It is what sells the tile, and a preview that quietly drops a look's
+    /// defining feature is showing the user a choice they cannot actually see. What changes is
+    /// fidelity — resolution, shadow map size, particle counts, sample counts — none of which
+    /// survives being shrunk to two inches anyway.
+    ///
+    /// `SaverView` has already cut the resolution by the time a host sees this
+    /// (`reducedPixelCap`), so a host is deciding what to do about everything that does *not*
+    /// scale with pixels: geometry, draw calls, shadow maps and CPU simulation.
+    case reduced
+}
+
 /// Everything a host needs to build its GPU resources, handed over once at creation.
 struct HostContext {
     let device: MTLDevice
@@ -24,12 +55,8 @@ struct HostContext {
     /// `legacyScreenSaver.appex`, not us, so `Bundle.main` silently finds nothing.
     let bundle: Bundle
 
-    /// True when the view is small enough to be the System Settings thumbnail.
-    ///
-    /// Derived from view size rather than `ScreenSaverView.isPreview`, which is unreliable
-    /// on Tahoe. A host should use this to cut particle counts and skip expensive passes,
-    /// not to change the composition — the preview should look like the real thing.
-    let isPreview: Bool
+    /// How much fidelity this view's audience justifies. See `RenderQuality`.
+    let quality: RenderQuality
 
     /// Size in *pixels*, not points.
     ///
@@ -55,7 +82,10 @@ struct RenderTargets {
     let colorPixelFormat: MTLPixelFormat
     let depthPixelFormat: MTLPixelFormat
 
-    /// Pixels per point: 1 on a conventional display, 2 on a Retina one.
+    /// Pixels per point actually rendered: 1 on a conventional display, 2 on a Retina one —
+    /// and a fraction of either under a `.reduced` tier, which draws fewer pixels than it
+    /// displays. Deliberately the rendered scale rather than the display's, so that a host
+    /// sizing anything in points stays correct when `SaverView` caps the resolution.
     ///
     /// The one property of the drawable a resize can change without changing its shape, and
     /// the only place a host can learn it. Anything sized in target pixels that should look
