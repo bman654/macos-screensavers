@@ -4,7 +4,12 @@ A reef aquarium screensaver for macOS 26 (Tahoe). Sixteen species of fish swim t
 that is built fresh every time it starts — different fish, different rocks and wrecks and coral,
 different gravel — and none of it is a video loop.
 
-![A tank of reef fish, with a lionfish and a seahorse over green gravel](../../docs/images/aquarium/hero.jpg)
+[![A tank of reef fish, with a lionfish and a seahorse over green gravel](../../docs/images/aquarium/hero.jpg)](https://youtu.be/9DgIo6eXUYg)
+
+**▶ [Watch it running on YouTube](https://youtu.be/9DgIo6eXUYg)** — that is seed 35 in the
+Aquarium look, so typing `35` into the seed field gives you the same reef, wreck and cast of
+fish. Its gravel will come out blue rather than fluorescent: the video's bed was pinned to the
+`neon` palette for filming, and choosing a palette by hand is not something the sheet offers.
 
 ---
 

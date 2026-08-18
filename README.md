@@ -9,7 +9,9 @@ Free, open source, no network access, no telemetry, nothing to sign up for.
 
 ## Aquarium
 
-[![A reef tank with a lionfish, a seahorse, anthias and a sunken ship over green gravel](docs/images/aquarium/hero.jpg)](Savers/Aquarium/README.md)
+[![A reef tank with a lionfish, a seahorse, anthias and a sunken ship over green gravel](docs/images/aquarium/hero.jpg)](https://youtu.be/9DgIo6eXUYg)
+
+**▶ [Watch it running on YouTube](https://youtu.be/9DgIo6eXUYg)**
 
 A reef aquarium, generated fresh every time it starts. Sixteen species of fish — clownfish,
 tangs, angelfish, a lionfish, a moray eel that snakes along the floor, a seahorse that stands
