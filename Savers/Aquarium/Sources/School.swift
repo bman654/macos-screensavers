@@ -870,7 +870,9 @@ final class School {
         switch behavior {
         case .hover, .forage: base = (0.46, 2.6)
         case .host: base = (0.32, 2.3)
-        case .cruise, .wander, .transit: base = (0.20, 1.7)
+        // Judged on the installed build: at 0.20 the beat was invisible on a moving fish, while
+        // the grazing stroke was liked as it was. The effort tuck below takes 30% off this.
+        case .cruise, .wander, .transit: base = (0.30, 1.7)
         // Folded. A dart is the one time a fish deliberately stops using them.
         case .dart: base = (0.0, 2.0)
         }
