@@ -74,7 +74,11 @@ fringing underwater.
   axis from `width`/`top`/`bottom`, which suits anything shaped like a fish, or swept along a
   `path` for an animal that doubles back on itself — the seahorse's bent neck and curled tail
   are not functions of a monotone X. `saverlib/curved.py` holds the second one and the caveat
-  that comes with it. See `docs/decorations.md` for that contract and
+  that comes with it. A species may also be **more than one colour**: `Species.colorways` names
+  repaints of one animal, restricted to colour fields because every scheme shares the one baked
+  mesh, and each ships as a single extra base-colour PNG that the runtime swaps onto an
+  individual fish. That is what stops two seahorses in a tank being two copies — a wild one's
+  colour is a fact about the weed it is gripping rather than about its species. See `docs/decorations.md` for that contract and
   `spikes/004-articulated-decor/` for how the animated bubblers hinge. This is also the
   test of whether the primitives generalize past fish: a plant frond is a fin membrane
   with different numbers, a rock is a lofted body with noise, and coral is a branching

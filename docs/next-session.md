@@ -56,6 +56,30 @@ manifest, and a locomotion model that is not swimming. **The seahorse's fin is s
 user on the installed build**: *"the seahorse rippling fins look pretty good"*. The same look
 found what is still missing, and it is the first item below.
 
+Extended 2026-08-18 (later) by the session that **plated the seahorse and gave the library
+colourways** — and, on the way, found that every fish in the tank had been shipping without its
+fin rays. Three things landed, in this order:
+
+1. **A baked material that read a UV was reading the wrong one.** `bake_atlas` deletes every UV
+   layer before it bakes, so `ShaderNodeTexCoord`'s `UV` output meant *the atlas* during a bake
+   and *the authored layer* everywhere else. Fin rays and the root-to-tip gradient are drawn
+   against the fin's own UV, so every shipped fish baked them as a flat wash — which is exactly
+   why the seahorse's dorsal read "large and very pale, like a wing". Measured, not deduced: the
+   same fish rendered with and without `--bake`. Materials now name the layer they sample
+   (`markings._uv`), the bake keeps authored layers through and drops them after, and
+   `saverlib/bake.py`'s docstring carries the rule. **The whole library was rebuilt for it.**
+2. **The seahorse is plated.** `SweptTube.build` writes the sweep's own `(along, around)` UV,
+   which is the coordinate a curled animal never had, and `rings` draws bony rings, four
+   longitudinal keels and a tubercle at every crossing into both colour and a chained bump. Not
+   geometry: 47 rings on a 96-ring sweep would need roughly 300 rings to shape a bump, and at
+   tank scale a ring is about three pixels, which is shading rather than silhouette. Its atlas
+   went to 512 because at 256 the tail's rings moire.
+3. **A species can be several colours.** `Species.colorways` names repaints — colour fields only,
+   enforced, because every scheme shares one baked mesh — and each ships as *one* extra
+   base-colour PNG beside the `.usdz`. The runtime picks one per **individual** off the seeded
+   stream, so two seahorses in one tank differ. Six schemes cost 1.5 MB and took the library to
+   43.9 MB against the 48 MB budget, so the budget did not have to move.
+
 ## State
 
 **`docs/saver-host.md` is new, and it is what the next saver starts from.** Everything learned
@@ -753,49 +777,59 @@ mistakes worth not repeating. Two facts from it are still true and still needed:
 - **`AQUARIUM_SCHOOL_STATS` prints `lurker@<fraction of column>`** for every lurker, which is the
   measurement every eel number in this file was taken with.
 
+**Small thing worth doing, found by trying to look at a seahorse:** `AQUARIUM_SCHOOL_STATS`
+prints how many fish are cruising, pitched or outside their lane, and never says *which
+species are in the tank*. That makes "find me a seed with a seahorse in it" a matter of
+squinting at screenshots, and a seahorse is `weight` 0.35 in a school of one or two, so most
+seeds have none. A census line naming the species drawn — the manifest names and how many of
+each — would cost a few lines beside the existing stats and would have saved an hour here. It
+would also have caught, immediately, that a run with a hand-edited manifest is not the same
+tank as the same seed with the shipped one.
+
 ## Next, in order
 
-**Item 1 is the agreed next task; item 2 landed on 2026-08-17.** (The fish-motion track — eel
-bend and pectorals — was pulled ahead of it the same day and is done and signed off; item 3 is
-what that track unblocked, and is the natural thing to do after item 1.) They are two halves of one
-observation — the host keeps views it is not really showing, and a saver currently treats them
-as though it were. Read `docs/saver-host.md` §2 first; it holds the measurements both start
-from, and the list of signals already proven useless.
+**Item 2 is the agreed next task; items 1 and 3 are done.** Item 2 wants the aquarium in front
+of the user, since "is this still the tank" is a judgement rather than a measurement. Read
+`docs/saver-host.md` §2 first: it holds the measurements it starts from, and the list of signals
+already proven useless.
 
-1. **The seahorse has no bony rings, and that is the thing that still reads as wrong.** The
-   silhouette, the pose and the fluttering dorsal are all signed off; the surface is not. A real
-   seahorse is a plated animal — eleven rings round the trunk and about thirty-six down the tail,
-   each one a hard edge — and this one is a smooth tube with mottling on it. It is the single
-   change that would move it from "reads as a seahorse" to "is one".
+1. ~~**The seahorse has no bony rings.**~~ **Done, 2026-08-18 — and it cost a library rebuild.**
+   The plan below was right about where to draw the rings and wrong about one thing, and the
+   wrong thing was load-bearing: it said the body UV "must exist before `bake_atlas`, which
+   deletes every UV layer it finds; that is fine, because by then the marking has been baked
+   into the atlas". `bake_atlas` deletes them **first**, before it bakes anything — so a
+   material reading `ShaderNodeTexCoord`'s `UV` samples the atlas's own coordinates during the
+   bake and the authored layer at every other time. That is not a seahorse problem. **Fin rays
+   and the root-to-tip gradient have been baking as a flat wash on every fish in the library**,
+   because a fin's island covers a fraction of the atlas and three cycles of a ray wave across
+   the whole square is a fraction of one cycle across the island. Confirmed by rendering one
+   fish with and without `--bake` and looking at the dorsal.
 
-   **Do not reach for geometry first.** A periodic bulge in the `radius` profile is the obvious
-   move and it is the expensive one: the sweep is `_SWEPT_RINGS = 96` rings for the whole animal,
-   so forty-seven bony rings would get two mesh rings each — not enough to shape a bump — and
-   getting there means roughly tripling the ring count on a library that now has a size budget it
-   has already outgrown once.
+   What that turned into:
 
-   **The cheap route is the atlas, and it is blocked on one missing thing: a curved body has no
-   body coordinate.** `fish_material`'s markings are placed from *object space* — `_Flank` reads
-   Position and calls X "how far along the fish this is" — and on a curled animal X is not that at
-   all; the tail's tip is back under the chest. That is the same wall that stopped this species
-   having `bands` or `stripes` (see `saverlib/curved.py`'s header). So the work is:
+   - `markings._uv` reads a *named* layer, `fin_material` and `fish_material` both use it, and
+     `bake.py` keeps the authored layers alive through the bake and removes them after so the
+     export still names only `st` and `st1`. The rule is in `bake.py`'s module docstring, which
+     is where the next person will be standing when it matters.
+   - `SweptTube.build(uv=...)` writes `(arc along the path, angle round the section)` per *loop*
+     — per loop, because the ring closes and the seam quad would otherwise have to carry V as
+     both 1 and 0.
+   - `markings._add_rings` draws the joints, four keels on the section's corners and a tubercle
+     at each crossing, returning a colour *and* a height; `fish_material` chains that into a
+     second bump node after the scale relief. `spacing` is the parameter that matters: eleven
+     rings across the trunk and thirty-five down the tail is not fifty spread evenly, and
+     evenly is what a plain count gives.
+   - `SweptTube`'s `section` takes `(width, up, down)` now, so the seahorse has a crest over the
+     head and a pot belly under the trunk. A radius cannot do that — the axis is the path, and
+     the path cannot be off-centre in its own frame.
+   - The two smaller notes were done as numbers: an angular jaw (a hard step in `radius` just
+     past `snout_base`, exponent to 3.5), a shorter snout, and a dorsal fin whose base went from
+     38% of the body's length to about 26%.
 
-   - Have `CurvedBody.build` author a `(t, theta)` UV on the body mesh, the way `_fin_uv` already
-     does for every fin — the sweep knows both numbers exactly, and neither is recoverable
-     afterwards. It must exist **before** `bake_atlas`, which deletes every UV layer it finds; that
-     is fine, because by then the marking has been baked into the atlas.
-   - Give `fish_material` a `rings` parameter drawn as a wave texture across that U, driving both
-     colour and bump. **Reuse `fin_material`'s ray machinery rather than writing a new one** — fin
-     rays are already exactly this: a `ShaderNodeTexWave` in BANDS mode over a UV, with a count and
-     a contrast. A ColorRamp cannot do it, because thirty-six rings is far past its 32-stop ceiling
-     and stops are what `bands` spends.
-
-   That lands rings on the seahorse and, for free, makes `bands` and `stripes` work on any future
-   curved body — which is the reason to do it this way rather than special-casing one animal.
-
-   Two smaller things the same look found, both just numbers in `seahorse.py`: the head is a smooth
-   taper where a real one has an angular jaw and a pronounced coronet, and the dorsal fin is large
-   and very pale — it reads a little like a wing from the side.
+   **Left undone, and both need geometry rather than an atlas:** the coronet is a soft swell
+   rather than a crown of spines, and the tubercles read as texture rather than as points. A
+   comb in a `span` is how the lionfish got thirteen spines and is the obvious way in, but
+   `Species` has no slot for a crest and one animal is not a reason to add one.
 
 2. **The picker renders a full-quality frame into a two-inch thumbnail.** The aquarium draws five
    lights, caustics, god rays, bloom and MSAA for a tile a couple of inches wide, several alive at

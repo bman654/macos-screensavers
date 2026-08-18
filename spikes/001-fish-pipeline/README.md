@@ -62,7 +62,21 @@ swiftc -O spikes/001-fish-pipeline/SceneKitProbe.swift -o /tmp/scnprobe \
   nothing. This cost real time and looked exactly like a broken shader. Use `--top`.
 - **Periodic textures are the wrong model for markings.** Clownfish bands sit at
   particular places and do not repeat; tuning a wave frequency to land three bars
-  correctly is guesswork. Bands are now placed explicitly with a softened outline.
+  correctly is guesswork. Bands are now placed explicitly with a softened outline. The two
+  exceptions are the markings that genuinely repeat on the animal — an angelfish's ruling
+  and a seahorse's bony rings — and both still say where the repeats go rather than at what
+  frequency.
+- **A texture coordinate has to be asked for by name, and this one cost the whole library.**
+  `bake_atlas` unwraps into a layer of its own and marks it for render, so
+  `ShaderNodeTexCoord`'s `UV` output means *the atlas* during a bake and *the authored layer*
+  at every other moment. Nothing errors. Fin rays and a fin's root-to-tip gradient are drawn
+  against the fin's own UV, and for as long as this went unnoticed every fish in the library
+  baked them as a flat wash — a fin's island covers a fraction of atlas space, so three
+  cycles of a ray wave across the whole square is a fraction of one cycle across the fin. It
+  is invisible in a preview render, which never bakes, and it looks like a *design* problem
+  in the tank: the seahorse's dorsal was written up as "large and very pale, it reads a
+  little like a wing". Read authored coordinates through a `ShaderNodeUVMap` naming the
+  layer. `saverlib/bake.py`'s module docstring is the standing rule.
 
 ## Not addressed here
 
