@@ -47,6 +47,15 @@ first version — a constant-curvature arc — had been judged "still just turns
 replaced the same session by the trail spine; the pectorals' grazing stroke was liked at once and
 the cruising stroke needed one nudge (0.20 → 0.30 rad) before it could be seen on a moving fish.
 
+Extended 2026-08-18 by the session that built the **lionfish and the seahorse**, the two species
+deferred since the library was first drawn up. Both are in the tank and installed. The lionfish
+needed no new modelling primitive at all — its spines and its pectoral fan are combs of spikes in
+one membrane's `span`, which is the bannerfish's banner repeated — while the seahorse needed the
+body spec extended to sweep a section along a path (`saverlib/curved.py`), an upright pose in the
+manifest, and a locomotion model that is not swimming. **The seahorse's fin is signed off by the
+user on the installed build**: *"the seahorse rippling fins look pretty good"*. The same look
+found what is still missing, and it is the first item below.
+
 ## State
 
 **`docs/saver-host.md` is new, and it is what the next saver starts from.** Everything learned
@@ -753,7 +762,42 @@ observation — the host keeps views it is not really showing, and a saver curre
 as though it were. Read `docs/saver-host.md` §2 first; it holds the measurements both start
 from, and the list of signals already proven useless.
 
-1. **The picker renders a full-quality frame into a two-inch thumbnail.** The aquarium draws five
+1. **The seahorse has no bony rings, and that is the thing that still reads as wrong.** The
+   silhouette, the pose and the fluttering dorsal are all signed off; the surface is not. A real
+   seahorse is a plated animal — eleven rings round the trunk and about thirty-six down the tail,
+   each one a hard edge — and this one is a smooth tube with mottling on it. It is the single
+   change that would move it from "reads as a seahorse" to "is one".
+
+   **Do not reach for geometry first.** A periodic bulge in the `radius` profile is the obvious
+   move and it is the expensive one: the sweep is `_SWEPT_RINGS = 96` rings for the whole animal,
+   so forty-seven bony rings would get two mesh rings each — not enough to shape a bump — and
+   getting there means roughly tripling the ring count on a library that now has a size budget it
+   has already outgrown once.
+
+   **The cheap route is the atlas, and it is blocked on one missing thing: a curved body has no
+   body coordinate.** `fish_material`'s markings are placed from *object space* — `_Flank` reads
+   Position and calls X "how far along the fish this is" — and on a curled animal X is not that at
+   all; the tail's tip is back under the chest. That is the same wall that stopped this species
+   having `bands` or `stripes` (see `saverlib/curved.py`'s header). So the work is:
+
+   - Have `CurvedBody.build` author a `(t, theta)` UV on the body mesh, the way `_fin_uv` already
+     does for every fin — the sweep knows both numbers exactly, and neither is recoverable
+     afterwards. It must exist **before** `bake_atlas`, which deletes every UV layer it finds; that
+     is fine, because by then the marking has been baked into the atlas.
+   - Give `fish_material` a `rings` parameter drawn as a wave texture across that U, driving both
+     colour and bump. **Reuse `fin_material`'s ray machinery rather than writing a new one** — fin
+     rays are already exactly this: a `ShaderNodeTexWave` in BANDS mode over a UV, with a count and
+     a contrast. A ColorRamp cannot do it, because thirty-six rings is far past its 32-stop ceiling
+     and stops are what `bands` spends.
+
+   That lands rings on the seahorse and, for free, makes `bands` and `stripes` work on any future
+   curved body — which is the reason to do it this way rather than special-casing one animal.
+
+   Two smaller things the same look found, both just numbers in `seahorse.py`: the head is a smooth
+   taper where a real one has an angular jaw and a pronounced coronet, and the dorsal fin is large
+   and very pale — it reads a little like a wing from the side.
+
+2. **The picker renders a full-quality frame into a two-inch thumbnail.** The aquarium draws five
    lights, caustics, god rays, bloom and MSAA for a tile a couple of inches wide, several alive at
    once in the settings pane. Nothing in SaverKit has been changed for it.
 
@@ -782,7 +826,7 @@ from, and the list of signals already proven useless.
    Wants the aquarium in front of the user, since the question "is this still the tank" is a
    judgement rather than a measurement.
 
-2. ~~**An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**~~
+3. ~~**An abandoned view is never freed, and `orderOut` is the case SaverKit does not handle.**~~
    **Done, 2026-08-17 — the view cannot be freed, and it no longer needs to be.** `leaks
    --traceTree` on a live host showed the leftover is retained by the *host* — its container
    `ScreenSaverView` and its ViewBridge window — plus the never-stopped `ScreenSaverView` timer
@@ -808,24 +852,62 @@ from, and the list of signals already proven useless.
    `docs/saver-host.md` §2 the rule. The "no `deinit`" of spike 006 was the driver's own
    autorelease pool, not a leak.
 
-3. **Lionfish and seahorse.** Deferred all along; each needs a spec extension the other
-   twelve did not (independent dorsal spines; a curled prehensile tail). **The animation half of
-   both is now unblocked, and proven on the tank**: the part channel that drives the pectorals is the same channel a
-   lionfish's spines and fans, and a seahorse's fluttering dorsal, would ride — a new part is a
-   new id in `_PECTORAL_IDS`' family and a term in `SwimDeformation.swift`. Lionfish first: it
-   reuses the fish body pipeline and only adds parts, while the seahorse also needs an upright
-   pose and a locomotion model in `School` that is not a lateral body wave at all. The modelling
-   half (spines, the curled tail) is untouched by any of this. Two things learned this session
-   bear on it directly: a new animated part must fit in the **16 bytes of uniform headroom** left
-   in the shader's argument block (spike 010) — one more float — so a lionfish's spines will want
-   their phase derived from existing uniforms rather than a new one, or the block re-packed; and
-   the seahorse's upright locomotion is a `School` change (its position-is-head, trail-following
-   lurker path is a closer starting point than the ordinary fish's).
+4. ~~**Lionfish and seahorse.**~~ **Both done, and both in the tank.** Neither needed what
+   this entry predicted it would.
 
-4. **Split `School.swift`.** 1365 lines against the 750 guideline, and it grew by two features
-   today. `spineMatrices` and the lurker-only code belong beside `SpineTrail`; the census and the
-   transit walker are each a file's worth on their own. Do it before the next feature lands in it,
-   not during.
+   **The lionfish needed no new geometry at all.** Its thirteen dorsal spines are the
+   bannerfish's banner repeated — a comb of spikes in one membrane's `span`, cut back to a low
+   membrane between them — and the same comb builds the pectoral fan's free rays. It is a pure
+   species file. Three things it cost, all worth knowing before authoring another ornate fish:
+   a spike only exists if `samples_u` puts several samples across it, and **`samples_v` is not
+   that knob** — raising both made a 17k-vertex fish, 2.5x anything else in a library that has a
+   size budget, and cutting `samples_v` back took it to 10.5k with renders that cannot be told
+   apart; a ColorRamp holds 32 stops and a body band costs four, so **seven bands per colour is
+   a hard ceiling** and fourteen bars have to be split into two tones; and the first palette that
+   looked right as numbers came out dusty rose in `tools/gallery.py` beside the rest of the
+   library, which is the sheet to check a new species against.
+
+   **The seahorse needed the body spec extended, and the animation half cost no uniforms.** Its
+   axis turns through more than a full revolution, and a lofted body cannot state that — X is
+   monotone in `t`, so a right-angle neck shears rather than bends. It sweeps a section along a
+   path instead: `saverlib/curved.py`, an adapter over the `SweptTube` that already did the
+   maths, plus `path`/`radius` on `Species`. Read that module's header before using it — markings
+   placed by nose-to-tail position are silently wrong on a curled animal, because X is no longer
+   a position along the body. `dorsal_root`/`ventral_root` are now written as "the surface,
+   pulled towards the axis", which is the same number on a lofted body and the only correct one
+   on a curved one.
+
+   The dorsal ripple that drives it is a **third part id (0.45) riding the existing `finPhase`
+   and `finAmplitude`** — the 16 bytes of headroom were not spent, and the block is still 240
+   bytes. Its wavelength is measured against the fin's own span rather than picked: the fin
+   covers 43% of `tailward`, and the plausible-looking first guess put six waves across it,
+   which reads as vibration rather than as a faster fin.
+
+   Standing it up is `pose: "upright"` in the manifest — an extra +90° roll about tank Z, applied
+   to the pivot so the animal still travels in its facing direction — with `swim: 0` for a rigid
+   body and `finRate` for a fin that beats fast enough to be seen. **The one thing that did not
+   fall out of that:** `Tank.fishFloorClearance` is five girths, and on an animal as deep front
+   to back as a curled seahorse that is more than half the water column, so `School.place`'s
+   `ceiling / 2` clamp pinned it to mid-water beside the tangs. `Tank.drifterFloorClearance` is
+   the fix, and the reason is worth keeping — **girth means "how deep is this fish" only for a
+   fish lying down.**
+
+   Left undone: the seahorse has no bony ring segmentation, which is its most distinctive
+   surface feature. The user judged the fin *"pretty good"* on the installed build and named the
+   rings as what is still missing, so that is item 1 above — and it is **not** just numbers in
+   `seahorse.py`, because a curved body has no coordinate to place a ring against yet.
+
+5. **Split `School.swift`.** **1395 lines** against the 750 guideline. This entry previously said
+   "do it before the next feature lands in it, not during", and then the seahorse landed in it
+   anyway — thirty lines for the upright pose, the `swim`/`finRate` scaling and the drifter's
+   spawn height. That was a judgement call rather than an oversight: the change is four small
+   edits spread through `makeFish`, `pose`, `simulate` and `place`, and hoisting them into a new
+   file would have meant moving those functions first, which is the split itself done in a hurry
+   and under a feature. The debt is real and it is now larger.
+
+   `spineMatrices` and the lurker-only code belong beside `SpineTrail`; the census and the
+   transit walker are each a file's worth on their own; the pose/uniform writing that `makeFish`
+   and `pose` now share is a fourth. Do it as its own change, with nothing else in flight.
 
 ### Done, kept for what they record
 

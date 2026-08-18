@@ -70,7 +70,11 @@ fringing underwater.
 
 - **The model library.** A roster of reef species, plus coral, plants, rocks and
   decorations, each committed with a manifest so the tank can place and animate it without
-  knowing what it is. See `docs/decorations.md` for that contract and
+  knowing what it is. A species states its body one of two ways: lofted along a straight X
+  axis from `width`/`top`/`bottom`, which suits anything shaped like a fish, or swept along a
+  `path` for an animal that doubles back on itself — the seahorse's bent neck and curled tail
+  are not functions of a monotone X. `saverlib/curved.py` holds the second one and the caveat
+  that comes with it. See `docs/decorations.md` for that contract and
   `spikes/004-articulated-decor/` for how the animated bubblers hinge. This is also the
   test of whether the primitives generalize past fish: a plant frond is a fin membrane
   with different numbers, a rock is a lofted body with noise, and coral is a branching
