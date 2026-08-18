@@ -38,8 +38,9 @@ shell across many visuals.
 
 ## 1. Space battle (overhead)
 
-Reference: `references/weird-worlds-space-battle.png` (Weird Worlds: Return to Infinite
-Space main menu).
+Reference: the main menu of *Weird Worlds: Return to Infinite Space* (Digital Eel). The
+screenshot is not redistributed here; search for it if you need to see what this section is
+reading.
 
 Ships stream in from off-screen as others die. Many hull types, varied weapons — missiles,
 lasers of different colours and thicknesses, gravity guns.

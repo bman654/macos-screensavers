@@ -56,6 +56,15 @@ manifest, and a locomotion model that is not swimming. **The seahorse's fin is s
 user on the installed build**: *"the seahorse rippling fins look pretty good"*. The same look
 found what is still missing, and it is the first item below.
 
+Extended 2026-08-18 (last) by the session that **prepared the repo for publication**: an MIT
+LICENSE, an end-user README at the root with the developer material moved to
+`docs/development.md`, a full Aquarium README (every setting, the three looks, all sixteen
+species), `--version` on `build-saver.sh` and a `tools/package-release.sh` that zips with
+`ditto` and re-verifies the signature after the round trip, and the 1.0.0 release itself. The
+user **deferred the `School.swift` split** — see item 5 — on the grounds that the saver is done
+and working. The third-party game screenshot under `docs/references/` was removed before the
+repo went public; the other two reference images are the user's own work and stayed.
+
 Extended 2026-08-18 (later) by the session that **plated the seahorse and gave the library
 colourways** — and, on the way, found that every fish in the tank had been shipping without its
 fin rays. Three things landed, in this order:
@@ -788,7 +797,7 @@ tank as the same seed with the shipped one.
 
 ## Next, in order
 
-**Item 5 is the only one still open.** Items 1-4 are done and signed off.
+**Nothing here is open.** Items 1-4 are done and signed off; item 5 was deferred by the user.
 
 1. ~~**The seahorse has no bony rings.**~~ **Done, 2026-08-18 — and it cost a library rebuild.**
    The plan below was right about where to draw the rings and wrong about one thing, and the
@@ -986,7 +995,11 @@ tank as the same seed with the shipped one.
    rings as what is still missing, so that is item 1 above — and it is **not** just numbers in
    `seahorse.py`, because a curved body has no coordinate to place a ring against yet.
 
-5. **Split `School.swift`.** **1395 lines** against the 750 guideline. This entry previously said
+5. ~~**Split `School.swift`.**~~ **Deferred by the user, 2026-08-18**, when the repo was
+   published: *"Defer splitting School.swift. It's working. We are practically done with this
+   saver. Lets leave it be."* The debt below is still accurate and still real — read it before
+   the next feature lands in this file, because that is the moment it starts costing again.
+   It is now **1411 lines** against the 750 guideline. This entry previously said
    "do it before the next feature lands in it, not during", and then the seahorse landed in it
    anyway — thirty lines for the upright pose, the `swim`/`finRate` scaling and the drifter's
    spawn height. That was a judgement call rather than an oversight: the change is four small
@@ -1556,8 +1569,9 @@ tank as the same seed with the shipped one.
   audio play three times at once, and each screen gets its own MSAA attachments — about
   350 MB at 4112x2658. This machine *mirrors* rather than extends, so it presents one logical
   display; testing this means turning mirroring off first.
-- **Long runs in the real host.** It is installed and confirmed working from System Settings —
-  the sheet, the thumbnail, and full-screen Preview — but the timing numbers above still come
-  from `run-saver`, which is the same view in an ordinary window. Nothing has yet been left
-  running for hours as an actual screensaver.
+- ~~**Long runs in the real host.**~~ **Cleared, 2026-08-18.** The user left it running
+  overnight as the actual screensaver, at least until the display slept, and reported no
+  problem. The timing numbers above still come from `run-saver`, which is the same view in an
+  ordinary window, so those are unchanged — but "does it survive hours in the real host" is
+  answered.
 - **The `default.metallib` path**, for lack of a Metal toolchain on this machine.

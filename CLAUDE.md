@@ -4,6 +4,8 @@
 
 - `docs/next-session.md` — current state, what to do next, and the traps that already cost
   time once. Read this first.
+- `docs/development.md` — layout, how to bake assets and build a `.saver`, and how a release is
+  cut. The public-facing counterpart of this file.
 - `Shared/SaverKit/README.md` — how to write a saver, and the macOS 26 hazards the base
   class handles for you. Read before touching any Swift here.
 - `docs/saver-host.md` — what the screensaver host actually does, and the rules that follow:
