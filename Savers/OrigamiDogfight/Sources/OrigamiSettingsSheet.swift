@@ -1,5 +1,6 @@
 // The screensaver's settings sheet: what kind of fight, how crowded, whether tanks join in,
-// and whether the score is kept — in words, with a live preview of the choice.
+// whether the score is kept, and the season and hour it is fought in — in words, with a live
+// preview of the choice.
 //
 // Built in code like the Aquarium's (`AquariumSettingsSheet`), and on the same rules, each of
 // which was learned the hard way (`docs/saver-host.md` §2, "The settings sheet is a second
@@ -33,6 +34,18 @@ final class OrigamiSettingsSheet: NSObject {
         Choice(value: .sometimes, title: "Sometimes"),
         Choice(value: .always, title: "Always"),
     ]
+    private static let seasons: [Choice<SeasonChoice>] = [
+        Choice(value: .summer, title: "Summer"),
+        Choice(value: .autumn, title: "Autumn"),
+        Choice(value: .winter, title: "Winter"),
+        Choice(value: .surprise, title: "Surprise me"),
+    ]
+    private static let dayTimes: [Choice<DayTimeChoice>] = [
+        Choice(value: .morning, title: "Morning"),
+        Choice(value: .midday, title: "Midday"),
+        Choice(value: .evening, title: "Evening"),
+        Choice(value: .surprise, title: "Surprise me"),
+    ]
 
     /// 16:9 and under the saver's 600-point preview threshold, so the preview renders as the
     /// System Settings thumbnail does — `RenderQuality.reduced`, the whole fight at a fraction of
@@ -50,6 +63,8 @@ final class OrigamiSettingsSheet: NSObject {
     private var teamButtons: [NSButton] = []
     private var planeButtons: [NSButton] = []
     private var tankButtons: [NSButton] = []
+    private var seasonButtons: [NSButton] = []
+    private var dayTimeButtons: [NSButton] = []
     private let scoreboardButton = NSButton()
     private let previewContainer = NSView()
     private var previewView: OrigamiDogfightView?
@@ -137,6 +152,20 @@ final class OrigamiSettingsSheet: NSObject {
         rebuildPreview()
     }
 
+    @objc private func seasonChanged(_ sender: NSButton) {
+        guard OrigamiSettingsSheet.seasons.indices.contains(sender.tag) else { return }
+        pending.season = OrigamiSettingsSheet.seasons[sender.tag].value
+        syncButtons()
+        rebuildPreview()
+    }
+
+    @objc private func dayTimeChanged(_ sender: NSButton) {
+        guard OrigamiSettingsSheet.dayTimes.indices.contains(sender.tag) else { return }
+        pending.dayTime = OrigamiSettingsSheet.dayTimes[sender.tag].value
+        syncButtons()
+        rebuildPreview()
+    }
+
     @objc private func scoreboardChanged(_ sender: NSButton) {
         pending.showsScoreboard = sender.state == .on
         rebuildPreview()
@@ -161,8 +190,10 @@ final class OrigamiSettingsSheet: NSObject {
         // nothing at all — a preview started then would never stop.
         guard window.isVisible else { return }
 
-        previewNote.stringValue = pending.teams == .surprise || pending.planes == .surprise
-            ? "\"Surprise me\" draws again every match, so the preview is one of many."
+        let surprises = pending.teams == .surprise || pending.planes == .surprise
+            || pending.season == .surprise || pending.dayTime == .surprise
+        previewNote.stringValue = surprises
+            ? "\"Surprise me\" draws afresh, so the preview is one of many."
             : "Every launch draws a different landscape."
 
         let frame = NSRect(origin: .zero, size: OrigamiSettingsSheet.previewSize)
@@ -195,6 +226,12 @@ final class OrigamiSettingsSheet: NSObject {
         for (index, choice) in OrigamiSettingsSheet.tanks.enumerated() {
             tankButtons[index].state = choice.value == pending.tanks ? .on : .off
         }
+        for (index, choice) in OrigamiSettingsSheet.seasons.enumerated() {
+            seasonButtons[index].state = choice.value == pending.season ? .on : .off
+        }
+        for (index, choice) in OrigamiSettingsSheet.dayTimes.enumerated() {
+            dayTimeButtons[index].state = choice.value == pending.dayTime ? .on : .off
+        }
         scoreboardButton.state = pending.showsScoreboard ? .on : .off
     }
 
@@ -208,6 +245,8 @@ final class OrigamiSettingsSheet: NSObject {
         teamButtons = OrigamiSettingsSheet.teams.enumerated().map { radio($1.title, tag: $0, action: #selector(teamsChanged(_:))) }
         planeButtons = OrigamiSettingsSheet.planes.enumerated().map { radio($1.title, tag: $0, action: #selector(planesChanged(_:))) }
         tankButtons = OrigamiSettingsSheet.tanks.enumerated().map { radio($1.title, tag: $0, action: #selector(tanksChanged(_:))) }
+        seasonButtons = OrigamiSettingsSheet.seasons.enumerated().map { radio($1.title, tag: $0, action: #selector(seasonChanged(_:))) }
+        dayTimeButtons = OrigamiSettingsSheet.dayTimes.enumerated().map { radio($1.title, tag: $0, action: #selector(dayTimeChanged(_:))) }
 
         scoreboardButton.setButtonType(.switch)
         scoreboardButton.title = "Keep score on a card in the corner"
@@ -218,6 +257,8 @@ final class OrigamiSettingsSheet: NSObject {
             group("Teams", teamButtons, caption: "Every plane for itself, or two or three sides."),
             group("Planes", planeButtons, caption: "More planes fly smaller, so the sky stays busy, not crowded."),
             group("Tanks", tankButtons, caption: "Paper tanks on the ground that throw pencils at the planes."),
+            group("Season", seasonButtons, caption: "Green fields, autumn gold, or snow with the lakes frozen over."),
+            group("Time of day", dayTimeButtons, caption: "Where the sun starts. It drifts slowly toward evening."),
             scoreboardButton,
         ])
         groups.orientation = .vertical

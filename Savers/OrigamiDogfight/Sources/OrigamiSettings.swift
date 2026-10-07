@@ -12,11 +12,13 @@ struct OrigamiSettings: Equatable {
     var planes: PlanesChoice
     var tanks: TanksChoice
     var showsScoreboard: Bool
+    var season: SeasonChoice
+    var dayTime: DayTimeChoice
 
     /// What a machine that has never opened the sheet gets: every match drawn afresh, tanks in
-    /// about half of them, and the card in the corner.
+    /// about half of them, the card in the corner, and any season at any hour.
     static let `default` = OrigamiSettings(teams: .surprise, planes: .surprise, tanks: .sometimes,
-                                           showsScoreboard: true)
+                                           showsScoreboard: true, season: .surprise, dayTime: .surprise)
 
     // Stored as the choices' raw strings, not ordinals: the stored value outlives this build,
     // and an ordinal would silently re-point if a choice were ever inserted.
@@ -24,8 +26,21 @@ struct OrigamiSettings: Equatable {
     private static let planesKey = "Planes"
     private static let tanksKey = "Tanks"
     private static let scoreboardKey = "Scoreboard"
+    private static let seasonKey = "Season"
+    private static let dayTimeKey = "TimeOfDay"
 
-    var simConfig: SimConfig { SimConfig(teams: teams, planes: planes, tanks: tanks) }
+    /// The sim's half of the settings. The season reaches it only through `atmosphere`, once
+    /// "surprise me" has been drawn for the session.
+    func simConfig(for atmosphere: Atmosphere) -> SimConfig {
+        var config = SimConfig(teams: teams, planes: planes, tanks: tanks)
+        config.frozenLakes = atmosphere.frozenLakes
+        return config
+    }
+
+    /// The season and the hour this session runs under, "surprise me" drawn from the seed.
+    func atmosphere(seed: UInt64) -> Atmosphere {
+        Atmosphere(season: season, dayTime: dayTime, seed: seed)
+    }
 
     // MARK: Persistence
 
@@ -38,6 +53,8 @@ struct OrigamiSettings: Equatable {
         if let stored = defaults.string(forKey: planesKey).flatMap(PlanesChoice.init(rawValue:)) { settings.planes = stored }
         if let stored = defaults.string(forKey: tanksKey).flatMap(TanksChoice.init(rawValue:)) { settings.tanks = stored }
         if defaults.object(forKey: scoreboardKey) != nil { settings.showsScoreboard = defaults.bool(forKey: scoreboardKey) }
+        if let stored = defaults.string(forKey: seasonKey).flatMap(SeasonChoice.init(rawValue:)) { settings.season = stored }
+        if let stored = defaults.string(forKey: dayTimeKey).flatMap(DayTimeChoice.init(rawValue:)) { settings.dayTime = stored }
         return settings
     }
 
@@ -47,6 +64,8 @@ struct OrigamiSettings: Equatable {
         defaults.set(planes.rawValue, forKey: OrigamiSettings.planesKey)
         defaults.set(tanks.rawValue, forKey: OrigamiSettings.tanksKey)
         defaults.set(showsScoreboard, forKey: OrigamiSettings.scoreboardKey)
+        defaults.set(season.rawValue, forKey: OrigamiSettings.seasonKey)
+        defaults.set(dayTime.rawValue, forKey: OrigamiSettings.dayTimeKey)
         // Synchronised on write: the sheet runs inside `legacyScreenSaver`, which System Settings
         // kills freely, and an unflushed preference is one the user set and then watched not happen.
         defaults.synchronize()
@@ -56,8 +75,9 @@ struct OrigamiSettings: Equatable {
     /// `tools/run-saver.swift` cannot click a sheet, so the environment is how the render loop
     /// reaches every setting — and it is empty under `legacyScreenSaver`, so it costs nothing
     /// where it matters. `ORIGAMI_TEAMS` (ffa / teams / surprise), `ORIGAMI_PLANES_TIER`
-    /// (few / some / lots / surprise), `ORIGAMI_TANKS` (off / sometimes / always) and
-    /// `ORIGAMI_SCOREBOARD` (0 / 1).
+    /// (few / some / lots / surprise), `ORIGAMI_TANKS` (off / sometimes / always),
+    /// `ORIGAMI_SCOREBOARD` (0 / 1), `ORIGAMI_SEASON` (summer / autumn / winter / surprise) and
+    /// `ORIGAMI_TIME` (morning / midday / evening / surprise).
     static func forLaunch(defaults: ScreenSaverDefaults?,
                           environment: [String: String] = ProcessInfo.processInfo.environment) -> OrigamiSettings {
         var settings = load(from: defaults)
@@ -72,6 +92,12 @@ struct OrigamiSettings: Equatable {
         }
         if let shown = environment["ORIGAMI_SCOREBOARD"] {
             settings.showsScoreboard = (shown as NSString).boolValue
+        }
+        if let pinned = environment["ORIGAMI_SEASON"].flatMap({ SeasonChoice(rawValue: $0.lowercased()) }) {
+            settings.season = pinned
+        }
+        if let pinned = environment["ORIGAMI_TIME"].flatMap({ DayTimeChoice(rawValue: $0.lowercased()) }) {
+            settings.dayTime = pinned
         }
         return settings
     }

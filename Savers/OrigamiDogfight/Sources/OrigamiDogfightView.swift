@@ -13,9 +13,11 @@ final class OrigamiDogfightView: SaverView {
 
     private var dogfight: DogfightScene?
 
-    /// The fight an idle release or a quality change let go of, and whether it had its card,
-    /// kept so the rebuilt scene shows the same fight carrying on rather than a new one.
-    private var resume: (sim: DogfightSim, showsScoreboard: Bool)?
+    /// The fight an idle release or a quality change let go of, the countryside around it, and
+    /// whether it had its card, kept so the rebuilt scene shows the same fight carrying on in the
+    /// same season and light rather than a new one.
+    private var resume: (sim: DogfightSim, countryside: Countryside, showsScoreboard: Bool)?
+    private var countryside: Countryside?
     private var showsScoreboard = true
 
     /// The scene a release let go of, held weakly so the next build can say whether it really
@@ -48,7 +50,8 @@ final class OrigamiDogfightView: SaverView {
     /// fires and shots in flight included. A reload is a request for something new: settings
     /// were changed, and they are read when the sim is made.
     override func didReleaseHost(_ reason: HostReleaseReason) {
-        resume = reason == .reload ? nil : dogfight.map { ($0.sim, showsScoreboard) }
+        resume = reason == .reload ? nil : dogfight.flatMap { scene in countryside.map { (scene.sim, $0, showsScoreboard) } }
+        countryside = nil
         releasedScene = dogfight
         dogfight = nil
     }
@@ -75,14 +78,17 @@ final class OrigamiDogfightView: SaverView {
         }
         let aspect = Float(context.drawableSize.width / max(context.drawableSize.height, 1))
         let sim: DogfightSim
+        let countryside: Countryside
         if let resume {
             sim = resume.sim
+            countryside = resume.countryside
             showsScoreboard = resume.showsScoreboard
             sim.setAspect(aspect)
         } else {
             let launch = LaunchOptions.fromEnvironment()
             let settings = settingsOverride ?? OrigamiSettings.forLaunch(defaults: saverDefaults)
-            var config = settings.simConfig
+            let atmosphere = settings.atmosphere(seed: launch.seed)
+            var config = settings.simConfig(for: atmosphere)
             config.mode = launch.mode
             config.planeCount = launch.planeCount
             showsScoreboard = settings.showsScoreboard
@@ -93,10 +99,12 @@ final class OrigamiDogfightView: SaverView {
             sim.advance(steps: Int(warmup / DogfightSim.stepSeconds))
             if launch.lineup { sim.stageLineup() }
             if launch.freeze { sim.isFrozen = true }
+            countryside = Countryside(sim: sim, atmosphere: atmosphere)
         }
         resume = nil
+        self.countryside = countryside
 
-        let scene = DogfightScene(sim: sim, bundle: context.bundle, quality: context.quality,
+        let scene = DogfightScene(sim: sim, countryside: countryside, bundle: context.bundle, quality: context.quality,
                                   showsScoreboard: showsScoreboard)
         // 4x everywhere, the tile included: a `.reduced` frame is magnified to fill its view, so
         // its edges need antialiasing more than a full one's, and four samples of a 720-pixel

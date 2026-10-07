@@ -3,6 +3,9 @@
 //
 // Three vertices per triangle, never shared, so each face carries its own normal and colour —
 // a shared-vertex mesh would smooth the folds away, and the folds are the whole look.
+//
+// The colours are the season's (`SeasonPalette`); the light on the folds is the hour's, set on
+// the material as the sun moves (`DayLight`).
 
 import AppKit
 import Foundation
@@ -11,23 +14,8 @@ import simd
 
 enum TerrainMesh {
 
-    /// The landscape palette, sRGB as authored. Meadows are a patchwork of greens and the odd
-    /// ripe field, so the low ground reads as folded farmland rather than one green sheet.
-    private static let water = PaperColor(0.40, 0.66, 0.84)
-    private static let shallows = PaperColor(0.52, 0.74, 0.87)
-    private static let shore = PaperColor(0.88, 0.78, 0.58)
-    private static let meadows = [PaperColor(0.56, 0.76, 0.40), PaperColor(0.46, 0.69, 0.35),
-                                  PaperColor(0.64, 0.80, 0.44), PaperColor(0.40, 0.62, 0.33),
-                                  PaperColor(0.80, 0.78, 0.44)]
-    /// A deeper green than the meadows rather than an olive: the hills cover a third of some
-    /// landscapes, and olive there read as a drab brown mass behind the fight.
-    private static let hills = [PaperColor(0.45, 0.61, 0.34), PaperColor(0.41, 0.57, 0.32)]
-    private static let rocks = [PaperColor(0.62, 0.57, 0.50), PaperColor(0.53, 0.49, 0.44)]
-    /// Off-white, so the sunlit face of a cap is the only one that reaches white and the others
-    /// show the fold. At white the whole cap clipped to one blank sheet.
-    private static let snow = PaperColor(0.84, 0.85, 0.86)
-
-    static func node(for terrain: Terrain, seed: UInt64) -> SCNNode {
+    static func node(for terrain: Terrain, seed: UInt64, season: Season) -> SCNNode {
+        let palette = SeasonPalette.of(season)
         let lattice = terrain.lattice
         let points = (0..<lattice.faceCount).map { scenePoints(terrain, face: $0) }
         let normals = points.map { simd_normalize(simd_cross($0[1] - $0[0], $0[2] - $0[0])) }
@@ -42,10 +30,9 @@ enum TerrainMesh {
 
         for face in 0..<lattice.faceCount {
             let p = points[face]
-            var color = linearRGBA(color(for: terrain.bands[face], variant: Int(terrain.variants[face]),
-                                         jitter: terrain.jitter[face]))
-            let shade = foldShade(normals[face])
-            color = SIMD4(simd_min(SIMD3(color.x, color.y, color.z) * shade, SIMD3(repeating: 1)), color.w)
+            // The drawn band, so a frozen lake is drawn as ice where the fight treats it as ground.
+            let color = linearRGBA(color(for: terrain.surface[face], variant: Int(terrain.variants[face]),
+                                         jitter: terrain.jitter[face], palette: palette))
             let uv = p.map { SIMD2($0.x, $0.z) / grainTile }
             let code = SIMD2<Float>(creases[face], 0)
             mesh.triangle(p[0], p[1], p[2], uv: (uv[0], uv[1], uv[2]), color: color,
@@ -62,6 +49,10 @@ enum TerrainMesh {
         material.diffuse.mipFilter = .linear
         material.diffuse.maxAnisotropy = 8
         material.shaderModifiers = [.geometry: creaseGeometry, .surface: creaseSurface]
+        let dark = palette.foldDark
+        material.setValue(NSValue(scnVector3: SCNVector3(CGFloat(dark.x), CGFloat(dark.y), CGFloat(dark.z))),
+                          forKey: "foldDark")
+        aim(material, foldsFrom: DayLight.sunTravel(at: 0.5))
 
         let node = SCNNode(geometry: mesh.geometry(materials: [material]))
         node.name = "terrain"
@@ -90,21 +81,16 @@ enum TerrainMesh {
     /// there is: the folds vanished and the land read as flat paper with triangles drawn on it.
     /// So each face's colour carries what a low sun would do to it, as a factor that leaves
     /// level ground exactly as it was. The real sun still lights and shadows on top.
-    private static let foldLight: SIMD3<Float> = {
+    ///
+    /// A uniform rather than baked into the vertex colours, as it was while the sun never moved:
+    /// the sun now crosses the sky over a session, and the folds must turn with it.
+    static func aim(_ material: SCNMaterial, foldsFrom travel: SIMD3<Float>) {
         let elevation: Float = 32 * .pi / 180
-        let travel = DogfightScene.sunTravel
         // Toward the sun is against its travel; sim (x, y) is SceneKit (x, -z).
         let bearing = simd_normalize(SIMD2(-travel.x, travel.y))
-        return SIMD3(bearing.x * cos(elevation), sin(elevation), bearing.y * cos(elevation))
-    }()
-
-    private static func foldShade(_ normal: SIMD3<Float>) -> Float {
-        let ambient: Float = 0.35
-        func lit(_ n: SIMD3<Float>) -> Float { ambient + (1 - ambient) * max(simd_dot(n, foldLight), 0) }
-        let relative = lit(normal) / lit(SIMD3(0, 1, 0))
-        // Strengthened past what the low sun alone would give, then floored: a lake bank or a
-        // cliff turned from the sun went near black, and the ground is a backdrop.
-        return max(1 + 1.4 * (relative - 1), 0.62)
+        let light = SIMD3(bearing.x * cos(elevation), sin(elevation), bearing.y * cos(elevation))
+        material.setValue(NSValue(scnVector3: SCNVector3(CGFloat(light.x), CGFloat(light.y), CGFloat(light.z))),
+                          forKey: "foldLight")
     }
 
     /// Per face, how sharply it is folded along each of its three edges — the edge opposite
@@ -141,12 +127,26 @@ enum TerrainMesh {
         }
     }
 
-    /// Unpacks the fold levels once per vertex and hands the fragment its place in the face.
+    /// Unpacks the fold levels once per vertex and hands the fragment its place in the face —
+    /// and shades the face for the low sun: every vertex of a face carries the face's own normal,
+    /// so the shade is one value across it. Strengthened past what the low sun alone would give,
+    /// then floored: a lake bank or a cliff turned from the sun went near black, and the ground
+    /// is a backdrop. Below level the shade darkens each channel by its own `foldDark`, which is
+    /// how winter's shaded snow goes blue rather than grey. The terrain node sits at the origin
+    /// unrotated, so the model-space normal is the world's.
     private static let creaseGeometry = """
+    #pragma arguments
+    float3 foldLight;
+    float3 foldDark;
     #pragma varyings
     float3 facet;
     float3 fold;
+    float3 shade;
     #pragma body
+    float level = 0.35 + 0.65 * max(foldLight.y, 0.0);
+    float lit = 0.35 + 0.65 * max(dot(_geometry.normal, foldLight), 0.0);
+    float s = max(1.0 + 1.4 * (lit / level - 1.0), 0.62);
+    out.shade = s >= 1.0 ? float3(s) : 1.0 - (1.0 - s) * foldDark;
     float2 corner = _geometry.texcoords[1];
     out.facet = float3(corner.x, corner.y, 1.0 - corner.x - corner.y);
     float packed = _geometry.texcoords[2].x;
@@ -161,7 +161,9 @@ enum TerrainMesh {
     #pragma varyings
     float3 facet;
     float3 fold;
+    float3 shade;
     #pragma body
+    _surface.diffuse.rgb = min(_surface.diffuse.rgb * in.shade, float3(1.0));
     float3 pixel = max(fwidth(in.facet), float3(1e-6));
     float3 near = 1.0 - smoothstep(float3(0.0), pixel * 1.6, in.facet);
     float3 f = in.fold * near;
@@ -172,16 +174,17 @@ enum TerrainMesh {
 
     // MARK: Colour
 
-    private static func color(for band: TerrainBand, variant: Int, jitter: Float) -> PaperColor {
+    private static func color(for band: TerrainBand, variant: Int, jitter: Float,
+                              palette p: SeasonPalette) -> PaperColor {
         let base: PaperColor
         let spread: CGFloat
         switch band {
-        case .water: base = variant == 1 ? shallows : water; spread = 0.0125
-        case .shore: base = shore; spread = 0.02
-        case .meadow: base = meadows[variant % meadows.count]; spread = 0.025
-        case .hill: base = hills[variant % hills.count]; spread = 0.025
-        case .rock: base = rocks[variant % rocks.count]; spread = 0.025
-        case .snow: base = snow; spread = 0.0125
+        case .water: base = variant == 1 ? p.shallows : p.water; spread = 0.0125
+        case .shore: base = p.shore; spread = 0.02
+        case .meadow: base = p.meadows[variant % p.meadows.count]; spread = 0.025
+        case .hill: base = p.hills[variant % p.hills.count]; spread = 0.025
+        case .rock: base = p.rocks[variant % p.rocks.count]; spread = 0.025
+        case .snow: base = p.snow; spread = 0.0125
         }
         // Small: one field is one sheet of paper, and its faces should differ by how they are
         // folded, not by a random tint each.

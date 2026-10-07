@@ -1,9 +1,10 @@
 // The diorama: a folded-paper landscape under a warm sun, a camera looking almost straight
 // down on it, and every frame the sim's state turned into posed nodes.
 //
-// This file owns only what is true of the whole scene — camera, lights, the clock that turns
-// frame time into fixed sim steps, and the dispatch of the sim's events to effects. Planes,
-// tanks, shots, wrecks and the scoreboard each have a file of their own.
+// This file owns only what is true of the whole scene — the camera, the clock that turns frame
+// time into fixed sim steps, and the dispatch of the sim's events to effects. Planes, tanks,
+// shots, wrecks and the scoreboard each have a file of their own; the landscape, its season,
+// the sun and everything living around the fight are `Landscape`'s.
 
 import AppKit
 import Foundation
@@ -26,11 +27,7 @@ final class DogfightScene {
     private let shots: ProjectileField
     private let wrecks: WreckField
     private let scoreboard: Scoreboard?
-    private let keyLight = SCNLight()
-
-    /// The sun's direction of travel, in sim axes: toward the lower right of the frame, mostly
-    /// down. The key light is aimed along it, and the terrain's folds are shaded from it.
-    static let sunTravel = SIMD3<Float>(0.36, -0.42, -1)
+    private let landscape: Landscape
 
     /// Frame time at which sim step zero would have been due. Set on the first frame — so a
     /// sim handed over from a previous scene carries on from where it was rather than jumping —
@@ -41,7 +38,7 @@ final class DogfightScene {
     /// rebuild then costs a skipped quarter-second, never a burst of a hundred steps on one frame.
     private static let maxCatchUp = 30
 
-    init(sim: DogfightSim, bundle: Bundle, quality: RenderQuality, showsScoreboard: Bool) {
+    init(sim: DogfightSim, countryside: Countryside, bundle: Bundle, quality: RenderQuality, showsScoreboard: Bool) {
         self.sim = sim
         // Zero-duration, for the reason `SceneKitHost.encode` gives: a node property set outside
         // SceneKit's render loop is otherwise an implicit animation stamped with a clock the
@@ -60,10 +57,9 @@ final class DogfightScene {
         scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
 
         scene.background.contents = NSColor(srgbRed: 0.86, green: 0.84, blue: 0.78, alpha: 1)
-        scene.rootNode.addChildNode(TerrainMesh.node(for: sim.terrain, seed: sim.seed))
-        scene.rootNode.addChildNode(Scenery.node(spots: sim.props, shelf: shelf))
+        landscape = Landscape(sim: sim, countryside: countryside, shelf: shelf, quality: quality, scene: scene.rootNode)
+        scene.rootNode.addChildNode(landscape.root)
         for root in [wrecks.root, armour.root, shots.root, fleet.root, effects.root] { scene.rootNode.addChildNode(root) }
-        buildLights(quality: quality)
         buildCamera()
         if let scoreboard { cameraNode.addChildNode(scoreboard.node) }
         // Which fight this scene was handed, and how far into it — the only way to see that an
@@ -91,11 +87,13 @@ final class DogfightScene {
                   tanks.joined(separator: " "),
                   props.joined(separator: " "), shelf.fire().isStandIn ? "stand-in" : "library",
                   shelf.smoke() == nil ? "stand-in" : "library")
+            NSLog("Origami lineup: countryside %@", Landscape.census(shelf))
         }
 
         // Whatever happened during a warmup, or before an idle release, is already over: its
-        // wrecks are in the sim's state and will be drawn from it, and its sparks are gone.
-        _ = sim.drainEvents()
+        // wrecks are in the sim's state and will be drawn from it, and its sparks are gone. The
+        // marks it left on the ground are not, and the landscape keeps those.
+        for event in sim.drainEvents() { landscape.observe(event, sim: sim, live: false) }
     }
 
     // MARK: Frame
@@ -122,7 +120,11 @@ final class DogfightScene {
         let alpha = Float(min(max((frame.time - origin) / step - Double(sim.steps), 0), 1))
 
         effects.update(time: frame.time)
-        for event in sim.drainEvents() { react(to: event) }
+        for event in sim.drainEvents() {
+            react(to: event)
+            landscape.observe(event, sim: sim, live: true)
+        }
+        landscape.update(sim: sim, time: sim.time + Double(alpha) * DogfightSim.stepSeconds)
         fleet.sync(sim, alpha: alpha, time: frame.time)
         armour.sync(sim, alpha: alpha)
         shots.sync(sim, alpha: alpha)
@@ -160,43 +162,6 @@ final class DogfightScene {
         case .matchStarted, .matchEnded, .spawned, .fired, .exited, .tankSpawned, .tankFired, .tankLeft:
             break
         }
-    }
-
-    // MARK: Light
-
-    private func buildLights(quality: RenderQuality) {
-        // A warm sun from the upper left of the frame, high enough that a plane's shadow lands
-        // clearly offset from it — about half a metre for a plane at the top of the band. Too
-        // high, alone, for the landscape's folds to show from overhead; `TerrainMesh` bakes a
-        // lower sun on this same bearing into the ground's colours for that.
-        keyLight.type = .directional
-        keyLight.color = NSColor(srgbRed: 1.0, green: 0.93, blue: 0.80, alpha: 1)
-        keyLight.intensity = 820
-        keyLight.castsShadow = true
-        // The one fidelity knob a `.reduced` tile may turn: the shadow map does not shrink with
-        // the resolution cap, and a two-inch tile cannot show a 2048-texel map's edges anyway.
-        let map: CGFloat = quality == .reduced ? 1024 : 2048
-        keyLight.shadowMapSize = CGSize(width: map, height: map)
-        keyLight.shadowSampleCount = 8
-        keyLight.shadowRadius = 2.0
-        keyLight.shadowColor = NSColor(white: 0, alpha: 0.42)
-        keyLight.shadowMode = .forward
-        keyLight.automaticallyAdjustsShadowProjection = true
-        keyLight.maximumShadowDistance = 16
-        let key = SCNNode()
-        key.light = keyLight
-        let travel = DogfightScene.sunTravel
-        key.simdLook(at: SIMD3(travel.x, travel.z, -travel.y), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
-        scene.rootNode.addChildNode(key)
-
-        // Skylight: cool and soft, so a shadow is a cooler, dimmer paper rather than a hole.
-        let ambient = SCNLight()
-        ambient.type = .ambient
-        ambient.color = NSColor(srgbRed: 0.80, green: 0.85, blue: 0.96, alpha: 1)
-        ambient.intensity = 430
-        let sky = SCNNode()
-        sky.light = ambient
-        scene.rootNode.addChildNode(sky)
     }
 
     // MARK: Camera
