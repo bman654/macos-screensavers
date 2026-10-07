@@ -61,10 +61,13 @@ struct FacetLattice {
     }
 
     /// The point nearest a position, on the unnudged lattice — close enough to name a summit.
+    /// Clamped as floats before converting, so no position — however far off, or not a number —
+    /// can trap the conversion.
     func nearestPoint(to p: SIMD2<Float>) -> Int {
-        let j = min(max(Int(((p.y - origin.y) / rowStep).rounded()), 0), rows - 1)
+        func clamped(_ v: Float, _ upper: Int) -> Int { v.isFinite ? Int(min(max(v.rounded(), 0), Float(upper))) : 0 }
+        let j = clamped((p.y - origin.y) / rowStep, rows - 1)
         let shift: Float = j % 2 == 1 ? 0.5 : 0
-        let i = min(max(Int(((p.x - origin.x) / spacing - shift).rounded()), 0), columns - 1)
+        let i = clamped((p.x - origin.x) / spacing - shift, columns - 1)
         return j * columns + i
     }
 
@@ -140,34 +143,74 @@ struct FacetLattice {
 
     /// Whether any face that a disc of `radius` round `center` overlaps — even by a sliver —
     /// satisfies `test`. Exact, not sampled: a face counts when the centre is inside it or any
-    /// of its edges passes within `radius` of the centre. Faces off the lattice do not exist.
-    ///
-    /// Candidates are found as in `locate`, widened by the disc: a nudged face lies within its
-    /// unnudged triangle grown by under a third of a step, so the strips and columns the disc's
-    /// box spans, plus one either side, hold every face it can touch.
+    /// of its edges passes within `radius` of the centre. Faces off the lattice do not exist,
+    /// and neither does anything under a point that is not a number.
     func anyFace(touching center: SIMD2<Float>, radius: Float, where test: (Int) -> Bool) -> Bool {
-        let g = center - origin
         let r2 = radius * radius
-        let firstStrip = max(Int(floor((g.y - radius) / rowStep)) - 1, 0)
-        let lastStrip = min(Int(floor((g.y + radius) / rowStep)) + 1, rows - 2)
-        let firstColumn = max(Int(floor((g.x - radius) / spacing)) - 2, 0)
-        let lastColumn = min(Int(floor((g.x + radius) / spacing)) + 1, columns - 2)
+        return anyCandidate(near: center, center, radius: radius) { face, a, b, d in
+            let touches = FacetLattice.barycentric(center, a, b, d).min() >= 0
+                || FacetLattice.distanceSquared(center, a, b) <= r2
+                || FacetLattice.distanceSquared(center, b, d) <= r2
+                || FacetLattice.distanceSquared(center, d, a) <= r2
+            return touches && test(face)
+        }
+    }
+
+    /// Whether any face that a strip `radius` either side of the segment `p`–`q` overlaps — the
+    /// capsule swept by a disc along it — satisfies `test`. Exact in the same way: a face counts
+    /// when either end is inside it or any of its edges passes within `radius` of the segment,
+    /// which includes the segment crossing it.
+    func anyFace(touchingSegment p: SIMD2<Float>, _ q: SIMD2<Float>, radius: Float,
+                 where test: (Int) -> Bool) -> Bool {
+        let r2 = radius * radius
+        return anyCandidate(near: p, q, radius: radius) { face, a, b, d in
+            let touches = FacetLattice.barycentric(p, a, b, d).min() >= 0
+                || FacetLattice.barycentric(q, a, b, d).min() >= 0
+                || FacetLattice.segmentDistanceSquared(p, q, a, b) <= r2
+                || FacetLattice.segmentDistanceSquared(p, q, b, d) <= r2
+                || FacetLattice.segmentDistanceSquared(p, q, d, a) <= r2
+            return touches && test(face)
+        }
+    }
+
+    /// Every face that could come within `radius` of the box round `p` and `q`, until `visit`
+    /// says yes. A nudged face lies within its unnudged triangle grown by under a third of a
+    /// step, so the strips and columns the box spans, plus one either side, hold every face it
+    /// can touch — the same search `locate` makes, widened.
+    private func anyCandidate(near p: SIMD2<Float>, _ q: SIMD2<Float>, radius: Float,
+                              visit: (Int, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) -> Bool) -> Bool {
+        guard p.x.isFinite, p.y.isFinite, q.x.isFinite, q.y.isFinite, radius.isFinite, radius >= 0 else { return false }
+        let lo = simd_min(p, q) - origin, hi = simd_max(p, q) - origin
+        // Clamped before converting, so a point far off the lattice cannot overflow an Int.
+        let limit = Float(max(rows, columns) + 4)
+        func cell(_ v: Float, _ step: Float) -> Int { Int(min(max(floor(v / step), -limit), limit)) }
+        let firstStrip = max(cell(lo.y - radius, rowStep) - 1, 0)
+        let lastStrip = min(cell(hi.y + radius, rowStep) + 1, rows - 2)
+        let firstColumn = max(cell(lo.x - radius, spacing) - 2, 0)
+        let lastColumn = min(cell(hi.x + radius, spacing) + 1, columns - 2)
         guard firstStrip <= lastStrip, firstColumn <= lastColumn else { return false }
         for j in firstStrip...lastStrip {
             for i in firstColumn...lastColumn {
                 for k in 0..<2 {
                     let face = (j * (columns - 1) + i) * 2 + k
                     let c = corners(of: face)
-                    let a = points[Int(c.x)], b = points[Int(c.y)], d = points[Int(c.z)]
-                    let touches = FacetLattice.barycentric(center, a, b, d).min() >= 0
-                        || FacetLattice.distanceSquared(center, a, b) <= r2
-                        || FacetLattice.distanceSquared(center, b, d) <= r2
-                        || FacetLattice.distanceSquared(center, d, a) <= r2
-                    if touches && test(face) { return true }
+                    if visit(face, points[Int(c.x)], points[Int(c.y)], points[Int(c.z)]) { return true }
                 }
             }
         }
         return false
+    }
+
+    /// The closest two segments come, squared: zero if they cross, else the nearest an end of
+    /// one comes to the other.
+    private static func segmentDistanceSquared(_ p: SIMD2<Float>, _ q: SIMD2<Float>,
+                                               _ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+        func side(_ o: SIMD2<Float>, _ u: SIMD2<Float>, _ v: SIMD2<Float>) -> Float {
+            (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x)
+        }
+        let d1 = side(a, b, p), d2 = side(a, b, q), d3 = side(p, q, a), d4 = side(p, q, b)
+        if ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)) { return 0 }
+        return min(distanceSquared(p, a, b), distanceSquared(q, a, b), distanceSquared(a, p, q), distanceSquared(b, p, q))
     }
 
     /// From `p` to the nearest point of the segment `a`–`b`, squared.

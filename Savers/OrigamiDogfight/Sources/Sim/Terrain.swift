@@ -171,6 +171,13 @@ struct Terrain {
         return surface[face] == .water
     }
 
+    /// Whether a strip `radius` either side of the segment `a`–`b` lies over any lake face,
+    /// frozen or not — every face it overlaps, exactly. What a road is checked against: a lane
+    /// laid across the ice would be a lane across a lake every summer the seed is drawn in.
+    func isLake(alongSegment a: SIMD2<Float>, _ b: SIMD2<Float>, radius: Float) -> Bool {
+        lattice.anyFace(touchingSegment: a, b, radius: radius) { surface[$0] == .water }
+    }
+
     /// Rise over run of the facet under a point.
     func slope(at p: SIMD2<Float>) -> Float {
         guard let (face, _) = lattice.locate(p) else { return 0 }

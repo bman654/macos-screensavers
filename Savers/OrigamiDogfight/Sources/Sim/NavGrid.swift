@@ -40,11 +40,12 @@ struct NavGrid {
         inRegion = inside
     }
 
+    /// Compared as floats before converting, so a point off the grid — however far, or not a
+    /// number — is simply off it.
     func index(of p: SIMD2<Float>) -> Int? {
-        let g = (p - origin) / cell
-        let column = Int(floor(g.x)), row = Int(floor(g.y))
-        guard column >= 0, row >= 0, column < columns, row < rows else { return nil }
-        return row * columns + column
+        let g = ((p - origin) / cell).rounded(.down)
+        guard g.x >= 0, g.y >= 0, g.x < Float(columns), g.y < Float(rows) else { return nil }
+        return Int(g.y) * columns + Int(g.x)
     }
 
     func center(of index: Int) -> SIMD2<Float> {

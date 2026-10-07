@@ -136,8 +136,11 @@ struct SpacingGrid {
 
     init(cell: Float) { self.cell = cell }
 
+    /// Clamped as floats before converting: a point that is not a number, or absurdly far off,
+    /// lands in an outer bucket rather than trapping the conversion.
     private func key(_ p: SIMD2<Float>) -> SIMD2<Int32> {
-        SIMD2(Int32(floor(p.x / cell)), Int32(floor(p.y / cell)))
+        func bucket(_ v: Float) -> Int32 { v.isFinite ? Int32(min(max(floor(v / cell), -1e6), 1e6)) : Int32.min / 2 }
+        return SIMD2(bucket(p.x), bucket(p.y))
     }
 
     mutating func insert(_ p: SIMD2<Float>, radius: Float) {
@@ -147,7 +150,8 @@ struct SpacingGrid {
 
     /// Whether a disc of `radius` at `p` would overlap anything placed, each by its own radius.
     func isOccupied(_ p: SIMD2<Float>, radius: Float) -> Bool {
-        let reach = Int32(ceil((radius + widest) / cell))
+        guard radius.isFinite else { return false }
+        let reach = Int32(ceil((max(radius, 0) + widest) / cell))
         let k = key(p)
         for dy in -reach...reach {
             for dx in -reach...reach {

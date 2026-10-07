@@ -69,21 +69,28 @@ struct BuildGrid {
         clearance = distanceField()
     }
 
+    /// Compared as floats before converting, so a point off the grid — however far, or not a
+    /// number — is simply off it.
     func index(_ p: SIMD2<Float>) -> Int? {
-        let g = (p - origin) / cell
-        let column = Int(g.x.rounded()), row = Int(g.y.rounded())
-        guard column >= 0, row >= 0, column < columns, row < rows else { return nil }
-        return row * columns + column
+        let g = ((p - origin) / cell).rounded(.toNearestOrAwayFromZero)
+        guard g.x >= 0, g.y >= 0, g.x < Float(columns), g.y < Float(rows) else { return nil }
+        return Int(g.y) * columns + Int(g.x)
     }
 
-    /// Closes every cell within `radius` of any of `points`, and recomputes the clearances.
+    /// Closes every cell within `radius` of any of `points`, and recomputes the clearances. A
+    /// point whose reach misses the grid closes nothing.
     mutating func close(around points: [SIMD2<Float>], radius: Float) {
+        guard radius.isFinite, radius >= 0 else { return }
         let reach = Int(ceil(radius / cell))
-        for p in points {
+        for p in points where p.x.isFinite && p.y.isFinite {
             let g = (p - origin) / cell
-            let c0 = Int(g.x.rounded()), r0 = Int(g.y.rounded())
-            for r in max(r0 - reach, 0)...max(min(r0 + reach, rows - 1), 0) {
-                for c in max(c0 - reach, 0)...max(min(c0 + reach, columns - 1), 0) {
+            let span = Float(max(rows, columns) + reach + 1)
+            let c0 = Int(min(max(g.x.rounded(), -span), span)), r0 = Int(min(max(g.y.rounded(), -span), span))
+            let firstRow = max(r0 - reach, 0), lastRow = min(r0 + reach, rows - 1)
+            let firstColumn = max(c0 - reach, 0), lastColumn = min(c0 + reach, columns - 1)
+            guard firstRow <= lastRow, firstColumn <= lastColumn else { continue }
+            for r in firstRow...lastRow {
+                for c in firstColumn...lastColumn {
                     let q = origin + SIMD2(Float(c), Float(r)) * cell
                     if simd_distance(p, q) <= radius { open[r * columns + c] = false }
                 }

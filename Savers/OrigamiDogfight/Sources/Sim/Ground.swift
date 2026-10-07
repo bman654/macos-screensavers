@@ -77,6 +77,8 @@ struct Ground {
     /// Whether the straight road from `a` to `b` is driveable all the way.
     func isClear(from a: SIMD2<Float>, to b: SIMD2<Float>, footprint r: Float) -> Bool {
         let length = simd_distance(a, b)
+        // A road nobody can measure is not a road: no step count to take, and nothing to clear.
+        guard length.isFinite else { return false }
         let steps = max(Int(ceil(length / 0.05)), 1)
         for k in 1...steps where !isDriveable(a + (b - a) * (Float(k) / Float(steps)), footprint: r) {
             return false
