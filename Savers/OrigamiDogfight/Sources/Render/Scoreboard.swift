@@ -21,8 +21,11 @@ final class Scoreboard {
     var backingScale: CGFloat = 1
 
     /// Which corner match zero takes; every match after moves one corner round, so nothing sits
-    /// in one place long enough to burn in.
+    /// in one place long enough to burn in — unless an airfield stands there, when it moves on
+    /// round to the next corner that is clear (`corner(for:)`).
     private let firstCorner: Int
+    /// The corner chosen, and for which match, frame and card, since it is the same all match.
+    private var placed: (match: Int, frame: CGSize, card: SIMD2<Float>, corner: Int)?
     private var drawn: (content: ScoreCardContent, size: CGSize, pixelsPerPoint: CGFloat)?
 
     /// In front of everything: the camera's near plane is 1.5 m and the nearest plane is
@@ -94,7 +97,7 @@ final class Scoreboard {
         let h = Float(shown * size.height / size.width) * metresPerPixel
         quad.width = CGFloat(w)
         quad.height = CGFloat(h)
-        let corner = (firstCorner + match.index) % 4
+        let corner = self.corner(for: sim, frame: frame, card: SIMD2(w / halfWidth, h / halfHeight))
         let right: Float = corner == 1 || corner == 2 ? 1 : -1
         let up: Float = corner < 2 ? 1 : -1
         let x = right * (halfWidth * (1 - 2 * Scoreboard.edgeMargin) - w / 2)
@@ -117,5 +120,32 @@ final class Scoreboard {
             opacity = Float(min(max((until - now) / 1.2, 0), 1))
         }
         node.opacity = CGFloat(opacity)
+    }
+
+    /// This match's corner: one round from the last match's, or further round if an airfield
+    /// stands under the card there — a hangar hidden behind the score is the one thing the card
+    /// must never cover. `card` is the card's size as a share of the frame's half-extents.
+    private func corner(for sim: DogfightSim, frame: CGSize, card: SIMD2<Float>) -> Int {
+        let match = sim.match
+        if let placed, placed.match == match.index, placed.frame == frame, simd_distance(placed.card, card) < 0.01 {
+            return placed.corner
+        }
+        // The ground each airfield covers, a little beyond its edges, where it lands in the frame.
+        let ground = match.bases.compactMap { $0 }.flatMap { base in
+            sim.footprint(of: base, margin: 0.04).map { sim.rig.screen($0, altitude: base.top) }
+        }
+        let preferred = (firstCorner + match.index) % 4
+        let corner = (0..<4).map { (preferred + $0) % 4 }.first { corner in
+            let sign = SIMD2<Float>(corner == 1 || corner == 2 ? 1 : -1, corner < 2 ? 1 : -1)
+            // How far in from the frame's corner the card reaches, its margin included, and a
+            // little more for its tilt.
+            let reach = card * 1.12 + SIMD2(repeating: 2 * Scoreboard.edgeMargin)
+            return !ground.contains { p in
+                let inward = SIMD2<Float>(1, 1) - p * sign
+                return inward.x < reach.x && inward.y < reach.y
+            }
+        } ?? preferred
+        placed = (match.index, frame, card, corner)
+        return corner
     }
 }

@@ -71,6 +71,15 @@ struct ViewRig {
                             aspect: aspect, altitude: altitude)
     }
 
+    /// Where a point at `altitude` lands in the frame: -1 to 1 across and up, the frame's edges
+    /// at ±1. The inverse of `visible(atAltitude:)`'s corners.
+    func screen(_ point: SIMD2<Float>, altitude: Float) -> SIMD2<Float> {
+        let v = SIMD3(point.x, point.y, altitude) - eye
+        let depth = max(simd_dot(v, forward), 1e-4)
+        let tanV = tan(ViewRig.verticalFOV / 2)
+        return SIMD2(simd_dot(v, right) / (depth * tanV * aspect), simd_dot(v, up) / (depth * tanV))
+    }
+
     /// The point on the band the camera is centred on.
     var center: SIMD2<Float> { SIMD2(0, 0) }
 
