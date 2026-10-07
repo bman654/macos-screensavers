@@ -111,6 +111,8 @@ struct Tank {
     var nextRouteTry: Double = 0
     /// Roads in a row it was blocked on without moving.
     var blockedCount = 0
+    /// Looks in a row for a road that found none.
+    var routeFailures = 0
     /// Progress toward the next leg's end, checked on a clock, so a tank nosing into something
     /// it cannot pass gives up on that road rather than pushing at it forever.
     var progressCheckAt: Double

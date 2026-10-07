@@ -171,8 +171,17 @@ extension DogfightSim {
             tank.progressCheckAt = now + 4
             tank.nextRouteTry = now + 0.5
             if tank.route.isEmpty {
-                // Hemmed in, by other tanks most likely: turn on the spot meanwhile.
+                // Hemmed in, by other tanks most likely: turn on the spot meanwhile. A tank that
+                // finds no road for seconds on end is in a pocket nothing will open, and folds
+                // away so a replacement can roll in somewhere better.
                 tank.heading = (tank.heading + tank.spec.hullTurnRate * 0.5 * dt).wrappedAngle
+                tank.routeFailures += 1
+                if tank.routeFailures >= 8 {
+                    tank.state = .folding(since: now)
+                    tank.stateSince = now
+                }
+            } else {
+                tank.routeFailures = 0
             }
             return
         }
@@ -186,7 +195,7 @@ extension DogfightSim {
             // Wedged: every road it is given is shut from where it stands. A hop to any open
             // ground nearby usually frees it; a tank that cannot even do that folds away rather
             // than sit there all match.
-            if tank.blockedCount >= 12 {
+            if tank.blockedCount >= 6 {
                 tank.state = .folding(since: now)
                 tank.stateSince = now
             } else if tank.blockedCount >= 3, let hop = escapeHop(for: tank) {
@@ -205,7 +214,10 @@ extension DogfightSim {
         let grid = navGrid(for: tank.type)
         guard let search = grid.search(from: tank.position, blocked: { self.isTankNear($0, size: tank.spec.size, except: tank.id) })
         else { return [] }
-        let goals = search.order.filter { grid.inRegion[$0] && (6...34).contains(search.depth[$0]) }
+        var goals = search.order.filter { grid.inRegion[$0] && (6...34).contains(search.depth[$0]) }
+        // Nothing at a stroll's distance — a tank still outside the arena, or in a narrow strip
+        // of it — so anywhere in the arena it can reach at all.
+        if goals.isEmpty { goals = search.order.filter { grid.inRegion[$0] && search.depth[$0] >= 2 } }
         guard !goals.isEmpty else { return [] }
         return search.route(from: tank.position, to: goals[combat.index(count: goals.count)], ground: ground,
                             clearance: tank.spec.clearance)
@@ -413,7 +425,12 @@ extension DogfightSim {
             case .entering, .patrol, .halted: gone = false
             }
             if gone {
-                if let s = match.tankSlots.firstIndex(where: { $0.tank == tank.id }) { match.tankSlots[s].tank = nil }
+                if let s = match.tankSlots.firstIndex(where: { $0.tank == tank.id }) {
+                    match.tankSlots[s].tank = nil
+                    // One that folded away mid-match, wedged, is replaced; one that drove off at
+                    // the end is not.
+                    if match.phase == .fighting { match.tankSlots[s].spawnAt = now + Double(rand.inRange(3, 5)) }
+                }
                 emit(.tankLeft(tank: tank.id))
             }
             return gone
