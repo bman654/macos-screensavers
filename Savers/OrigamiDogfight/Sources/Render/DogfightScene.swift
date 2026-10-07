@@ -26,6 +26,10 @@ final class DogfightScene {
     private let wrecks: WreckField
     private let keyLight = SCNLight()
 
+    /// The sun's direction of travel, in sim axes: toward the lower right of the frame, mostly
+    /// down. The key light is aimed along it, and the terrain's folds are shaded from it.
+    static let sunTravel = SIMD3<Float>(0.36, -0.42, -1)
+
     /// Frame time at which sim step zero would have been due. Set on the first frame — so a
     /// sim handed over from a previous scene carries on from where it was rather than jumping —
     /// and advanced whenever the sim would otherwise have to catch up a long stall.
@@ -131,8 +135,9 @@ final class DogfightScene {
 
     private func buildLights(quality: RenderQuality) {
         // A warm sun from the upper left of the frame, high enough that a plane's shadow lands
-        // clearly offset from it — about half a metre for a plane at the top of the band —
-        // and low enough that every folded facet of the hills catches it differently.
+        // clearly offset from it — about half a metre for a plane at the top of the band. Too
+        // high, alone, for the landscape's folds to show from overhead; `TerrainMesh` bakes a
+        // lower sun on this same bearing into the ground's colours for that.
         keyLight.type = .directional
         keyLight.color = NSColor(srgbRed: 1.0, green: 0.93, blue: 0.80, alpha: 1)
         keyLight.intensity = 820
@@ -149,8 +154,7 @@ final class DogfightScene {
         keyLight.maximumShadowDistance = 16
         let key = SCNNode()
         key.light = keyLight
-        // Sim direction of travel of the light: toward the lower right, mostly down.
-        let travel = SIMD3<Float>(0.36, -0.42, -1)
+        let travel = DogfightScene.sunTravel
         key.simdLook(at: SIMD3(travel.x, travel.z, -travel.y), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
         scene.rootNode.addChildNode(key)
 

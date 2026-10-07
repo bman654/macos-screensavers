@@ -5,11 +5,12 @@
 // and because the props are scattered by rules about these same faces. `TerrainMesh` turns it
 // into geometry; nothing here knows SceneKit.
 //
-// The surface is a regular grid split into triangles along **alternating diagonals**, every
-// triangle flat-shaded with its own normal. That is the whole of the paper look: each face is a
-// separate folded facet, and the alternation is what makes the facets read as an origami
-// tessellation rather than as a coarse heightmap. The height lookup below uses the same split,
-// so a wreck sits on the facet that is drawn rather than on a smoothed surface beneath it.
+// The surface is `FacetLattice`'s triangles, each flat-shaded with its own normal and coloured
+// whole, from what is true at its own middle. Every face is one piece of folded paper, so a
+// colour boundary always runs along a fold, never across a facet. Every question about a point
+// — its height, its slope, whether it is lake — is answered from the face drawn there, with the
+// heights it is drawn at, so a wreck sits on the facet that is seen and splashes only into water
+// that is seen.
 
 import Foundation
 import simd
@@ -24,10 +25,11 @@ struct Lake {
 }
 
 struct Terrain {
-    /// Facet size: about half a plane's length. At a whole plane length the folds outgrew the
-    /// features they were drawing — lakes came out as blue rectangles and every summit as one
-    /// white diamond — and much finer than this it starts to read as a mesh rather than paper.
-    static let cellSize: Float = 0.16
+    /// Lattice step, a little under a plane's length. Big enough that each fold is a shape you
+    /// can see — a summit is a handful of faces round one point — and small enough that a lake
+    /// a metre and a half across still has a dozen faces of shoreline and reads as a lake rather
+    /// than as a blue polygon.
+    static let facetSize: Float = 0.26
 
     /// Half the side of the square the terrain covers. Sized to fill the camera's view at the
     /// ground for any aspect from portrait to 4:1 (`tools/origami-sim-probe.swift` checks it),
@@ -40,127 +42,87 @@ struct Terrain {
     /// No summit is higher than this; `ViewRig.bandLow` keeps live planes well above it.
     static let maxHeight: Float = 0.5
 
-    let cells: Int
-    let origin: SIMD2<Float>
-    /// Raw heights, `(cells + 1)²`, row-major in y. May dip below the water level; the drawn
-    /// surface is clamped to it.
-    let heights: [Float]
-    /// Two per cell, `(j * cells + i) * 2 + k`.
+    let lattice: FacetLattice
+    /// The height every lattice point is drawn at: the corners of water faces pressed flat to
+    /// the water level, and nothing below it. The mesh and every lookup read these, never the
+    /// raw field.
+    let ground: [Float]
+    /// One per face of `lattice`.
     let bands: [TerrainBand]
-    /// Which colour of its band a face takes — the field it belongs to, for meadows — and a
-    /// small per-face brightness jitter. Both are drawn here so a seed names the whole picture.
+    /// Which colour of its band a face takes — for water whether it is the shallows, for the
+    /// rest the field it belongs to — and a small per-face brightness jitter. Both are drawn
+    /// here so a seed names the whole picture.
     let variants: [UInt8]
     let jitter: [Float]
     let lakes: [Lake]
 
     init(seed: UInt64) {
         var rand = Rand(seed: seed ^ 0x7E44_A1_9C_03_55)
-        let cells = Int((2 * Terrain.halfExtent / Terrain.cellSize).rounded())
-        self.cells = cells
-        origin = SIMD2(-Terrain.halfExtent, -Terrain.halfExtent)
         let noise = ValueNoise(seed: UInt32(truncatingIfNeeded: seed &* 0x2545_F491))
+        let lattice = FacetLattice(halfExtent: Terrain.halfExtent, spacing: Terrain.facetSize,
+                                   nudge: 0.28, seed: seed)
+        self.lattice = lattice
 
-        // Mountains first, then lakes kept clear of them: a lake on a summit is a crater.
-        var peaks: [(center: SIMD2<Float>, radius: Float, height: Float)] = []
-        let peakCount = 1 + rand.index(count: 2)
-        for _ in 0..<peakCount {
-            let angle = rand.inRange(0, 2 * .pi)
-            let reach = rand.inRange(1.3, 2.6)
-            peaks.append((SIMD2(cos(angle) * reach, sin(angle) * reach * 0.65),
-                          rand.inRange(1.0, 1.4), rand.inRange(0.34, 0.42)))
-        }
-        var lakes: [Lake] = []
-        let lakeCount = 2 + rand.index(count: 2)
-        for _ in 0..<40 where lakes.count < lakeCount {
-            let center = SIMD2(rand.inRange(-2.3, 2.3), rand.inRange(-1.3, 1.3))
-            let radius = rand.inRange(0.5, 0.95)
-            let clearOfPeaks = peaks.allSatisfy { simd_distance($0.center, center) > $0.radius * 0.8 + radius + 0.3 }
-            let clearOfLakes = lakes.allSatisfy { simd_distance($0.center, center) > $0.radius + radius + 0.4 }
-            if clearOfPeaks && clearOfLakes { lakes.append(Lake(center: center, radius: radius)) }
-        }
+        let peaks = Terrain.placePeaks(&rand, lattice: lattice)
+        let lakes = Terrain.placeLakes(&rand, clearOf: peaks)
         self.lakes = lakes
 
-        let side = cells + 1
-        var heights = [Float](repeating: 0, count: side * side)
-        for j in 0..<side {
-            for i in 0..<side {
-                let p = SIMD2(Float(i), Float(j)) * Terrain.cellSize + origin
-                // Rolling meadow, with hills where a second, coarser field rises.
-                var h = 0.11 + 0.075 * (noise.fbm(p / 3.0, octaves: 3) - 0.5) * 2
-                let hillMask = smoothstep(0.5, 0.78, noise.fbm(p / 2.4 + SIMD2(31, 7), octaves: 2))
-                h += 0.13 * hillMask * (0.6 + 0.8 * noise.fbm(p / 0.9 + SIMD2(5, 53), octaves: 2))
-                for peak in peaks {
-                    // A cone with a concave flank, not a Gaussian: a Gaussian is flat on top,
-                    // so its summit facets all face the sun alike and read as one white sheet
-                    // rather than as a folded peak with a cap.
-                    let r = simd_distance(p, peak.center) / peak.radius
-                    let ridge = 0.7 + 0.6 * noise.fbm(p / 0.45 + SIMD2(17, 3), octaves: 2)
-                    let flank = max(0, 1 - r)
-                    h += peak.height * flank * flank * ridge
-                }
-                for lake in lakes {
-                    // A ragged shore: the radius wanders with a noise field so no lake is a disc.
-                    let wobble = 0.35 * (noise.fbm(p / 0.6 + SIMD2(71, 29), octaves: 2) - 0.5)
-                    let d = simd_distance(p, lake.center) / lake.radius + wobble
-                    h = h + (Terrain.waterLevel - 0.07 - h) * smoothstep(1.05, 0.6, d)
-                }
-                // Crumple: every vertex nudged a little, so even flat meadow catches the light
-                // facet by facet the way a sheet of folded paper does.
-                h += rand.inRange(-0.01, 0.01)
-                heights[j * side + i] = max(h, 0)
-            }
-        }
-        // Peaks and hills stack, so a summit can rise well past the ceiling. Clamping it, or
-        // compressing it toward the ceiling, cuts it off flat — and those plateaus came out as
-        // broad white snowfields rather than caps. Rescaling all the relief above the meadows
-        // keeps every summit pointed and puts the highest one just under the ceiling.
-        let meadowTop: Float = 0.2
-        let summit = heights.max() ?? 0
-        if summit > Terrain.maxHeight {
-            let k = (Terrain.maxHeight - meadowTop) / (summit - meadowTop)
-            for index in heights.indices where heights[index] > meadowTop {
-                heights[index] = meadowTop + (heights[index] - meadowTop) * k
-            }
-        }
-        self.heights = heights
+        var raw = lattice.points.map { Terrain.height(at: $0, peaks: peaks, lakes: lakes, noise: noise) }
+        // Crumple: every point nudged a little, so even flat meadow catches the light facet by
+        // facet the way a sheet of folded paper does. Kept small — a bigger crumple drowned the
+        // hills' own folds in noise — and well under the meadow's margin over the water, so it
+        // cannot open a pond.
+        for index in raw.indices { raw[index] += rand.inRange(-0.006, 0.006) }
+        Terrain.rescaleRelief(&raw)
 
-        // Snow and rock lines from this landscape's own heights rather than fixed numbers: a
-        // fixed snow line gave one seed a dusting and another broad white snowfields, because
-        // how far a summit rises above any given height depends on how the peaks and hills
-        // happened to stack. Measured over the middle of the terrain, which is what is seen.
-        var central: [Float] = []
-        for j in 0..<cells {
-            for i in 0..<cells {
-                let center = (SIMD2(Float(i), Float(j)) + 0.5) * Terrain.cellSize + origin
-                guard abs(center.x) < 3.5, abs(center.y) < 2.2 else { continue }
-                let corners = [(0, 0), (1, 0), (0, 1), (1, 1)].map { heights[(j + $0.1) * side + i + $0.0] }
-                central.append(corners.reduce(0, +) / 4)
-            }
-        }
-        central.sort()
-        func quantile(_ q: Float) -> Float {
-            central.isEmpty ? Terrain.maxHeight : central[min(Int(Float(central.count) * q), central.count - 1)]
-        }
-        // Floors, so a low, rolling seed gets no snow at all rather than snow on its hilltops.
-        let lines = BandLines(snow: max(0.36, quantile(0.993)), rock: max(0.26, quantile(0.94)))
+        let corners = (0..<lattice.faceCount).map(lattice.corners(of:))
+        let neighbours = lattice.neighbours
+        // Water is decided per face, from the face's middle, and then its corners are pressed
+        // flat to the water level. Deciding it by corner instead — water only where all three
+        // are under — is what drew lakes as stair-stepped blobs; and pressing the corners keeps
+        // the shore's facets meeting the water's edge, where otherwise a corner of a water face
+        // standing above the water would leave a crack between the two.
+        let isWater = Terrain.smoothed(corners.map { Terrain.mean(raw, $0) < Terrain.waterLevel },
+                                       neighbours: neighbours)
+        let wet = Terrain.points(of: isWater, corners: corners, count: raw.count)
+        let ground = raw.indices.map { wet[$0] ? Terrain.waterLevel : max(raw[$0], Terrain.waterLevel) }
+        self.ground = ground
 
-        var bands = [TerrainBand](repeating: .meadow, count: cells * cells * 2)
-        var variants = [UInt8](repeating: 0, count: bands.count)
-        var jitter = [Float](repeating: 0, count: bands.count)
-        for j in 0..<cells {
-            for i in 0..<cells {
-                for k in 0..<2 {
-                    let face = (j * cells + i) * 2 + k
-                    let corners = Terrain.faceCorners(i: i, j: j, k: k)
-                    let raw = corners.map { heights[($0.y + j) * side + $0.x + i] }
-                    let center = (SIMD2(Float(i), Float(j)) + 0.5) * Terrain.cellSize + origin
-                    bands[face] = Terrain.classify(raw, cellSize: Terrain.cellSize, corners: corners, lines: lines)
-                    // Fields: a coarse noise quantised into a handful of bins, so meadow faces
-                    // group into patches of one green — a patchwork, like folded farmland.
-                    let field = noise.value(center / 0.7 + SIMD2(13, 101))
-                    variants[face] = UInt8(min(Int(field * 5), 4))
-                    jitter[face] = rand.inRange(-1, 1)
-                }
+        // A beach round every lake, one face deep — each face with a corner on the water — and
+        // inside it the shallows, the water faces with a corner on the land. Both smoothed like
+        // the water itself, so their inner and outer edges are curves too.
+        let dry = Terrain.points(of: isWater.map(!), corners: corners, count: raw.count)
+        let beach = zip(Terrain.smoothed(corners.map { Terrain.touches($0, wet) }, neighbours: neighbours),
+                        isWater).map { $0 && !$1 }
+        let shallows = zip(Terrain.smoothed(corners.map { Terrain.touches($0, dry) }, neighbours: neighbours),
+                           isWater).map { $0 && $1 }
+        let snow = Terrain.snowCaps(on: peaks, ground: ground, corners: corners)
+        let summits = peaks.map { ground[$0.summit] }
+
+        var bands = [TerrainBand](repeating: .meadow, count: corners.count)
+        var variants = [UInt8](repeating: 0, count: corners.count)
+        var jitter = [Float](repeating: 0, count: corners.count)
+        for (face, c) in corners.enumerated() {
+            let center = lattice.centroid(of: face)
+            jitter[face] = rand.inRange(-1, 1)
+            if isWater[face] {
+                bands[face] = .water
+                variants[face] = shallows[face] ? 1 : 0
+                continue
+            }
+            variants[face] = Terrain.field(at: center, noise: noise)
+            if beach[face] {
+                bands[face] = .shore
+            } else if snow[face] {
+                bands[face] = .snow
+            } else {
+                // The peak this face stands on, if any: the one it is deepest inside.
+                let onPeak = peaks.indices
+                    .map { (index: $0, depth: simd_distance(center, peaks[$0].center) / peaks[$0].radius) }
+                    .filter { $0.depth < 0.95 }
+                    .min { $0.depth < $1.depth }
+                bands[face] = Terrain.classify(mean: Terrain.mean(ground, c), steep: Terrain.slope(of: c, lattice, ground),
+                                               summit: onPeak.map { summits[$0.index] })
             }
         }
         self.bands = bands
@@ -170,94 +132,213 @@ struct Terrain {
 
     // MARK: Lookup
 
-    /// The drawn surface's height — the facet's own plane, water clamped flat — at a point.
-    /// Outside the grid it answers the datum, which is below anything that could ask.
+    /// The drawn surface's height — the facet's own plane — at a point. Outside the lattice it
+    /// answers the datum, which is below anything that could ask.
     func surfaceHeight(at p: SIMD2<Float>) -> Float {
-        guard let (i, j, u, v) = locate(p) else { return Terrain.waterLevel }
-        let k = Terrain.faceIndex(i: i, j: j, u: u, v: v)
-        let corners = Terrain.faceCorners(i: i, j: j, k: k)
-        let side = cells + 1
-        let h = corners.map { max(heights[($0.y + j) * side + $0.x + i], Terrain.waterLevel) }
-        let a = SIMD2(Float(corners[0].x), Float(corners[0].y))
-        let b = SIMD2(Float(corners[1].x), Float(corners[1].y))
-        let c = SIMD2(Float(corners[2].x), Float(corners[2].y))
-        let w = Terrain.barycentric(SIMD2(u, v), a, b, c)
-        return h[0] * w.x + h[1] * w.y + h[2] * w.z
+        guard let (face, w) = lattice.locate(p) else { return Terrain.waterLevel }
+        let c = lattice.corners(of: face)
+        return ground[Int(c.x)] * w.x + ground[Int(c.y)] * w.y + ground[Int(c.z)] * w.z
     }
 
     func band(at p: SIMD2<Float>) -> TerrainBand {
-        guard let (i, j, u, v) = locate(p) else { return .meadow }
-        return bands[(j * cells + i) * 2 + Terrain.faceIndex(i: i, j: j, u: u, v: v)]
+        guard let (face, _) = lattice.locate(p) else { return .meadow }
+        return bands[face]
     }
 
     func isWater(at p: SIMD2<Float>) -> Bool { band(at: p) == .water }
 
     /// Rise over run of the facet under a point.
     func slope(at p: SIMD2<Float>) -> Float {
-        guard let (i, j, u, v) = locate(p) else { return 0 }
-        let k = Terrain.faceIndex(i: i, j: j, u: u, v: v)
-        let corners = Terrain.faceCorners(i: i, j: j, k: k)
-        let side = cells + 1
-        let raw = corners.map { max(heights[($0.y + j) * side + $0.x + i], Terrain.waterLevel) }
-        return Terrain.slope(raw, corners: corners, cellSize: Terrain.cellSize)
+        guard let (face, _) = lattice.locate(p) else { return 0 }
+        return Terrain.slope(of: lattice.corners(of: face), lattice, ground)
     }
 
-    /// Cell and the point's position inside it, in [0, 1)².
-    private func locate(_ p: SIMD2<Float>) -> (Int, Int, Float, Float)? {
-        let g = (p - origin) / Terrain.cellSize
-        guard g.x >= 0, g.y >= 0, g.x < Float(cells), g.y < Float(cells) else { return nil }
-        let i = min(Int(g.x), cells - 1)
-        let j = min(Int(g.y), cells - 1)
-        return (i, j, g.x - Float(i), g.y - Float(j))
+    // MARK: Shape
+
+    private struct Peak {
+        let center: SIMD2<Float>
+        let radius: Float
+        let height: Float
+        /// Spurs: the flank reaches further out along `lobes` directions, so the mountain folds
+        /// into ridges and gullies running down from the summit rather than being a plain cone.
+        let lobes: Float
+        let phase: Float
+        /// The lattice point at `center`.
+        let summit: Int
     }
 
-    // MARK: Triangulation
-
-    /// Corner offsets of face `k` of cell (i, j), counter-clockwise from above. The diagonal
-    /// alternates with the cell's parity — the origami-tessellation pattern.
-    static func faceCorners(i: Int, j: Int, k: Int) -> [(x: Int, y: Int)] {
-        if (i + j) % 2 == 0 {
-            return k == 0 ? [(0, 0), (1, 0), (1, 1)] : [(0, 0), (1, 1), (0, 1)]
+    private static func placePeaks(_ rand: inout Rand, lattice: FacetLattice) -> [Peak] {
+        (0..<(1 + rand.index(count: 2))).map { _ in
+            let angle = rand.inRange(0, 2 * .pi)
+            let reach = rand.inRange(1.3, 2.6)
+            // On a lattice point, so the summit is one point every face round it rises to: a
+            // crisp folded tip rather than a ridge that happens to run across a face.
+            let summit = lattice.nearestPoint(to: SIMD2(cos(angle) * reach, sin(angle) * reach * 0.65))
+            return Peak(center: lattice.points[summit],
+                        radius: rand.inRange(1.0, 1.4), height: rand.inRange(0.34, 0.42),
+                        lobes: Float(4 + rand.index(count: 3)), phase: rand.inRange(0, 2 * .pi),
+                        summit: summit)
         }
-        return k == 0 ? [(0, 0), (1, 0), (0, 1)] : [(1, 0), (1, 1), (0, 1)]
     }
 
-    static func faceIndex(i: Int, j: Int, u: Float, v: Float) -> Int {
-        (i + j) % 2 == 0 ? (u >= v ? 0 : 1) : (u + v <= 1 ? 0 : 1)
+    /// Lakes kept clear of the mountains: a lake on a summit is a crater.
+    private static func placeLakes(_ rand: inout Rand, clearOf peaks: [Peak]) -> [Lake] {
+        var lakes: [Lake] = []
+        let lakeCount = 2 + rand.index(count: 2)
+        for _ in 0..<40 where lakes.count < lakeCount {
+            let center = SIMD2(rand.inRange(-2.3, 2.3), rand.inRange(-1.3, 1.3))
+            let radius = rand.inRange(0.5, 0.95)
+            let clearOfPeaks = peaks.allSatisfy { simd_distance($0.center, center) > $0.radius * 0.8 + radius + 0.3 }
+            let clearOfLakes = lakes.allSatisfy { simd_distance($0.center, center) > $0.radius + radius + 0.4 }
+            if clearOfPeaks && clearOfLakes { lakes.append(Lake(center: center, radius: radius)) }
+        }
+        return lakes
     }
 
-    private static func barycentric(_ p: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>,
-                                    _ c: SIMD2<Float>) -> SIMD3<Float> {
-        let v0 = b - a, v1 = c - a, v2 = p - a
-        let d = v0.x * v1.y - v1.x * v0.y
-        guard abs(d) > 1e-9 else { return SIMD3(1, 0, 0) }
-        let wb = (v2.x * v1.y - v1.x * v2.y) / d
-        let wc = (v0.x * v2.y - v2.x * v0.y) / d
-        return SIMD3(1 - wb - wc, wb, wc)
+    private static func height(at p: SIMD2<Float>, peaks: [Peak], lakes: [Lake], noise: ValueNoise) -> Float {
+        // Rolling meadow, with hills where a second, coarser field rises. Every feature is
+        // several faces across: anything finer than a face only adds noise to the shading.
+        var h = 0.13 + 0.07 * (noise.fbm(p / 2.6, octaves: 3) - 0.5) * 2
+        let hillMask = smoothstep(0.5, 0.78, noise.fbm(p / 2.4 + SIMD2(31, 7), octaves: 2))
+        h += 0.15 * hillMask * (0.6 + 0.8 * noise.fbm(p / 1.0 + SIMD2(5, 53), octaves: 2))
+        // Never down to the water away from a lake, or the meadows break out in one-face ponds.
+        h = max(h, Terrain.waterLevel + 0.03)
+        for peak in peaks {
+            // A cone with a concave flank, not a Gaussian: a Gaussian is flat on top, so its
+            // summit facets all face the sun alike and read as one white sheet rather than as
+            // a folded peak. A narrow spike on top steepens the faces round the summit point
+            // further, so the cap they carry is folded hard enough to show a lit side and a
+            // shaded one.
+            let d = p - peak.center
+            let spur = 1 - 0.18 * cos(peak.lobes * atan2(d.y, d.x) + peak.phase)
+            let flank = max(0, 1 - simd_length(d) / peak.radius * spur)
+            let tip = max(0, 1 - simd_length(d) / (peak.radius * 0.3))
+            h += peak.height * (flank * flank + 0.2 * tip)
+        }
+        for lake in lakes {
+            // A ragged shore: the radius wanders with a noise field so no lake is a disc.
+            let wobble = 0.35 * (noise.fbm(p / 0.6 + SIMD2(71, 29), octaves: 2) - 0.5)
+            let d = simd_distance(p, lake.center) / lake.radius + wobble
+            h += (Terrain.waterLevel - 0.07 - h) * smoothstep(1.05, 0.6, d)
+        }
+        return h
     }
 
-    private static func slope(_ h: [Float], corners: [(x: Int, y: Int)], cellSize: Float) -> Float {
-        let p = (0..<3).map { SIMD3(Float(corners[$0].x) * cellSize, Float(corners[$0].y) * cellSize, h[$0]) }
+    /// Peaks and hills stack, so a summit can rise well past the ceiling. Clamping it, or
+    /// compressing it toward the ceiling, cuts it off flat — and those plateaus came out as
+    /// broad white snowfields rather than caps. Rescaling all the relief above the meadows
+    /// keeps every summit pointed and puts the highest one just under the ceiling.
+    private static func rescaleRelief(_ heights: inout [Float]) {
+        let meadowTop: Float = 0.2
+        let summit = heights.max() ?? 0
+        guard summit > Terrain.maxHeight else { return }
+        let k = (Terrain.maxHeight - meadowTop) / (summit - meadowTop)
+        for index in heights.indices where heights[index] > meadowTop {
+            heights[index] = meadowTop + (heights[index] - meadowTop) * k
+        }
+    }
+
+    // MARK: Faces
+
+    /// A region traced face by face is all teeth along its edge — every face the line clips
+    /// sticks out as a spike or bites in as a notch — and a lake came out as a star. Faces with
+    /// the region along two of their three edges join it, then faces with it along at most one
+    /// leave it, which files the teeth off and leaves a faceted curve.
+    ///
+    /// Two passes, not one rule applied to both at once: along a straight edge the clipped
+    /// faces alternate up and down, and a simultaneous rule just swaps them every pass.
+    private static func smoothed(_ region: [Bool], neighbours: [[Int]]) -> [Bool] {
+        var region = region
+        for _ in 0..<2 {
+            region = region.indices.map { face in
+                region[face] || (neighbours[face].count == 3 && neighbours[face].filter { region[$0] }.count >= 2)
+            }
+            region = region.indices.map { face in
+                region[face] && neighbours[face].filter { region[$0] }.count >= 2
+            }
+        }
+        return region
+    }
+
+    /// Snow: the faces folded round a tall summit's own point, and of those only the ones that
+    /// stand within a little of the highest — the faces along the ridges, not down the gullies —
+    /// and never fewer than two, since one white face alone reads as a sheet lying on the hill
+    /// rather than as a fold. So a cap is two to four steep faces with a lit side and a shaded
+    /// one. A snow *line*
+    /// instead — any face above some height — gave one seed a dusting and another a broad white
+    /// slab, because how far a summit rises above any given height depends on how the peaks and
+    /// hills happened to stack.
+    private static func snowCaps(on peaks: [Peak], ground: [Float], corners: [SIMD3<Int32>]) -> [Bool] {
+        var snow = [Bool](repeating: false, count: corners.count)
+        for peak in peaks where ground[peak.summit] >= 0.36 {
+            let point = Int32(peak.summit)
+            let fan = corners.indices.filter { any(corners[$0] .== point) }
+                .map { (face: $0, height: mean(ground, corners[$0])) }
+                .sorted { $0.height > $1.height }
+            guard let top = fan.first?.height else { continue }
+            for (rank, entry) in fan.enumerated() where rank < 2 || entry.height >= top - 0.015 {
+                snow[entry.face] = true
+            }
+        }
+        return snow
+    }
+
+    /// Rock is the upper flank of a mountain, reckoned from its own summit, and any face too
+    /// steep to hold grass; hill is the high ground the meadows rise to.
+    private static func classify(mean: Float, steep: Float, summit: Float?) -> TerrainBand {
+        if let summit, mean >= max(summit - 0.2, 0.26) { return .rock }
+        if steep > 0.8 { return .rock }
+        if mean > 0.2 { return .hill }
+        return .meadow
+    }
+
+    /// Fields: the meadow is cut into irregular polygons — the nearest of a scattering of
+    /// sites, one per metre or so — and each takes one of a handful of greens. Faces are
+    /// coloured whole, so a field's edge follows the folds. A quantised noise field did this
+    /// before, and on a square grid it came out as axis-aligned rectangles.
+    private static func field(at p: SIMD2<Float>, noise: ValueNoise) -> UInt8 {
+        let cell = floor(p)
+        var nearest = Float.infinity
+        var pick: Float = 0
+        for dy in -1...1 {
+            for dx in -1...1 {
+                // `ValueNoise` at a whole-number point is its lattice hash, so a site's place and
+                // colour come from the seed with nothing stored.
+                let k = cell + SIMD2(Float(dx), Float(dy))
+                let site = k + SIMD2(noise.value(k + SIMD2(211, 0)), noise.value(k + SIMD2(0, 389)))
+                let d = simd_distance_squared(p, site)
+                if d < nearest {
+                    nearest = d
+                    pick = noise.value(k + SIMD2(577, 1013))
+                }
+            }
+        }
+        return UInt8(min(Int(pick * 5), 4))
+    }
+
+    private static func mean(_ values: [Float], _ c: SIMD3<Int32>) -> Float {
+        (values[Int(c.x)] + values[Int(c.y)] + values[Int(c.z)]) / 3
+    }
+
+    private static func touches(_ c: SIMD3<Int32>, _ flags: [Bool]) -> Bool {
+        flags[Int(c.x)] || flags[Int(c.y)] || flags[Int(c.z)]
+    }
+
+    /// Every lattice point that is a corner of some face in `region`.
+    private static func points(of region: [Bool], corners: [SIMD3<Int32>], count: Int) -> [Bool] {
+        var flags = [Bool](repeating: false, count: count)
+        for (face, c) in corners.enumerated() where region[face] {
+            flags[Int(c.x)] = true
+            flags[Int(c.y)] = true
+            flags[Int(c.z)] = true
+        }
+        return flags
+    }
+
+    private static func slope(of c: SIMD3<Int32>, _ lattice: FacetLattice, _ ground: [Float]) -> Float {
+        let p = [c.x, c.y, c.z].map { i in SIMD3(lattice.points[Int(i)].x, lattice.points[Int(i)].y, ground[Int(i)]) }
         let n = simd_cross(p[1] - p[0], p[2] - p[0])
         return simd_length(SIMD2(n.x, n.y)) / max(abs(n.z), 1e-6)
-    }
-
-    private struct BandLines {
-        let snow: Float
-        let rock: Float
-    }
-
-    private static func classify(_ raw: [Float], cellSize: Float,
-                                 corners: [(x: Int, y: Int)], lines: BandLines) -> TerrainBand {
-        let water = Terrain.waterLevel
-        if raw.max()! < water { return .water }
-        if raw.min()! < water + 0.012 { return .shore }
-        let mean = raw.reduce(0, +) / 3
-        let steep = slope(raw, corners: corners, cellSize: cellSize)
-        if mean > lines.snow { return .snow }
-        if mean > lines.rock || steep > 0.75 { return .rock }
-        if mean > min(0.185, lines.rock - 0.04) { return .hill }
-        return .meadow
     }
 }
 
