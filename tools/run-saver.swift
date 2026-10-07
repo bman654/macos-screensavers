@@ -455,10 +455,12 @@ saverView.startAnimation()
 
 @MainActor var recorder: WindowRecorder?
 
-/// Starts filming once the window is listed as shareable, which is asynchronous; the first
-/// frame or two of a movie may therefore precede the saver's own first frame.
+/// Starts filming once the window is listed as shareable, which is asynchronous, and calls
+/// `onStarted` once frames are actually being written. The run's clock starts there rather than
+/// at launch: a short run would otherwise end before capture began and exit cleanly with no
+/// movie, and `--seconds` would not be the length of the film.
 @MainActor
-func startRecording(to path: String) {
+func startRecording(to path: String, onStarted: @escaping @MainActor () -> Void) {
     let output = URL(fileURLWithPath: path).standardizedFileURL
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: output.deletingLastPathComponent().path,
@@ -466,8 +468,20 @@ func startRecording(to path: String) {
         fail("output directory does not exist: \(output.deletingLastPathComponent().path)")
     }
     // The recording output fails rather than overwrites, and does so only once capture has
-    // started — a stale movie from the previous run would otherwise cost the whole run.
-    try? FileManager.default.removeItem(at: output)
+    // started — a stale movie from the previous run would otherwise cost the whole run. Only a
+    // file is ever removed: `removeItem` is recursive, and a directory that happens to be named
+    // `*.mov` is somebody's data, not a stale movie.
+    if let type = (try? FileManager.default.attributesOfItem(atPath: output.path))?[.type]
+        as? FileAttributeType {
+        guard type == .typeRegular || type == .typeSymbolicLink else {
+            fail("--record output exists and is not a file: \(output.path)")
+        }
+        do {
+            try FileManager.default.removeItem(at: output)
+        } catch {
+            fail("could not replace \(output.path): \(error.localizedDescription)")
+        }
+    }
     let windowID = CGWindowID(window.windowNumber)
     let pixelSize = saverView.convertToBacking(saverView.bounds).size
     SCShareableContent.getCurrentProcessShareableContent { content, error in
@@ -481,9 +495,11 @@ func startRecording(to path: String) {
                                                 output: output)
                 recorder = active
                 active.start { error in
-                    guard let error else { return }
                     DispatchQueue.main.async {
-                        fail("could not start recording: \(error.localizedDescription)")
+                        if let error {
+                            fail("could not start recording: \(error.localizedDescription)")
+                        }
+                        onStarted()
                     }
                 }
             } catch {
@@ -493,9 +509,6 @@ func startRecording(to path: String) {
     }
 }
 
-if let recordPath = options.recordPath {
-    MainActor.assumeIsolated { startRecording(to: recordPath) }
-}
 
 // Companion instances for `--instances`. Retained for the life of the process, because a
 // saver view released while still animating is retained by the run loop anyway and goes on
@@ -654,8 +667,28 @@ func finishCapture() {
     }
 }
 
-let exitTimer = Timer(timeInterval: options.seconds, repeats: false) { _ in
-    MainActor.assumeIsolated { finish() }
+@MainActor
+func armExitTimer() {
+    let exitTimer = Timer(timeInterval: options.seconds, repeats: false) { _ in
+        MainActor.assumeIsolated { finish() }
+    }
+    RunLoop.main.add(exitTimer, forMode: .common)
 }
-RunLoop.main.add(exitTimer, forMode: .common)
+
+if let recordPath = options.recordPath {
+    // Bounded, because a capture that never starts would otherwise hang a scripted loop with
+    // no diagnostic — the failure this tool's other watchdogs exist to prevent.
+    let startWatchdog = Timer(timeInterval: 15.0, repeats: false) { _ in
+        fail("recording did not start within 15s")
+    }
+    RunLoop.main.add(startWatchdog, forMode: .common)
+    MainActor.assumeIsolated {
+        startRecording(to: recordPath) {
+            startWatchdog.invalidate()
+            armExitTimer()
+        }
+    }
+} else {
+    MainActor.assumeIsolated { armExitTimer() }
+}
 application.run()
