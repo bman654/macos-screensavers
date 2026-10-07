@@ -98,6 +98,8 @@ extension DogfightSim {
         var tank = tanks[i]
         defer { tanks[i] = tank }
         tank.cooldown -= dt
+        // Past the winner being named nothing more may be thrown. A target is only dropped on
+        // the next retarget, so this also gates the halt and the throw below, not just the pick.
         let holdFire = match.phase != .fighting || !tank.isActive
 
         if now >= tank.retargetAt {
@@ -131,7 +133,7 @@ extension DogfightSim {
                 tank.route = []
             }
         case .patrol:
-            if shot != nil, tank.cooldown < 0.8, now >= tank.nextHaltAllowed {
+            if !holdFire, shot != nil, tank.cooldown < 0.8, now >= tank.nextHaltAllowed {
                 tank.state = .halted(until: now + Double(combat.inRange(1.8, 3)))
                 tank.stateSince = now
             } else {
@@ -139,7 +141,7 @@ extension DogfightSim {
             }
         case .halted(let until):
             brake(&tank, dt: dt)
-            if let shot, tank.cooldown <= 0, abs((atan2(shot.velocity.y, shot.velocity.x) - tank.turret).wrappedAngle) < 0.1 {
+            if !holdFire, let shot, tank.cooldown <= 0, abs((atan2(shot.velocity.y, shot.velocity.x) - tank.turret).wrappedAngle) < 0.1 {
                 throwPencil(from: &tank, shot: shot, now: now)
             }
             if now >= until || (target == nil && now - tank.lastSawTargetAt > 1.2) {
