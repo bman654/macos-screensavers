@@ -30,6 +30,8 @@ struct Report {
     var longestNoShot: Double = 0
     var longestNoKill: Double = 0
     var longestCircle: Double = 0
+    /// The longest one plane spent continuously with the wall in command — hugging, not turning.
+    var longestWall: Double = 0
     var maxKillsIn3s = 0
     var maxProjectiles = 0
     var fullStrengthFraction: Double = 0
@@ -87,6 +89,7 @@ func soak(seed: UInt64, mode: MatchMode?, planes: Int?, minutes: Double, aspect:
     var killTimes: [Double] = []
     var circleTime: [Int: Double] = [:]
     var circleSign: [Int: Float] = [:]
+    var wallRun: [Int: Double] = [:]
     var fullStrength: Double = 0, fightingPhase: Double = 0, airborneSum: Double = 0
     let start = Date()
 
@@ -127,7 +130,13 @@ func soak(seed: UInt64, mode: MatchMode?, planes: Int?, minutes: Double, aspect:
                 let depth = view.depth(p.position)
                 if depth < 0 { r.outTime += dt }
                 if depth < p.spec.size * 0.5 { r.edgeTime += dt }
-                if p.pilot.wallUrgency > 1 { r.stuckTime += dt }
+                if p.pilot.wallUrgency > 1 {
+                    r.stuckTime += dt
+                    wallRun[p.id, default: 0] += dt
+                    r.longestWall = max(r.longestWall, wallRun[p.id]!)
+                } else {
+                    wallRun[p.id] = 0
+                }
                 // A circle: a hard turn held the same way without a break.
                 let hard = abs(p.turnRate) > p.spec.turnRate * 0.6
                 let sign: Float = p.turnRate >= 0 ? 1 : -1
@@ -201,19 +210,19 @@ struct Probe {
         print("terrain coverage:")
         let covered = checkTerrainCoverage()
 
-        print(String(format: "\n%-22@ %6@ %5@ %7@ %5@ %6@ %6@ %6@ %6@ %6@ %6@ %5@ %5@ %5@ %5@ %5@ %5@ %4@ %5@",
-                     "run", "k/min", "match", "acc", "splsh", "out%", "edge%", "wall%", "noShot", "noKill",
+        print(String(format: "\n%-22@ %6@ %5@ %7@ %5@ %6@ %6@ %6@ %7@ %6@ %6@ %6@ %5@ %5@ %5@ %5@ %5@ %5@ %4@ %5@",
+                     "run", "k/min", "match", "acc", "splsh", "out%", "edge%", "wall%", "wallRun", "noShot", "noKill",
                      "circle", "k/3s", "proj", "full%", "air%", "minAir", "sprd", "sec", "hash"))
         var all: [Report] = []
         for seed in seeds {
             for mode in modes {
                 let r = soak(seed: seed, mode: mode, planes: planes, minutes: minutes, aspect: aspect)
                 all.append(r)
-                print(String(format: "%-22@ %6.2f %5d %6.1f%% %5d %5.2f%% %5.2f%% %5.2f%% %5.1fs %5.1fs %5.1fs %5d %5d %5.1f%% %5.1f%% %5d %5.2f %4.1f %016llx",
+                print(String(format: "%-22@ %6.2f %5d %6.1f%% %5d %5.2f%% %5.2f%% %5.2f%% %6.1fs %5.1fs %5.1fs %5.1fs %5d %5d %5.1f%% %5.1f%% %5d %5.2f %4.1f %016llx",
                              r.label, Double(r.kills) / minutes, r.matches,
                              r.shots > 0 ? 100 * Double(r.hits) / Double(r.shots) : 0, r.splashes,
                              100 * r.outTime / max(r.fightTime, 1e-9), 100 * r.edgeTime / max(r.fightTime, 1e-9),
-                             100 * r.stuckTime / max(r.fightTime, 1e-9), r.longestNoShot, r.longestNoKill,
+                             100 * r.stuckTime / max(r.fightTime, 1e-9), r.longestWall, r.longestNoShot, r.longestNoKill,
                              r.longestCircle, r.maxKillsIn3s, r.maxProjectiles, 100 * r.fullStrengthFraction, 100 * r.meanAirborne,
                              r.minAirborneWhileFighting == Int.max ? -1 : r.minAirborneWhileFighting,
                              r.spread / max(r.spreadSamples, 1), r.wall, r.hash))

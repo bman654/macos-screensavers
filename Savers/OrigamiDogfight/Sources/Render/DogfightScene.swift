@@ -62,7 +62,7 @@ final class DogfightScene {
             LifecycleLog.emit(String(format: "origami scene built seed=%llu simTime=%.2fs quality=%@",
                                      sim.seed, sim.time, quality == .full ? "full" : "reduced"))
         }
-        if sim.isFrozen {
+        if sim.isLineup {
             // The lineup is for checking models, so say which ones are really the library's.
             let planes = PlaneType.allCases.map { "\($0.modelName)=\(shelf.plane($0).isStandIn ? "stand-in" : "library")" }
             let shots = WeaponKind.allCases.map { "\($0)=\(shelf.projectile($0).isStandIn ? "stand-in" : "library")" }

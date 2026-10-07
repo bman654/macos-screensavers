@@ -85,6 +85,8 @@ final class DogfightSim {
 
     /// A frozen sim keeps its state exactly as staged — the lineup's, for inspecting models.
     var isFrozen = false
+    /// Whether the frozen state is the model lineup rather than a held moment of a fight.
+    var isLineup = false
 
     func advance(steps count: Int = 1) {
         guard !isFrozen else { return }

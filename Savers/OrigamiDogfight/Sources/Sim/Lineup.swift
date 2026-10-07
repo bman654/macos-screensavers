@@ -10,6 +10,7 @@ import simd
 extension DogfightSim {
     func stageLineup() {
         isFrozen = true
+        isLineup = true
         planes.removeAll()
         projectiles.removeAll()
         wrecks.removeAll()

@@ -55,6 +55,7 @@ final class OrigamiDogfightView: SaverView {
             // progress rather than an empty sky with planes on their way in.
             sim.advance(steps: Int(launch.warmup / DogfightSim.stepSeconds))
             if launch.lineup { sim.stageLineup() }
+            if launch.freeze { sim.isFrozen = true }
         }
         resumeSim = nil
 
@@ -81,6 +82,9 @@ struct LaunchOptions {
     var warmup: Double
     /// `ORIGAMI_LINEUP=1`: a frozen tableau of every model, for checking orientation and scale.
     var lineup = false
+    /// `ORIGAMI_FREEZE=1`: hold the fight at the end of the warmup, so a seed and a warmup name
+    /// one exact picture — what `tools/build-origami-thumbnail.sh` needs to be reproducible.
+    var freeze = false
 
     static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> LaunchOptions {
         // Six digits and drawn rather than taken from the clock, as the Aquarium's are: a seed
@@ -91,6 +95,7 @@ struct LaunchOptions {
         let planes = environment["ORIGAMI_PLANES"].flatMap(Int.init).map { min(max($0, 2), 8) }
         let warmup = environment["ORIGAMI_WARMUP"].flatMap(Double.init).map { min(max($0, 0), 600) } ?? 0
         return LaunchOptions(seed: seed, config: SimConfig(mode: mode, planeCount: planes), warmup: warmup,
-                             lineup: environment["ORIGAMI_LINEUP"] == "1")
+                             lineup: environment["ORIGAMI_LINEUP"] == "1",
+                             freeze: environment["ORIGAMI_FREEZE"] == "1")
     }
 }
