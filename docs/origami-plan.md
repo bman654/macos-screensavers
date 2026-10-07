@@ -29,6 +29,36 @@ Where v1 departed from the decisions below, and why:
   planes as specks. Any change to the simulation moves the fight, so the tile's frame has to be
   re-chosen after one (`tools/build-origami-thumbnail.sh`).
 
+## v2: after the first look (2026-10-07)
+
+Brandon watched v1 and liked the overall design, the terrain and the lake banks. What he asked
+for next, and the calls made on his behalf where he left a detail open (marked *call*):
+
+- **Ammunition that lands in a lake splashes and sinks**, the way a crashed plane does, instead of
+  lying on top of the water.
+- **Planes read slightly too large, which makes them feel fast.** The fix is scale, not camera:
+  each match picks a plane count, and the more planes, the smaller the planes *and* everything
+  that belongs to them — their speed, turning circle, weapon range, ammunition, confetti, smoke,
+  fire and wrecks. The landscape and its props never change size, and the camera never moves, so
+  no extra landscape is rendered. *Call:* the scale is self-similar (a smaller plane flies the same
+  number of body lengths per second), and the baseline drops a little even at today's count.
+- **A wider range of plane counts**, chosen per match: a few (3–4), some (5–7, today's), lots
+  (8–12). *Call:* lots tops out at 12, subject to the frame-cost budget.
+- **A settings sheet in words, not numbers.** *Call:* Teams — free-for-all / teams / surprise me;
+  Planes — a few / some / lots / surprise me; Tanks — off / sometimes / always; Scoreboard — on or
+  off. Defaults: surprise me, surprise me, sometimes, on. Surprise me re-rolls every match.
+- **A scoreboard** showing kills by colour and the time until the match ends, in **a different
+  corner each match** so nothing sits in one place long enough to burn in. *Call:* it is part of
+  the paper world — a small card drawn in the corner — not a UI overlay.
+- **Paper tanks on the ground that shoot at planes.** *Calls:* tanks belong to a side like a plane
+  does and are killable; planes attack them with shallow strafing dives and the bomber also drops
+  its crumpled paper balls on them; a destroyed tank burns like a crashed plane and a replacement
+  rolls in from the edge. Tanks fire **pencil stubs** steeply upward, which rise toward the camera
+  and fall back if they miss. Tanks keep to dry, gentle ground inside the view. When tanks are in
+  a match, a side has at most two.
+- **Sound: not yet.** v1's question was what an origami dogfight should sound like; ideas are
+  offered rather than built.
+
 ## Decisions (v1 defaults)
 
 - **SceneKit through `SceneKitHost`, like the Aquarium.** Real 3D models, real shadows. The
@@ -117,8 +147,12 @@ as a simple stand-in, never a black screen.
   `wire`...). Bake nothing unless a model genuinely needs it.
 - **Fire** — each flame tongue its own child object named `flame_<n>`, origin at its base, so
   the runtime can flicker them independently by scaling.
+- **Tanks** — kind `tank`. The turret is a child object named `turret`, origin on its vertical
+  rotation axis, barrel along +X; the hull is the rest. Hull and turret paper use material
+  `paper` (tinted per side at runtime, like a plane); treads and anything else keep authored
+  colours.
 - **Manifest** — at least `name`, `kind` (`plane` / `projectile` / `tree` / `rock` / `house` /
-  `boat` / `fire` / `smoke`), `asset`, and `bounds` (min and max in metres, in the authored
+  `boat` / `fire` / `smoke` / `tank`), `asset`, and `bounds` (min and max in metres, in the authored
   Blender axes). Planes add `sheetAspect`.
 
 ## Shared code
