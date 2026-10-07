@@ -8,13 +8,15 @@
 # It is a *crop* of a full frame, which the Aquarium's tile is not, and that was decided by
 # looking at candidates at 108x71, the size the picker draws. The whole arena at that size is a
 # handsome paper map with the planes reduced to six-pixel specks — nothing in it says "dogfight".
-# Cropped to the fight, a three-team match: yellow, red and violet planes cross over the meadow,
-# two wrecks burn, and four paper tanks — a red heavy, a red light, a yellow and a violet — hold
-# the ground, all of it inside the central 88% the picker keeps.
+# Cropped to the fight: since v3, an autumn match of three teams at midday — a team's paper runway
+# and hangar, a supply crate drifting down on its parachute beside it, a blue biplane crossing, a
+# pair of yellow tanks and a plane going down among the orange trees, all of it inside the central
+# 88% the picker keeps. Autumn rather than summer because its orange woods and gold fields still
+# read as a season at 108x71, and the dark runway is the one shape there that says "airfield".
 # A crop changes nothing about how the saver draws: same camera, same light, same fight. The
-# moment was found by scanning two hundred and forty seeds in the headless sim for a crop holding
-# a tank, planes of two sides or more and a fresh fire, then judged by eye at tile size among
-# the four best.
+# moment was found by scanning eighty seeds in the headless sim for a team match with every
+# airfield placed, take-offs, a supply drop and tanks in one window, then judged by eye at tile
+# size among the best.
 #
 # The scoreboard is off for the tile: at 108x71 the card is a pale smudge in a corner, and the
 # tile has room for one idea, which is the fight.
@@ -30,29 +32,32 @@ OUT="$ROOT/Savers/OrigamiDogfight/Thumbnail"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/origami-thumbnail.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-SEED=149
+SEED=38
 TEAMS=teams
 TIER=some
 TANKS=always
+SEASON=autumn
+TIME=midday
 # A whole number of 1/120 s steps, nudged past the boundary so rounding cannot drop one.
-WARMUP=87.7504
+WARMUP=26.0004
 
 # The frame is drawn at 4320x2840, the tile's aspect, and the crop taken from it is still
 # larger than the 1080x710 tile, so the tile is a downsample rather than an enlargement.
 WIDTH=4320
 HEIGHT=2840
-CROP_X=960
-CROP_Y=680
-CROP_W=1760
-CROP_H=1157
+CROP_X=2060
+CROP_Y=430
+CROP_W=2000
+CROP_H=1315
 
 # Ten times the 108x71-point tile, and half that for the 1x name.
 TILE_W=1080
 TILE_H=710
 
 mkdir -p "$OUT"
-echo "Rendering seed $SEED ($TEAMS, $TIER planes, tanks $TANKS, ${WARMUP}s in) at ${WIDTH}x${HEIGHT}..."
+echo "Rendering seed $SEED ($TEAMS, $TIER planes, tanks $TANKS, $SEASON $TIME, ${WARMUP}s in) at ${WIDTH}x${HEIGHT}..."
 ORIGAMI_SEED="$SEED" ORIGAMI_TEAMS="$TEAMS" ORIGAMI_PLANES_TIER="$TIER" ORIGAMI_TANKS="$TANKS" \
+    ORIGAMI_SEASON="$SEASON" ORIGAMI_TIME="$TIME" \
     ORIGAMI_SCOREBOARD=0 ORIGAMI_WARMUP="$WARMUP" ORIGAMI_FREEZE=1 \
     "$ROOT/tools/run-saver.swift" OrigamiDogfight \
     --size "${WIDTH}x${HEIGHT}" --seconds 3 --screenshot "$SCRATCH/frame.png"
