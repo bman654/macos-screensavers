@@ -51,6 +51,9 @@ final class OrigamiSettingsSheet: NSObject {
     /// System Settings thumbnail does — `RenderQuality.reduced`, the whole fight at a fraction of
     /// the pixels.
     private static let previewSize = NSSize(width: 384, height: 216)
+    /// The choices' column: wide enough for four choices in a row with "Surprise me" among
+    /// them — at 330 the season's and the hour's first titles were cut to "Sum…" and "Mor…".
+    private static let columnWidth: CGFloat = 380
     /// Opens on a fight already going rather than on planes still coming on.
     private static let previewWarmup: Double = 9
 
@@ -300,7 +303,7 @@ final class OrigamiSettingsSheet: NSObject {
 
             groups.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
             groups.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            groups.widthAnchor.constraint(equalToConstant: 330),
+            groups.widthAnchor.constraint(equalToConstant: OrigamiSettingsSheet.columnWidth),
 
             previewContainer.topAnchor.constraint(equalTo: groups.topAnchor),
             previewContainer.leadingAnchor.constraint(equalTo: groups.trailingAnchor, constant: 24),
@@ -352,7 +355,7 @@ final class OrigamiSettingsSheet: NSObject {
         field.textColor = colour
         field.lineBreakMode = .byWordWrapping
         field.maximumNumberOfLines = 0
-        field.preferredMaxLayoutWidth = 330
+        field.preferredMaxLayoutWidth = OrigamiSettingsSheet.columnWidth
         return field
     }
 }
