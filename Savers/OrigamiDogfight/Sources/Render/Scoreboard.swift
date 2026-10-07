@@ -64,17 +64,21 @@ final class Scoreboard {
         }
         let content = ScoreCardContent(body: body, clock: Int(ceil(match.remaining(at: now))), match: match.index)
 
-        // Points, then pixels: the card's natural size at this backing scale, but never so few
-        // pixels that a capped tile turns it to mush, nor so much of a small frame that it
-        // stops being a card in the corner — 150 pixels was a fifth of the sheet's preview.
+        // How big the card is and how many pixels it is drawn with are separate questions. Its
+        // size is in points — the card's natural size at the scale actually rendered, so it is
+        // the same size to the eye whether the frame is drawn at 2x, 1x or a reduced tier's
+        // fraction — capped so it never takes so much of a small frame that it stops being a
+        // card in the corner (150 pixels was a fifth of the sheet's preview). Only the bitmap
+        // has a floor: never so few pixels that a capped tile turns the handwriting to mush.
+        // When the floor set the size too, a reduced tier's card came out ~30% larger, and
+        // shrank when the picker's preview became the real thing.
         let size = ScoreCard.size(sides: match.sides, teams: teams)
         let frame = drawableSize
         guard frame.width > 0, frame.height > 0 else { return }
         // A little over a point per point: at one point to the point the handwriting read small
         // against a full-screen fight.
-        let natural = size.width * backingScale * 1.2
-        let wanted = min(max(natural, 110), frame.width * 0.18)
-        let pixelsPerPoint = wanted / size.width
+        let shown = min(size.width * backingScale * 1.2, frame.width * 0.18)
+        let pixelsPerPoint = max(shown, 110) / size.width
         if drawn.map({ $0.content != content || $0.size != size || abs($0.pixelsPerPoint - pixelsPerPoint) > 0.01 }) ?? true {
             material.diffuse.contents = ScoreCard.image(content, size: size, pixelsPerPoint: pixelsPerPoint)
             drawn = (content, size, pixelsPerPoint)
@@ -85,8 +89,8 @@ final class Scoreboard {
         let halfHeight = d * tan(ViewRig.verticalFOV / 2)
         let metresPerPixel = 2 * halfHeight / Float(frame.height)
         let halfWidth = halfHeight * Float(frame.width / frame.height)
-        let w = Float(size.width * pixelsPerPoint) * metresPerPixel
-        let h = Float(size.height * pixelsPerPoint) * metresPerPixel
+        let w = Float(shown) * metresPerPixel
+        let h = Float(shown * size.height / size.width) * metresPerPixel
         quad.width = CGFloat(w)
         quad.height = CGFloat(h)
         let corner = (firstCorner + match.index) % 4
