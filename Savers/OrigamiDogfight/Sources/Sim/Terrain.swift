@@ -11,6 +11,12 @@
 // — its height, its slope, whether it is lake — is answered from the face drawn there, with the
 // heights it is drawn at, so a wreck sits on the facet that is seen and splashes only into water
 // that is seen.
+//
+// A winter's lakes are frozen, and frozen water is ground for everything (`docs/origami-plan.md`,
+// v3): shots lie on the ice, a wreck burns on it, a tank drives across it. So the terrain keeps
+// two views of every face — `surface`, what is drawn there, lake included, and `bands`, what it is
+// to anything that stands on it or falls onto it — and every question the fight asks reads the
+// second. The fight's code needs no winter of its own.
 
 import Foundation
 import simd
@@ -43,11 +49,18 @@ struct Terrain {
     static let maxHeight: Float = 0.5
 
     let lattice: FacetLattice
+    /// Whether the lakes are frozen this session.
+    let isFrozen: Bool
     /// The height every lattice point is drawn at: the corners of water faces pressed flat to
     /// the water level, and nothing below it. The mesh and every lookup read these, never the
     /// raw field.
     let ground: [Float]
-    /// One per face of `lattice`.
+    /// One per face of `lattice`: what is drawn there. A frozen lake is still `.water` here — it
+    /// is ice to look at, and the boats on it are still boats on a lake.
+    let surface: [TerrainBand]
+    /// One per face: what the face is underfoot. The same as `surface` except that a frozen
+    /// lake's faces read `.shore` — flat, open ground with nothing growing on it, which is what
+    /// ice is to a tank, a shot or a wreck.
     let bands: [TerrainBand]
     /// Which colour of its band a face takes — for water whether it is the shallows, for the
     /// rest the field it belongs to — and a small per-face brightness jitter. Both are drawn
@@ -56,7 +69,8 @@ struct Terrain {
     let jitter: [Float]
     let lakes: [Lake]
 
-    init(seed: UInt64) {
+    init(seed: UInt64, frozenLakes: Bool = false) {
+        isFrozen = frozenLakes
         var rand = Rand(seed: seed ^ 0x7E44_A1_9C_03_55)
         let noise = ValueNoise(seed: UInt32(truncatingIfNeeded: seed &* 0x2545_F491))
         let lattice = FacetLattice(halfExtent: Terrain.halfExtent, spacing: Terrain.facetSize,
@@ -125,7 +139,9 @@ struct Terrain {
                                                summit: onPeak.map { summits[$0.index] })
             }
         }
-        self.bands = bands
+        // Last, and drawing nothing from `rand`: a winter is the same landscape as a summer.
+        self.surface = bands
+        self.bands = frozenLakes ? bands.map { $0 == .water ? .shore : $0 } : bands
         self.variants = variants
         self.jitter = jitter
     }
@@ -145,7 +161,15 @@ struct Terrain {
         return bands[face]
     }
 
+    /// Open water, which swallows a wreck and splashes a shot. Never true of ice.
     func isWater(at p: SIMD2<Float>) -> Bool { band(at: p) == .water }
+
+    /// A lake, frozen or not: for whatever belongs to the lake itself — a boat's mooring, the
+    /// ice's colour — rather than to what lands on it.
+    func isLake(at p: SIMD2<Float>) -> Bool {
+        guard let (face, _) = lattice.locate(p) else { return false }
+        return surface[face] == .water
+    }
 
     /// Rise over run of the facet under a point.
     func slope(at p: SIMD2<Float>) -> Float {
