@@ -86,10 +86,10 @@ final class PlaneFleet {
         let pitch = a.pitch + (b.pitch - a.pitch) * alpha
 
         // Paper is light: a plane in the air never sits quite still on its line.
-        let t = Float(time) + visual.flutter
-        let flutterRoll = 0.07 * sin(t * 6.1) + 0.03 * sin(t * 13.7)
-        let flutterPitch = 0.04 * sin(t * 4.3 + 1.1)
-        let bob = 0.006 * sin(t * 3.1)
+        let t = time + Double(visual.flutter)
+        let flutterRoll = 0.07 * wave(t, rate: 6.1) + 0.03 * wave(t, rate: 13.7)
+        let flutterPitch = 0.04 * wave(t, rate: 4.3, phase: 1.1)
+        let bob = 0.006 * wave(t, rate: 3.1)
 
         visual.node.simdPosition = position.scene(altitude: altitude + bob)
         // Yaw about +Y takes the model's nose (+X) to the sim heading; pitch about the model's

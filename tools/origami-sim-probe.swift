@@ -115,6 +115,13 @@ func soak(seed: UInt64, mode: MatchMode?, planes: Int?, minutes: Double, aspect:
             }
         }
         r.maxProjectiles = max(r.maxProjectiles, sim.projectiles.count)
+        // Forget planes that have left, so half an hour of replacements does not pile up here.
+        if circleTime.count > 4 * max(sim.planes.count, 1) {
+            let live = Set(sim.planes.map(\.id))
+            circleTime = circleTime.filter { live.contains($0.key) }
+            circleSign = circleSign.filter { live.contains($0.key) }
+            wallRun = wallRun.filter { live.contains($0.key) }
+        }
 
         var airborne = 0
         let fighters = sim.planes.filter { if case .fighting = $0.state { return true }; return false }

@@ -96,7 +96,10 @@ final class WreckField {
         let restY = sin(WreckField.noseDown) * length * 0.32
         body.simdPosition = SIMD3(0, restY, 0)
         body.simdOrientation = simd_quatf(angle: -WreckField.noseDown, axis: SIMD3(0, 0, 1))
-            * simd_quatf(angle: wreck.roll, axis: SIMD3(1, 0, 0))
+            // `roll` is in the sim's bank convention, positive into a left turn, which the model
+            // draws as a negative roll about its nose — the same flip `PlaneFleet` makes in flight,
+            // so a wreck lies over on the wing it went in on.
+            * simd_quatf(angle: -wreck.roll, axis: SIMD3(1, 0, 0))
         node.addChildNode(body)
 
         var fire: SCNNode?
@@ -152,7 +155,6 @@ final class WreckField {
     }
 
     private func animate(_ visual: Visual, _ wreck: Wreck, age: Double, time: Double) {
-        let t = Float(time)
         if wreck.inWater {
             // Down through the water's surface, which hides it as it goes — the lake is opaque
             // paper, so the sinking reads with no special effect at all.
@@ -168,8 +170,10 @@ final class WreckField {
         let catchUp = smoothstep(0, 0.5, Float(age))
         let fold = burning ? 1 : max(0, 1 - smoothstep(0, 1, folding))
         for flame in visual.flames {
-            let lick = 0.78 + 0.22 * sin(t * flame.rate + flame.phase) + 0.12 * sin(t * flame.rate * 2.3 + flame.phase * 1.7)
-            let sway = 1 + 0.1 * sin(t * flame.rate * 0.7 + flame.phase)
+            let rate = Double(flame.rate), phase = Double(flame.phase)
+            let lick = 0.78 + 0.22 * wave(time, rate: rate, phase: phase)
+                + 0.12 * wave(time, rate: rate * 2.3, phase: phase * 1.7)
+            let sway = 1 + 0.1 * wave(time, rate: rate * 0.7, phase: phase)
             let k = max(catchUp * fold, 0.001)
             var stretch = SIMD3<Float>(repeating: sway * k)
             stretch[flame.axis] = lick * k
@@ -186,7 +190,8 @@ final class WreckField {
             let phase = (Float(age) + Float(index) * cycle / count).truncatingRemainder(dividingBy: cycle) / cycle
             let alive = burning || folding < 1
             let drift = SIMD3<Float>(0.75, 0, 0.35) * (0.05 + 0.3 * phase)
-            let wobble = SIMD3<Float>(0.015 * sin(t * 1.3 + Float(index) * 2), 0, 0.015 * cos(t + Float(index)))
+            let wobble = SIMD3<Float>(0.015 * wave(time, rate: 1.3, phase: Double(index) * 2), 0,
+                                      0.015 * wave(time, rate: 1, phase: Double(index) + .pi / 2))
             // Rotated out of the wreck's own heading, so every fire's smoke leans the same way.
             let world = simd_quatf(angle: -wreck.heading, axis: SIMD3(0, 1, 0)).act(drift + wobble)
             puff.simdPosition = world + SIMD3(0, WreckField.fireHeight * (0.7 + 1.6 * phase), 0)

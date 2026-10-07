@@ -93,7 +93,10 @@ struct LaunchOptions {
         let seed = environment["ORIGAMI_SEED"].flatMap(UInt64.init) ?? UInt64.random(in: 100_000...999_999)
         let mode = environment["ORIGAMI_MODE"].flatMap { MatchMode(rawValue: $0.lowercased()) }
         let planes = environment["ORIGAMI_PLANES"].flatMap(Int.init).map { min(max($0, 2), 8) }
-        let warmup = environment["ORIGAMI_WARMUP"].flatMap(Double.init).map { min(max($0, 0), 600) } ?? 0
+        // Finite only: `Double("nan")` parses, survives min and max, and traps converting to a
+        // step count.
+        let warmup = environment["ORIGAMI_WARMUP"].flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
+            .map { min(max($0, 0), 600) } ?? 0
         return LaunchOptions(seed: seed, config: SimConfig(mode: mode, planeCount: planes), warmup: warmup,
                              lineup: environment["ORIGAMI_LINEUP"] == "1",
                              freeze: environment["ORIGAMI_FREEZE"] == "1")

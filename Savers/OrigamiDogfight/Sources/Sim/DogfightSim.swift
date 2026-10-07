@@ -156,7 +156,7 @@ final class DogfightSim {
         // glider's hardest turn lays it over about 65°.
         if case .downed(_, let spin) = p.state {
             // Out of control: rolled hard over into the spiral, rocking as it goes.
-            let rock = sin(Float(time) * 9 + Float(p.id)) * 0.25
+            let rock = wave(time, rate: 9, phase: Double(p.id)) * 0.25
             let goal = spin * 1.35 + rock
             p.pose.bank += max(min(goal - p.pose.bank, 3 * dt), -3 * dt)
         } else {

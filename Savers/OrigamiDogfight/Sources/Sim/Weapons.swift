@@ -129,17 +129,36 @@ extension DogfightSim {
         }
     }
 
-    /// The first enemy plane the projectile's path this step passed through.
+    /// The enemy plane the projectile's path this step reached first.
+    ///
+    /// First along the path, not first in the array: two planes overlapping in the shot's way
+    /// would otherwise give the hit to whichever was stored first, which is the order they
+    /// spawned in and nothing to do with where the shot went.
     private func firstHit(by p: Projectile, radius: Float) -> Int? {
-        let a = p.previousPosition, b = p.position
-        let segment = b - a
-        let length2 = max(simd_length_squared(segment), 1e-12)
+        let a = p.previousPosition
+        let segment = p.position - a
+        let length2 = simd_length_squared(segment)
+        var best: (index: Int, along: Float)?
         for (index, plane) in planes.enumerated() where plane.side != p.side && !plane.state.isDowned {
             guard abs(plane.altitude - p.altitude) < DogfightSim.altitudeTolerance else { continue }
-            let t = min(max(simd_dot(plane.position - a, segment) / length2, 0), 1)
-            let closest = a + segment * t
-            if simd_distance(closest, plane.position) < plane.spec.hitRadius + radius { return index }
+            // Entry into the plane's circle along a + s·segment, s in [0, 1]: the smaller root
+            // of |a + s·d − c|² = R², or 0 when the step began inside it.
+            let reach = plane.spec.hitRadius + radius
+            let offset = a - plane.position
+            let c = simd_length_squared(offset) - reach * reach
+            let entry: Float
+            if c <= 0 {
+                entry = 0
+            } else {
+                guard length2 > 1e-12 else { continue }
+                let b = simd_dot(offset, segment)
+                let discriminant = b * b - length2 * c
+                guard b < 0, discriminant >= 0 else { continue }
+                entry = (-b - discriminant.squareRoot()) / length2
+                guard entry <= 1 else { continue }
+            }
+            if best.map({ entry < $0.along }) ?? true { best = (index, entry) }
         }
-        return nil
+        return best?.index
     }
 }

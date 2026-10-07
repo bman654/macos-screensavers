@@ -169,6 +169,16 @@ enum SimEvent {
     case exited(plane: Int)
 }
 
+/// `sin(time × rate + phase)`, with the argument formed in `Double`.
+///
+/// Every oscillation here — a flame's lick, a plane's flutter, a downed plane's rocking — runs
+/// off an absolute clock, and in `Float` that clock's resolution coarsens as it grows: by ten
+/// hours a step of the argument is several milliseconds' worth, and the motion visibly steps.
+/// Forming the argument in `Double` keeps it smooth however long the saver has been running.
+func wave(_ time: Double, rate: Double, phase: Double = 0) -> Float {
+    Float(sin(time * rate + phase))
+}
+
 extension Float {
     /// Into (-π, π].
     var wrappedAngle: Float {
