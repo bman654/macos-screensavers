@@ -68,6 +68,11 @@ struct FacetMesh {
 }
 
 /// sRGB-authored colour to the linear values SceneKit expects of a vertex colour.
+///
+/// Unlike an image, which SceneKit decodes by its tag, a vertex colour is taken as linear with
+/// no tag to say so. Measured with an unlit quad: a vertex colour of 0.4 displayed at 184/255,
+/// where an sRGB reading would have shown 102 — so a palette passed through unconverted comes
+/// out pale and washed.
 func linearRGBA(_ c: PaperColor, alpha: Float = 1) -> SIMD4<Float> {
     func channel(_ v: CGFloat) -> Float {
         let x = Float(v)

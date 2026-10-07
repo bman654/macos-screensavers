@@ -55,8 +55,9 @@ final class WreckField {
 
     private var visuals: [Int: Visual] = [:]
 
-    /// The fire stands about this tall over a wreck — a little over half a plane.
-    private static let fireHeight: Float = 0.16
+    /// The fire stands about this tall over a wreck — two thirds of a plane, because it is seen
+    /// from straight above, where a flame's height shows only as how far its tongues splay.
+    private static let fireHeight: Float = 0.2
     private static let noseDown: Float = 0.9
 
     init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects, fleet: PlaneFleet) {

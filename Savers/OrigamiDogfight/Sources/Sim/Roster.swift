@@ -33,21 +33,21 @@ enum PlaneType: Int, CaseIterable {
         // Fastest, widest turns: a dart boom-and-zooms rather than turning with anything.
         case .dart:
             return PlaneSpec(minSpeed: 1.0, cruiseSpeed: 1.26, maxSpeed: 1.52, turnRate: 2.4,
-                             armour: 5, size: 0.30, weapons: [.spitball, .thumbtack])
+                             armour: 5, size: 0.31, weapons: [.spitball, .thumbtack])
         // Slow and very nimble: it wins any turning fight it can stay in.
         case .glider:
             return PlaneSpec(minSpeed: 0.66, cruiseSpeed: 0.86, maxSpeed: 1.05, turnRate: 3.5,
-                             armour: 6.2, size: 0.28, weapons: [.paperClip, .eraser])
+                             armour: 6.2, size: 0.27, weapons: [.paperClip, .eraser])
         // Slowest and toughest; its weapons are the short-range heavy ones.
         case .bomber:
             return PlaneSpec(minSpeed: 0.62, cruiseSpeed: 0.78, maxSpeed: 0.95, turnRate: 2.3,
-                             armour: 9, size: 0.26, weapons: [.paperBall, .confetti])
+                             armour: 9, size: 0.22, weapons: [.paperBall, .confetti])
         case .stunt:
             return PlaneSpec(minSpeed: 0.84, cruiseSpeed: 1.09, maxSpeed: 1.31, turnRate: 3.2,
-                             armour: 6.2, size: 0.26, weapons: [.staples])
+                             armour: 6.2, size: 0.22, weapons: [.staples])
         case .interceptor:
             return PlaneSpec(minSpeed: 0.96, cruiseSpeed: 1.22, maxSpeed: 1.48, turnRate: 2.9,
-                             armour: 5, size: 0.29, weapons: [.rubberBand, .thumbtack])
+                             armour: 5, size: 0.28, weapons: [.rubberBand, .thumbtack])
         }
     }
 }
@@ -61,9 +61,10 @@ struct PlaneSpec {
     let turnRate: Float
     let armour: Float
     /// The plane's larger horizontal dimension on screen — nose to tail for a dart, wingtip to
-    /// wingtip for the bomber and the delta, which are wider than they are long. Scaling every
-    /// model by its length made those two half as large again in area as a dart, and they read
-    /// as planes much nearer the camera.
+    /// wingtip for the bomber and the delta, which are wider than they are long. What the eye
+    /// judges from above is area, so the squat types get a smaller number: at the same
+    /// footprint as a dart the bomber covered half as much screen again and read as a plane
+    /// much nearer the camera.
     let size: Float
     let weapons: [WeaponKind]
 
@@ -103,7 +104,7 @@ enum WeaponKind: Int, CaseIterable {
                               cooldown: 0.99, range: 0.9, cone: 0.15, radius: 0.014, size: 0.072)
         case .paperClip:
             return WeaponSpec(muzzleSpeed: 2.6, dragTime: 0.5, gravity: 1.6, damage: 1.0,
-                              cooldown: 0.80, range: 0.85, cone: 0.17, radius: 0.018, size: 0.090)
+                              cooldown: 0.80, range: 0.85, cone: 0.17, radius: 0.018, size: 0.13)
         case .eraser:
             return WeaponSpec(muzzleSpeed: 2.4, dragTime: 0.45, gravity: 1.6, damage: 0.9,
                               cooldown: 0.67, range: 0.8, cone: 0.18, radius: 0.018, size: 0.072)
@@ -123,7 +124,7 @@ enum WeaponKind: Int, CaseIterable {
         // Long range: the one weapon that can reach across a fifth of the screen.
         case .rubberBand:
             return WeaponSpec(muzzleSpeed: 3.2, dragTime: 0.8, gravity: 1.0, damage: 1.5,
-                              cooldown: 1.52, range: 1.35, cone: 0.12, radius: 0.02, size: 0.108)
+                              cooldown: 1.52, range: 1.35, cone: 0.12, radius: 0.02, size: 0.14)
         }
     }
 }
@@ -148,7 +149,9 @@ struct WeaponSpec {
     let radius: Float
     /// Drawn size: the longest dimension the model is scaled to. Far larger than real — a
     /// 6 mm staple would be a pixel from up here, and even at a quarter of a plane's length a
-    /// spitball is only about 25 points across a 2056-point screen.
+    /// spitball is only about 25 points across a 2056-point screen. The paper clip and the
+    /// rubber band are larger still, because they are wire: drawn the size of the rest, their
+    /// strands are a pixel wide and vanish against the meadow.
     let size: Float
     var pellets: Int = 1
     var spread: Float = 0

@@ -67,14 +67,14 @@ struct Terrain {
             let angle = rand.inRange(0, 2 * .pi)
             let reach = rand.inRange(1.3, 2.6)
             peaks.append((SIMD2(cos(angle) * reach, sin(angle) * reach * 0.65),
-                          rand.inRange(0.7, 1.05), rand.inRange(0.28, 0.34)))
+                          rand.inRange(1.0, 1.4), rand.inRange(0.34, 0.42)))
         }
         var lakes: [Lake] = []
         let lakeCount = 2 + rand.index(count: 2)
         for _ in 0..<40 where lakes.count < lakeCount {
             let center = SIMD2(rand.inRange(-2.3, 2.3), rand.inRange(-1.3, 1.3))
             let radius = rand.inRange(0.5, 0.95)
-            let clearOfPeaks = peaks.allSatisfy { simd_distance($0.center, center) > $0.radius + radius + 0.35 }
+            let clearOfPeaks = peaks.allSatisfy { simd_distance($0.center, center) > $0.radius * 0.8 + radius + 0.3 }
             let clearOfLakes = lakes.allSatisfy { simd_distance($0.center, center) > $0.radius + radius + 0.4 }
             if clearOfPeaks && clearOfLakes { lakes.append(Lake(center: center, radius: radius)) }
         }
@@ -90,9 +90,13 @@ struct Terrain {
                 let hillMask = smoothstep(0.5, 0.78, noise.fbm(p / 2.4 + SIMD2(31, 7), octaves: 2))
                 h += 0.13 * hillMask * (0.6 + 0.8 * noise.fbm(p / 0.9 + SIMD2(5, 53), octaves: 2))
                 for peak in peaks {
+                    // A cone with a concave flank, not a Gaussian: a Gaussian is flat on top,
+                    // so its summit facets all face the sun alike and read as one white sheet
+                    // rather than as a folded peak with a cap.
                     let r = simd_distance(p, peak.center) / peak.radius
                     let ridge = 0.7 + 0.6 * noise.fbm(p / 0.45 + SIMD2(17, 3), octaves: 2)
-                    h += peak.height * exp(-r * r) * ridge
+                    let flank = max(0, 1 - r)
+                    h += peak.height * flank * flank * ridge
                 }
                 for lake in lakes {
                     // A ragged shore: the radius wanders with a noise field so no lake is a disc.
@@ -103,10 +107,42 @@ struct Terrain {
                 // Crumple: every vertex nudged a little, so even flat meadow catches the light
                 // facet by facet the way a sheet of folded paper does.
                 h += rand.inRange(-0.01, 0.01)
-                heights[j * side + i] = min(max(h, 0), Terrain.maxHeight)
+                heights[j * side + i] = max(h, 0)
+            }
+        }
+        // Peaks and hills stack, so a summit can rise well past the ceiling. Clamping it, or
+        // compressing it toward the ceiling, cuts it off flat — and those plateaus came out as
+        // broad white snowfields rather than caps. Rescaling all the relief above the meadows
+        // keeps every summit pointed and puts the highest one just under the ceiling.
+        let meadowTop: Float = 0.2
+        let summit = heights.max() ?? 0
+        if summit > Terrain.maxHeight {
+            let k = (Terrain.maxHeight - meadowTop) / (summit - meadowTop)
+            for index in heights.indices where heights[index] > meadowTop {
+                heights[index] = meadowTop + (heights[index] - meadowTop) * k
             }
         }
         self.heights = heights
+
+        // Snow and rock lines from this landscape's own heights rather than fixed numbers: a
+        // fixed snow line gave one seed a dusting and another broad white snowfields, because
+        // how far a summit rises above any given height depends on how the peaks and hills
+        // happened to stack. Measured over the middle of the terrain, which is what is seen.
+        var central: [Float] = []
+        for j in 0..<cells {
+            for i in 0..<cells {
+                let center = (SIMD2(Float(i), Float(j)) + 0.5) * Terrain.cellSize + origin
+                guard abs(center.x) < 3.5, abs(center.y) < 2.2 else { continue }
+                let corners = [(0, 0), (1, 0), (0, 1), (1, 1)].map { heights[(j + $0.1) * side + i + $0.0] }
+                central.append(corners.reduce(0, +) / 4)
+            }
+        }
+        central.sort()
+        func quantile(_ q: Float) -> Float {
+            central.isEmpty ? Terrain.maxHeight : central[min(Int(Float(central.count) * q), central.count - 1)]
+        }
+        // Floors, so a low, rolling seed gets no snow at all rather than snow on its hilltops.
+        let lines = BandLines(snow: max(0.36, quantile(0.993)), rock: max(0.26, quantile(0.94)))
 
         var bands = [TerrainBand](repeating: .meadow, count: cells * cells * 2)
         var variants = [UInt8](repeating: 0, count: bands.count)
@@ -118,7 +154,7 @@ struct Terrain {
                     let corners = Terrain.faceCorners(i: i, j: j, k: k)
                     let raw = corners.map { heights[($0.y + j) * side + $0.x + i] }
                     let center = (SIMD2(Float(i), Float(j)) + 0.5) * Terrain.cellSize + origin
-                    bands[face] = Terrain.classify(raw, cellSize: Terrain.cellSize, corners: corners)
+                    bands[face] = Terrain.classify(raw, cellSize: Terrain.cellSize, corners: corners, lines: lines)
                     // Fields: a coarse noise quantised into a handful of bins, so meadow faces
                     // group into patches of one green — a patchwork, like folded farmland.
                     let field = noise.value(center / 0.7 + SIMD2(13, 101))
@@ -206,16 +242,21 @@ struct Terrain {
         return simd_length(SIMD2(n.x, n.y)) / max(abs(n.z), 1e-6)
     }
 
+    private struct BandLines {
+        let snow: Float
+        let rock: Float
+    }
+
     private static func classify(_ raw: [Float], cellSize: Float,
-                                 corners: [(x: Int, y: Int)]) -> TerrainBand {
+                                 corners: [(x: Int, y: Int)], lines: BandLines) -> TerrainBand {
         let water = Terrain.waterLevel
         if raw.max()! < water { return .water }
         if raw.min()! < water + 0.012 { return .shore }
         let mean = raw.reduce(0, +) / 3
         let steep = slope(raw, corners: corners, cellSize: cellSize)
-        if mean > 0.42 { return .snow }
-        if mean > 0.3 || steep > 0.75 { return .rock }
-        if mean > 0.185 { return .hill }
+        if mean > lines.snow { return .snow }
+        if mean > lines.rock || steep > 0.75 { return .rock }
+        if mean > min(0.185, lines.rock - 0.04) { return .hill }
         return .meadow
     }
 }

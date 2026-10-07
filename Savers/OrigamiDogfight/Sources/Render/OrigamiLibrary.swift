@@ -155,22 +155,34 @@ final class OrigamiLibrary {
         return template
     }
 
-    /// Union of every geometry node's box, expressed in the root's space. The root's own
-    /// `boundingBox` reports only its own geometry in some import layouts, which would be zero
-    /// for a hierarchy whose meshes all live in children.
+    /// The extent of every vertex under `root`, in the root's space.
+    ///
+    /// Vertices, not each node's bounding box transformed: the box of a rotated box is larger
+    /// than what is in it, and the fire's flames are rotated — measured that way the fire's
+    /// base came out about 11 mm below its real base. The root's own `boundingBox` is no
+    /// better: in some import layouts it reports only its own geometry, which is zero for a
+    /// hierarchy whose meshes all live in children.
     static func bounds(of root: SCNNode) -> (SIMD3<Float>, SIMD3<Float>)? {
         var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
         var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         var found = false
         root.enumerateHierarchy { node, _ in
-            guard node.geometry != nil else { return }
-            let (a, b) = node.boundingBox
-            for x in [a.x, b.x] {
-                for y in [a.y, b.y] {
-                    for z in [a.z, b.z] {
-                        let p = root.simdConvertPosition(SIMD3(Float(x), Float(y), Float(z)), from: node)
-                        lo = simd_min(lo, p)
-                        hi = simd_max(hi, p)
+            guard let geometry = node.geometry else { return }
+            let transform = root.simdConvertTransform(matrix_identity_float4x4, from: node)
+            for source in geometry.sources(for: .vertex) {
+                // Only float vectors are read; anything else is skipped rather than guessed at.
+                guard source.usesFloatComponents, source.bytesPerComponent == 4,
+                      source.componentsPerVector >= 3 else { continue }
+                source.data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                    for index in 0..<source.vectorCount {
+                        let offset = source.dataOffset + index * source.dataStride
+                        guard offset + 12 <= raw.count else { break }
+                        let v = SIMD3(raw.loadUnaligned(fromByteOffset: offset, as: Float.self),
+                                      raw.loadUnaligned(fromByteOffset: offset + 4, as: Float.self),
+                                      raw.loadUnaligned(fromByteOffset: offset + 8, as: Float.self))
+                        let p = transform * SIMD4(v, 1)
+                        lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
+                        hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
                         found = true
                     }
                 }
