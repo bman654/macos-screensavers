@@ -17,6 +17,11 @@ final class OrigamiDogfightView: SaverView {
     /// the same fight carrying on rather than a new one.
     private var resumeSim: DogfightSim?
 
+    /// The scene a release let go of, held weakly so the next build can say whether it really
+    /// went. Under `SAVERKIT_LIFECYCLE` only: it is the in-host proof that nothing — a host
+    /// closure, an effect's animation, a node — kept the scene and its render graph alive.
+    private weak var releasedScene: DogfightScene?
+
     /// Half a ProMotion display's rate, as the Aquarium does and for the same reason: this runs
     /// unattended, often on battery, and paper planes crossing a landscape read no differently
     /// at 60. The motion is unaffected by the cap because the sim steps by the clock, never by
@@ -30,10 +35,14 @@ final class OrigamiDogfightView: SaverView {
     /// fires and shots in flight included. A reload is a request for something new.
     override func didReleaseHost(_ reason: HostReleaseReason) {
         resumeSim = reason == .reload ? nil : dogfight?.sim
+        releasedScene = dogfight
         dogfight = nil
     }
 
     override func makeHost(_ context: HostContext) -> RenderHost? {
+        if LifecycleLog.isEnabled, resumeSim != nil {
+            LifecycleLog.emit("origami previous scene freed=\(releasedScene == nil)")
+        }
         let aspect = Float(context.drawableSize.width / max(context.drawableSize.height, 1))
         let sim: DogfightSim
         if let resumeSim {

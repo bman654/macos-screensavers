@@ -56,6 +56,12 @@ final class DogfightScene {
         for root in [wrecks.root, shots.root, fleet.root, effects.root] { scene.rootNode.addChildNode(root) }
         buildLights(quality: quality)
         buildCamera()
+        // Which fight this scene was handed, and how far into it — the only way to see that an
+        // idle release or a quality change resumed the fight rather than starting a new one.
+        if LifecycleLog.isEnabled {
+            LifecycleLog.emit(String(format: "origami scene built seed=%llu simTime=%.2fs quality=%@",
+                                     sim.seed, sim.time, quality == .full ? "full" : "reduced"))
+        }
         if sim.isFrozen {
             // The lineup is for checking models, so say which ones are really the library's.
             let planes = PlaneType.allCases.map { "\($0.modelName)=\(shelf.plane($0).isStandIn ? "stand-in" : "library")" }
