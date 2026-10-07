@@ -1,0 +1,119 @@
+# Origami Dogfight — build plan
+
+A handful of folded paper planes dogfight over a folded-paper landscape, seen from above. They
+shoot spitballs, paper clips, staples and crumpled paper at each other. A plane that is shot down
+spirals into the ground and burns as a little origami fire for a while before it fades, and a
+replacement flies in from off-screen, so the number in the air stays constant. Sometimes it is a
+free-for-all, sometimes two or three small teams.
+
+Status: v1 is being built. Everything under "Decisions" is a starting point chosen so the whole
+thing can be built and watched; **look, feel and balance are judged on the running saver, not on
+paper**, and any of it can move once it has been seen.
+
+## Decisions (v1 defaults)
+
+- **SceneKit through `SceneKitHost`, like the Aquarium.** Real 3D models, real shadows. The
+  overhead view is a perspective camera looking almost straight down with a slight tilt, so hills
+  read as relief and a plane's altitude reads as size and as the distance to its own shadow.
+  **Shadows on the terrain are the main depth cue** and are not optional.
+- **The camera is fixed for a session.** The fight is the motion.
+- **The landscape is generated at runtime from a seed**, not modelled in Blender: a faceted,
+  flat-shaded height field, coloured in paper bands (lake, shore, meadow, hill, rock, snow),
+  so every face reads as a separate folded piece. Lakes are flat blue paper. The props on it —
+  trees, rocks, houses, paper boats — are Blender models scattered at runtime.
+- **The planes, projectiles, props and fire are Blender models** (`Models/`), per the repo rule
+  that models are code.
+- **A plane's paper is a runtime texture.** A plane is modelled as a folded sheet whose UVs are
+  the sheet's own flat coordinates, so any paper — lined notebook, graph, newspaper, plain
+  coloured — lands on it with its lines running across the folds the way a real folded sheet's
+  would. Teams fly one colour each; a free-for-all gives every plane a different paper.
+- **The simulation is a fixed-step, seeded 2.5D sim.** Planes fly on a horizontal band with a
+  little altitude play; they cannot stop, turn at a limited rate and bank into turns.
+  Projectiles fly at the shooter's height and drop under gravity. Fixed step, because a sim
+  integrated against the frame delta is not reproducible from a seed (`next-session.md`, traps).
+- **No wrap-around.** The edges of the view are a soft wall the AI steers away from. A
+  replacement plane is the only thing that enters from off-screen.
+- **Matches.** Each match picks a mode and a roster; after a number of kills (or a time limit)
+  the survivors fly off and a new match begins with a new mode. The landscape stays.
+- **No sound in v1, and no settings sheet in v1.** Both are easy to add later; sound would follow
+  the Aquarium's default-off policy and its session gate (`docs/saver-host.md` §3).
+
+## Roster
+
+Plane stats live in Swift (`Sources/`), not in the model manifests: speed, turn rate and armour
+are game design, and the models only promise their geometry. Starting values; balance is tuned by
+watching.
+
+| Model | What it is | Flies | Armour | Weapons (one picked per plane) |
+| --- | --- | --- | --- | --- |
+| `dart` | The classic dart every kid folds first: long, narrow, sharp | fastest, wide turns | light | spitball, thumbtack |
+| `glider` | Wide straight wings, blunted nose | slow, very nimble | medium | paper clip, eraser crumb |
+| `bomber` | Squat and fat, flat folded-back nose, stubby wide wings | slowest | heavy | crumpled paper ball, hole-punch confetti (spread) |
+| `stunt` | Delta wing with upturned winglets | quick, agile | medium | staples (3-round burst) |
+| `interceptor` | Needle nose, swept wings, split tail | fast, agile | light | rubber band, thumbtack |
+
+| Projectile | Model | Reads as |
+| --- | --- | --- |
+| spitball | `spitball` | wet off-white lump |
+| thumbtack | `thumbtack` | coloured head on a pin |
+| paper clip | `paper_clip` | tumbling silver clip |
+| eraser crumb | `eraser` | pink rubber wedge |
+| crumpled paper ball | `paper_ball` | big faceted lined-paper ball, slow, falls fast |
+| hole-punch confetti | runtime discs | spread of tiny paper dots |
+| staple | `staple` | small silver U, in bursts of three |
+| rubber band | `rubber_band` | stretched loop, long range |
+
+Misses do not vanish: they fall to the ground and lie there briefly before fading.
+
+## Lifecycle of a plane
+
+1. **Enter** from just outside a random edge, heading inward, ignoring the edge wall until inside.
+2. **Fight**: pick a target (nearest enemy in front, sticky), lead-pursue it, fire when it is in
+   the weapon's cone and range, break off when an enemy is on its tail, keep off the edges, keep
+   clear of its own side.
+3. **Hit**: a puff of confetti in the victim's paper; past half armour it trails paper scraps.
+4. **Shot down**: loses control, spirals and dives, trailing smoke.
+5. **Crash**: nose-down in the ground with an origami fire on it for ~15 s, then the fire folds
+   away and the wreck fades. Into a lake it splashes and sinks instead, no fire.
+6. **Replaced**: after a short delay a new plane of the same side enters from off-screen.
+
+## Asset contract (Blender → runtime)
+
+Built by `tools/build-origami-library.py` into `Savers/OrigamiDogfight/Assets/` (generated, not
+committed — see `.gitignore`), one `<name>.usdz` per model plus `<name>.json`, and an
+`index.json` listing them. The runtime survives any of it being missing: a missing model is drawn
+as a simple stand-in, never a black screen.
+
+- **Axes** — authored in Blender Z-up, **nose / front toward +X**, up +Z, left toward +Y: the
+  same convention as the Aquarium's fish. A prop stands on z = 0, centred on the origin.
+- **Size** — authored at real size in metres (a letter-paper dart is about 0.28 m long). The
+  manifest records the bounding box; the runtime scales every model to its on-screen size.
+- **Flat shading.** Every face its own normal — the folds are what make it read as paper.
+- **Planes** — one joined mesh, one material named `paper`, UV map = the unfolded sheet's flat
+  coordinates in [0, 1]², u across the sheet's width and v along its length, with the sheet's
+  aspect recorded in the manifest (`sheetAspect`, height / width). The runtime replaces the
+  material.
+- **Everything else** — flat colours from a Principled BSDF base colour (exported as
+  `UsdPreviewSurface`), material names describing the part (`paper_leaf`, `paper_trunk`,
+  `wire`...). Bake nothing unless a model genuinely needs it.
+- **Fire** — each flame tongue its own child object named `flame_<n>`, origin at its base, so
+  the runtime can flicker them independently by scaling.
+- **Manifest** — at least `name`, `kind` (`plane` / `projectile` / `tree` / `rock` / `house` /
+  `boat` / `fire` / `smoke`), `asset`, and `bounds` (min and max in metres, in the authored
+  Blender axes). Planes add `sheetAspect`.
+
+## Shared code
+
+The saver subclasses `SaverView` and builds a `SceneKitHost`, exactly as the Aquarium does, so the
+leak, idle-release, audience and quality machinery comes for free. `docs/saver-host.md` §2
+"Yours to get right" is the checklist the saver must still meet. The seeded RNG (`Rand`) moves
+from the Aquarium into SaverKit, since this is the second saver to need it.
+
+## Verifying it
+
+- A headless soak of the sim: minutes of simulated fighting with kills per minute, time spent out
+  of view, planes in the air, and the longest stretch with no shot fired, so a degenerate fight —
+  planes circling forever, or leaving the screen — is caught by numbers rather than by luck.
+- `run-saver` screenshots at several moments, at Retina and 4K sizes, and frame timings from
+  `SAVERKIT_STATS`.
+- The lifecycle checks in `docs/saver-host.md` §2 "Proving you have not regressed it".
