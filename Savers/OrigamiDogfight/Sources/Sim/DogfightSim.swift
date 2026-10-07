@@ -22,6 +22,9 @@ final class DogfightSim {
     /// Everything standing on the landscape. Placed here rather than by the renderer because
     /// tanks have to drive round it.
     let props: [PropSpot]
+    /// The paper lanes between the hamlets (`Roads.swift`): drawn by the countryside, and kept
+    /// clear by the airfields.
+    let roads: [Road]
     /// Where a tank may drive — the landscape, and this match's hangars (`Airfield.swift`).
     var ground: Ground
     let config: SimConfig
@@ -41,6 +44,9 @@ final class DogfightSim {
     var wrecks: [Wreck] = []
     var drops: [SupplyDrop] = []
     var match: Match
+    /// The match after this one, drawn — and its airfields planned — as the intermission
+    /// begins, so the countryside has the intermission to clear their ground (`airfieldsAhead`).
+    private(set) var upcoming: Match?
     private(set) var matchesCompleted = 0
 
     /// Everything that happened since the last `drainEvents()`. Bounded, so a sim nobody is
@@ -74,6 +80,7 @@ final class DogfightSim {
         self.config = config
         terrain = Terrain(seed: seed, frozenLakes: config.frozenLakes)
         props = Scatter.spots(on: terrain, seed: seed)
+        roads = Roads.build(props: props, terrain: terrain, seed: seed)
         ground = Ground(terrain: terrain, props: props)
         rig = ViewRig(aspect: aspect)
         rand = Rand(seed: seed ^ 0x3A7C_0FF1_CE5E_ED)
@@ -99,6 +106,9 @@ final class DogfightSim {
         (wall, tankRegion) = DogfightSim.arena(rig, scale: match.scale)
         // The airfields were placed inside the old view; a new shape may have cut one off.
         replanBasesIfCutOff()
+        if let next = upcoming {
+            upcoming?.bases = plannedBases(for: next, wall: DogfightSim.arena(rig, scale: next.scale).wall)
+        }
         navGrids.removeAll()
     }
 
@@ -243,14 +253,18 @@ final class DogfightSim {
             // fight, and the next match folds away whatever has not made it.
             if planes.isEmpty {
                 matchesCompleted += 1
-                match.phase = .intermission(until: now + 2.0)
+                // Two seconds, to the step, so the match drawn for then starts exactly then.
+                let until = Double(steps + 240) * DogfightSim.stepSeconds
+                match.phase = .intermission(until: until)
+                upcoming = drawNextMatch(startingAt: until)
             }
         case .intermission(let until):
             guard now >= until else { return }
-            match = Match.draw(index: match.index + 1, now: now, config: config, rand: &rand)
+            match = upcoming ?? drawNextMatch(startingAt: now)
+            upcoming = nil
             (wall, tankRegion) = DogfightSim.arena(rig, scale: match.scale)
             navGrids.removeAll()
-            planBases()
+            ground.structures = match.bases.compactMap { $0.map { ($0.hangar, $0.hangarRadius) } }
             scheduleFirstDrop(now: now)
             for i in tanks.indices where !tanks[i].isActive {
                 if case .leaving = tanks[i].state {
@@ -260,6 +274,23 @@ final class DogfightSim {
             }
             emit(.matchStarted(index: match.index, mode: match.mode, planes: match.slots.count))
         }
+    }
+
+    /// The next match, starting at `start`, with its airfields planned. Nothing draws from
+    /// `rand` during an intermission, so drawing it as the intermission begins rather than as it
+    /// ends names the same match.
+    private func drawNextMatch(startingAt start: Double) -> Match {
+        var next = Match.draw(index: match.index + 1, now: start, config: config, rand: &rand)
+        next.bases = plannedBases(for: next, wall: DogfightSim.arena(rig, scale: next.scale).wall)
+        return next
+    }
+
+    /// The airfields standing, or about to: this match's until its intermission, and through
+    /// the intermission the next match's, which unfold the moment it starts. For the countryside,
+    /// so a flock grazing where a runway is about to unroll has moved before it does.
+    var airfieldsAhead: [Airfield] {
+        if case .intermission = match.phase { return upcoming?.bases.compactMap { $0 } ?? [] }
+        return match.bases.compactMap { $0 }
     }
 
     /// Off the nearest edge, so the survivors leave the way they are already going rather than

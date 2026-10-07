@@ -42,6 +42,15 @@ struct Airfield: Equatable {
     /// Signed distance of `p` along the runway's line from the hangar's centre.
     func along(_ p: SIMD2<Float>) -> Float { simd_dot(p - hangar, direction) }
 
+    /// Whether `p` is on the hangar or the runway, or within `margin` of either.
+    func covers(_ p: SIMD2<Float>, margin: Float = 0) -> Bool {
+        let s = along(p)
+        let off: Float = abs(cross(direction, p - hangar))
+        let door = hangarLength / 2
+        return (s >= -door - margin && s <= door + margin && off <= hangarWidth / 2 + margin)
+            || (s >= door - margin && s <= door + runwayLength + margin && off <= runwayWidth / 2 + margin)
+    }
+
     /// The room a tank must give the hangar: a disc a little inside its walls, so a tank rolling
     /// out of the door is past it as soon as it is out.
     var hangarRadius: Float { min(hangarLength, hangarWidth) * 0.5 }

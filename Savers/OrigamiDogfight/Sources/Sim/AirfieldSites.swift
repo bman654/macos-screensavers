@@ -1,8 +1,9 @@
 // Where the airfields go: a search of every spot and heading on each team's side of the view for
-// the flattest clear strip of ground, read from the terrain and the scattered props as they are.
+// the flattest clear strip of ground, read from the terrain, the scattered props and the roads as
+// they are.
 //
-// The ground is cut into 4 cm cells, each open or closed — wet, rock, snow, too steep, or under a
-// prop — and every cell then learns how far it is from the nearest closed one. That turns "is
+// The ground is cut into 4 cm cells, each open or closed — wet, rock, snow, too steep, under a
+// prop, or on a road — and every cell then learns how far it is from the nearest closed one. That turns "is
 // this whole strip clear" into "is the strip's centre line far enough from anything closed",
 // a few dozen lookups per candidate rather than a few hundred points tested against every prop,
 // which is what lets the search try thousands of candidates in a few milliseconds at the start of
@@ -26,7 +27,11 @@ struct BuildGrid {
     /// Rise over run past which a face is not flat enough for a runway to lie on.
     static let maxSlope: Float = 0.2
 
-    init(terrain: Terrain, props: [PropSpot], covering view: ConvexQuad) {
+    /// Room kept round a road's centre line, each sample's: the lane, the toy cars on it, and a
+    /// verge, so a runway never runs across a road nor lies with its edge on one.
+    static let roadRoom: Float = Roads.halfWidth + 0.02
+
+    init(terrain: Terrain, props: [PropSpot], roads: [Road], covering view: ConvexQuad) {
         cell = 0.04
         let (lo, hi) = view.bounds
         origin = lo
@@ -37,6 +42,10 @@ struct BuildGrid {
         // so whatever stands on the landscape keeps its ground.
         var occupied = SpacingGrid(cell: 0.1)
         for spot in props { occupied.insert(spot.position, radius: 0.055 * max(spot.scale, 0.5)) }
+        // A road's samples are 2.5 cm apart, well inside the room round each.
+        for road in roads {
+            for point in road.points { occupied.insert(point, radius: BuildGrid.roadRoom) }
+        }
         let forbidden = terrain.bands.indices.map { face -> Bool in
             switch terrain.bands[face] {
             case .water, .rock, .snow: return true
@@ -129,30 +138,34 @@ extension DogfightSim {
     /// The ground the airfields are planned over: what the camera sees at meadow height.
     private var buildGrid: BuildGrid {
         if let cached = buildGridCache, cached.aspect == rig.aspect { return cached.grid }
-        let grid = BuildGrid(terrain: terrain, props: props, covering: groundView)
+        let grid = BuildGrid(terrain: terrain, props: props, roads: roads, covering: groundView)
         buildGridCache = (rig.aspect, grid)
         return grid
     }
 
-    /// Plans this match's airfields and tells the ground where the hangars stand. Called once a
-    /// match is drawn, and again if the drawable changes shape under it.
+    /// Plans this match's airfields and tells the ground where the hangars stand. Called once,
+    /// for the first match, and again if the drawable changes shape under it; every later match
+    /// has its airfields planned as it is drawn (`drawNextMatch`).
     func planBases() {
-        match.bases = []
-        ground.structures = []
-        guard match.mode != .ffa, (2...4).contains(match.sides) else { return }
+        match.bases = plannedBases(for: match, wall: wall)
+        ground.structures = match.bases.compactMap { $0.map { ($0.hangar, $0.hangarRadius) } }
+    }
+
+    /// Where `match`'s airfields go, inside `wall`, the soft wall at its scale.
+    func plannedBases(for match: Match, wall: ConvexQuad) -> [Airfield?] {
+        guard match.mode != .ffa, (2...4).contains(match.sides) else { return [] }
         var grid = buildGrid
         var bases: [Airfield?] = []
         let edges = (0..<match.sides).map { side in match.slots.first { $0.side == side }?.homeEdge }
         for side in 0..<match.sides {
             guard let edge = edges[side] else { bases.append(nil); continue }
             let rivals = edges.enumerated().compactMap { $0.offset != side ? $0.element : nil }
-            let base = site(for: side, edge: edge, rivals: rivals, grid: grid)
+            let base = site(for: side, edge: edge, rivals: rivals, match: match, wall: wall, grid: grid)
             // Burned in with a gap, so the next side's airfield is not built against this one.
             if let base { grid.close(around: centreLine(of: base).map(\.point), radius: max(base.hangarWidth, base.runwayWidth) / 2 + 0.08) }
             bases.append(base)
         }
-        match.bases = bases
-        ground.structures = bases.compactMap { $0.map { ($0.hangar, $0.hangarRadius) } }
+        return bases
     }
 
     /// After the drawable changes shape: the match keeps its airfields unless one is now cut off
@@ -173,7 +186,8 @@ extension DogfightSim {
                                                   1.2, -1.2, 1.4, -1.4]
 
     /// The best spot and heading for `side`'s airfield near `edge`, or nil if there is none.
-    private func site(for side: Int, edge: Int, rivals: [Int], grid: BuildGrid) -> Airfield? {
+    private func site(for side: Int, edge: Int, rivals: [Int], match: Match, wall: ConvexQuad,
+                      grid: BuildGrid) -> Airfield? {
         let view = groundView
         let size = Airfield.dimensions(scale: match.tankScale)
         let span = { (e: Int) in max(view.distance(view.corners[(e + 2) % 4], edge: e), 1e-3) }
@@ -219,8 +233,8 @@ extension DogfightSim {
     }
 
     /// The highest ground under the airfield and how much it varies along it, or nil if any of
-    /// it is somewhere it may not be: wet, steep, under a prop, on another side's airfield, or
-    /// off the grid.
+    /// it is somewhere it may not be: wet, steep, under a prop, on a road, on another side's
+    /// airfield, or off the grid.
     private func check(_ base: Airfield, grid: BuildGrid) -> (top: Float, range: Float)? {
         var low = Float.greatestFiniteMagnitude, high = -Float.greatestFiniteMagnitude
         for (point, half) in centreLine(of: base) {

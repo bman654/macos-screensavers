@@ -31,8 +31,8 @@ final class Countryside {
         windmills = Layout.windmills(props: sim.props, terrain: sim.terrain, seed: sim.seed)
         replacedProps = Set(windmills.map(\.prop))
         moorings = Layout.moorings(props: sim.props, terrain: sim.terrain, seed: sim.seed)
-        roads = Roads.build(props: sim.props, terrain: sim.terrain, seed: sim.seed)
-        pasture = Pasture(terrain: sim.terrain, props: sim.props, seed: sim.seed)
+        roads = sim.roads
+        pasture = Pasture(terrain: sim.terrain, props: sim.props, seed: sim.seed, airfields: sim.airfieldsAhead)
         // `ORIGAMI_CRANES_AT`: seconds of sim time at which the first flock sets off — a harness
         // override, like every `ORIGAMI_*`, empty under `legacyScreenSaver`.
         let first = environment["ORIGAMI_CRANES_AT"].flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
@@ -71,7 +71,7 @@ final class Countryside {
         marks.forget(before: time)
         cranes.advance(to: time)
         let tanks = sim.tanks.map(\.position)
-        pasture.advance(to: time, tanks: tanks)
+        pasture.advance(to: time, tanks: tanks, airfields: sim.airfieldsAhead)
         traffic.advance(to: time, tanks: tanks)
     }
 }

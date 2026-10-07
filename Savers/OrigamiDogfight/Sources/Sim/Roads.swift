@@ -7,7 +7,11 @@
 // too steep are closed to it; so are the houses and rocks, which it passes rather than crosses.
 // Then smoothed, so it reads as a strip of paper laid down in curves rather than a staircase.
 //
-// Cosmetic like everything in this folder: a tank crosses a road as it crosses a field.
+// Built by the sim, not the countryside, for one reason: an airfield is laid down on clear ground,
+// and a road is not clear — a runway across a lane would have the little cars driving over it
+// (`AirfieldSites.swift`). Nothing else in the fight sees them: a tank crosses a road as it
+// crosses a field. A pure function of the seed's terrain and props, never of the season or the
+// match, so a seed's roads and its airfields are the same in every season.
 
 import Foundation
 import simd
@@ -53,7 +57,7 @@ enum Roads {
 
     static func build(props: [PropSpot], terrain: Terrain, seed: UInt64) -> [Road] {
         var rand = Rand(seed: seed ^ 0x40AD_5EED_17)
-        let hamlets = Layout.hamlets(props).filter { $0.count >= 2 }
+        let hamlets = Scatter.hamlets(props).filter { $0.count >= 2 }
         guard !hamlets.isEmpty else { return [] }
         let grid = CostGrid(terrain: terrain, props: props)
 

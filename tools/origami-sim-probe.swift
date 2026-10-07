@@ -27,7 +27,7 @@
 // stickers and aces (planes or tanks that reached the first milestone), airfields placed against
 // those asked for, take-offs begun and finished, and tanks that rolled out of a hangar. "badSite"
 // re-checks every placed airfield against the ground independently of the planner — wet, steep,
-// under a prop, overlapping another, or out of view — and must be zero.
+// under a prop, on a road, overlapping another, or out of view — and must be zero.
 
 import Foundation
 import simd
@@ -146,8 +146,8 @@ func hashEvent(_ hash: inout UInt64, _ event: SimEvent, step: Int) {
 }
 
 /// Every placed airfield checked against the ground directly, not through the planner's grid:
-/// the clear zone round hangar and runway dry, gentle and free of props, inside the view, and
-/// clear of every other airfield. The number of airfields that fail.
+/// the clear zone round hangar and runway dry, gentle and free of props and roads, inside the
+/// view, and clear of every other airfield. The number of airfields that fail.
 func badSites(_ sim: DogfightSim) -> Int {
     let bases = sim.match.bases.compactMap { $0 }
     var bad = 0
@@ -160,6 +160,8 @@ func badSites(_ sim: DogfightSim) -> Int {
             if band == .water || band == .rock || band == .snow || sim.terrain.slope(at: p) > BuildGrid.maxSlope + 0.02
                 || !view.contains(p) { ok = false }
             if sim.props.contains(where: { simd_distance($0.position, p) < 0.03 }) { ok = false }
+            // The lane itself, which a toy car fills: no runway may lie across it.
+            if sim.roads.contains(where: { $0.points.contains { simd_distance($0, p) < Roads.halfWidth } }) { ok = false }
             for (other, rival) in bases.enumerated() where other != index {
                 let s = rival.along(p)
                 let d = p - rival.hangar

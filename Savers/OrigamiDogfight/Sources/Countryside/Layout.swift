@@ -54,7 +54,7 @@ enum Layout {
 
         // A mill on the outskirts of most hamlets in view: the house furthest from its
         // neighbours. One out of view would be a mill nobody ever sees turn.
-        for hamlet in hamlets(props) where mills.count < 3 {
+        for hamlet in Scatter.hamlets(props) where mills.count < 3 {
             guard rand.next() < 0.7 else { continue }
             let centre = hamlet.map { props[$0].position }.reduce(.zero, +) / Float(hamlet.count)
             guard isShown(centre), let outskirt = hamlet.max(by: { simd_distance(props[$0].position, centre)
@@ -73,20 +73,6 @@ enum Layout {
             mills.append(mill(hillRocks[rand.index(count: hillRocks.count)]))
         }
         return mills
-    }
-
-    /// Houses grouped by nearness: a house within 0.6 m of a hamlet's first house is in it.
-    /// The scatter places hamlets well apart (`Scatter`), so this recovers exactly its groups.
-    static func hamlets(_ props: [PropSpot]) -> [[Int]] {
-        var groups: [[Int]] = []
-        for index in props.indices where props[index].kind == .house {
-            if let g = groups.firstIndex(where: { simd_distance(props[$0[0]].position, props[index].position) < 0.6 }) {
-                groups[g].append(index)
-            } else {
-                groups.append([index])
-            }
-        }
-        return groups
     }
 
     static func moorings(props: [PropSpot], terrain: Terrain, seed: UInt64) -> [Mooring] {

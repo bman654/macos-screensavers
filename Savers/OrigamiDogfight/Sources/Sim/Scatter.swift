@@ -110,6 +110,20 @@ enum Scatter {
         }
         return spots
     }
+
+    /// Houses grouped by nearness: a house within 0.6 m of a hamlet's first house is in it.
+    /// Hamlets are placed well apart above, so this recovers exactly their groups.
+    static func hamlets(_ props: [PropSpot]) -> [[Int]] {
+        var groups: [[Int]] = []
+        for index in props.indices where props[index].kind == .house {
+            if let g = groups.firstIndex(where: { simd_distance(props[$0[0]].position, props[index].position) < 0.6 }) {
+                groups[g].append(index)
+            } else {
+                groups.append([index])
+            }
+        }
+        return groups
+    }
 }
 
 /// A uniform hash grid for "is anything within r of here", which keeps four hundred trees'

@@ -4,8 +4,10 @@
 // of its own lengths to fresh grass. They never set foot on a lake, frozen or not, nor on a
 // cliff, a beach or a rock; never walk through a tree or a house; and keep a body's width from
 // one another, so a flock never folds into one white lump. A tank rolling through their field
-// sends them trotting out of its way, which is the one thing the fight does to them, and nothing
-// they do reaches the fight.
+// sends them trotting out of its way, and an airfield laid down across it moves them off its
+// runway and away from its hangar — the sim plans a match's airfields as the intermission before
+// it begins, so they have gone before the strip unrolls. Those are the only things the fight does
+// to them, and nothing they do reaches the fight.
 //
 // Fixed-step, like the sim and for the same reason, on a clock of its own: 30 steps a second, a
 // tenth of the sim's, since a sheep moves a few millimetres a second.
@@ -23,6 +25,9 @@ struct Sheep {
     var restUntil: Double
     let flock: Int
     let size: Float
+    /// Trotting off an airfield's ground: it may cross the strip to get off it, and nothing turns
+    /// it back until it has.
+    var clearing = false
 }
 
 struct Pasture {
@@ -34,6 +39,9 @@ struct Pasture {
     static let step: Double = 1.0 / 30
     /// A body length and a little, centre to centre.
     static let spacing: Float = 0.042
+    /// How far a sheep's centre keeps from an airfield's edge: half a body and a little, so no
+    /// part of it stands on the strip or against the hangar.
+    static let airfieldRoom: Float = 0.03
 
     private(set) var fields: [Field] = []
     private(set) var sheep: [Sheep] = []
@@ -43,7 +51,8 @@ struct Pasture {
     /// Every prop a sheep must walk round, by the room it takes.
     private let obstacles: SpacingGrid
 
-    init(terrain: Terrain, props: [PropSpot], seed: UInt64) {
+    /// `airfields` are the ones standing as the flocks are put out, which no sheep starts on.
+    init(terrain: Terrain, props: [PropSpot], seed: UInt64, airfields: [Airfield] = []) {
         self.terrain = terrain
         rand = Rand(seed: seed ^ 0x5EE9_FAB1_E5)
         var grid = SpacingGrid(cell: 0.1)
@@ -80,7 +89,8 @@ struct Pasture {
             for _ in 0..<60 where placed < count {
                 let a = rand.inRange(0, 2 * .pi), r = sqrt(rand.next()) * radius * 0.7
                 let p = centre + SIMD2(cos(a), sin(a)) * r
-                guard isGrass(p), isClear(p, ignoring: nil) else { continue }
+                guard isGrass(p), isClear(p, ignoring: nil),
+                      !Pasture.isOn(airfields, p, margin: Pasture.airfieldRoom) else { continue }
                 let heading = rand.inRange(-.pi, .pi)
                 sheep.append(Sheep(position: p, previous: p, heading: heading, previousHeading: heading,
                                    target: nil, restUntil: Double(rand.inRange(0, 6)), flock: fields.count - 1,
@@ -97,6 +107,28 @@ struct Pasture {
             && !obstacles.isOccupied(p, radius: 0.012)
     }
 
+    private static func isOn(_ airfields: [Airfield], _ p: SIMD2<Float>, margin: Float) -> Bool {
+        airfields.contains { $0.covers(p, margin: margin) }
+    }
+
+    /// The nearest grass off every airfield, by rings two centimetres apart out to forty, and on
+    /// the nearest ring the point most nearly ahead — a sheep turns as little as it can.
+    private func wayOff(_ airfields: [Airfield], from p: SIMD2<Float>, facing: Float) -> SIMD2<Float>? {
+        for ring in 1...20 {
+            let r = Float(ring) * 0.02
+            var best: (point: SIMD2<Float>, turn: Float)?
+            for k in 0..<24 {
+                let a = Float(k) * .pi / 12
+                let q = p + SIMD2(cos(a), sin(a)) * r
+                guard isGrass(q), !Pasture.isOn(airfields, q, margin: Pasture.airfieldRoom + 0.01) else { continue }
+                let turn = abs((a - facing).wrappedAngle)
+                if turn < best?.turn ?? .infinity { best = (q, turn) }
+            }
+            if let best { return best.point }
+        }
+        return nil
+    }
+
     private func isClear(_ p: SIMD2<Float>, ignoring index: Int?) -> Bool {
         sheep.indices.allSatisfy { j in
             j == index || simd_distance(sheep[j].position, p) > Pasture.spacing
@@ -104,22 +136,34 @@ struct Pasture {
         }
     }
 
-    /// Steps the flocks up to `time`. `tanks` are where any tank is now, for the sheep to keep
-    /// clear of. A long gap — a scene built late, or a stall — is skipped rather than walked.
-    mutating func advance(to time: Double, tanks: [SIMD2<Float>]) {
+    /// Steps the flocks up to `time`. `tanks` are where any tank is now, and `airfields` the
+    /// ones standing or about to (`DogfightSim.airfieldsAhead`), for the sheep to keep clear of.
+    /// A long gap — a scene built late, or a stall — is skipped rather than walked, except that a
+    /// sheep left on an airfield's ground is moved off it.
+    mutating func advance(to time: Double, tanks: [SIMD2<Float>], airfields: [Airfield] = []) {
         let due = Int(floor(time / Pasture.step)) - steps
         if due > 90 || due < 0 {
             steps = Int(floor(time / Pasture.step))
-            for i in sheep.indices { sheep[i].previous = sheep[i].position; sheep[i].previousHeading = sheep[i].heading }
+            for i in sheep.indices {
+                // Nobody saw the gap, so nobody sees it walk off: put it where it would have gone.
+                if Pasture.isOn(airfields, sheep[i].position, margin: Pasture.airfieldRoom),
+                   let off = wayOff(airfields, from: sheep[i].position, facing: sheep[i].heading) {
+                    sheep[i].position = off
+                    sheep[i].target = nil
+                    sheep[i].clearing = false
+                }
+                sheep[i].previous = sheep[i].position
+                sheep[i].previousHeading = sheep[i].heading
+            }
             return
         }
         for _ in 0..<due {
             steps += 1
-            stepOnce(now: Double(steps) * Pasture.step, tanks: tanks)
+            stepOnce(now: Double(steps) * Pasture.step, tanks: tanks, airfields: airfields)
         }
     }
 
-    private mutating func stepOnce(now: Double, tanks: [SIMD2<Float>]) {
+    private mutating func stepOnce(now: Double, tanks: [SIMD2<Float>], airfields: [Airfield]) {
         let dt = Float(Pasture.step)
         for i in sheep.indices {
             var s = sheep[i]
@@ -127,12 +171,25 @@ struct Pasture {
             s.previousHeading = s.heading
             let field = fields[s.flock]
 
+            // On an airfield's ground, or heading onto it: off by the shortest way, at a trot.
+            let onAirfield = Pasture.isOn(airfields, s.position, margin: Pasture.airfieldRoom)
+            if onAirfield, !s.clearing || s.target.map({ Pasture.isOn(airfields, $0, margin: Pasture.airfieldRoom) }) ?? true,
+               let off = wayOff(airfields, from: s.position, facing: s.heading) {
+                s.target = off
+                s.speed = 0.13
+                s.restUntil = now
+                s.clearing = true
+            } else if !s.clearing, let goal = s.target, Pasture.isOn(airfields, goal, margin: Pasture.airfieldRoom) {
+                s.target = nil
+                s.speed = 0
+            }
+
             // A tank close by: trot straight away from it, as far as the grass allows.
-            if let tank = tanks.min(by: { simd_distance($0, s.position) < simd_distance($1, s.position) }),
+            if !s.clearing, let tank = tanks.min(by: { simd_distance($0, s.position) < simd_distance($1, s.position) }),
                simd_distance(tank, s.position) < 0.3 {
                 let away = simd_normalize(s.position - tank + SIMD2(1e-4, 0))
                 let goal = s.position + away * 0.12
-                if isGrass(goal) {
+                if isGrass(goal), !Pasture.isOn(airfields, goal, margin: Pasture.airfieldRoom) {
                     s.target = goal
                     s.speed = 0.09
                     s.restUntil = now
@@ -148,7 +205,8 @@ struct Pasture {
                     if simd_distance(goal, field.centre) > field.radius {
                         goal = field.centre + simd_normalize(goal - field.centre) * field.radius * 0.8
                     }
-                    if isGrass(goal), isClear(goal, ignoring: i) {
+                    if isGrass(goal), isClear(goal, ignoring: i),
+                       !Pasture.isOn(airfields, goal, margin: Pasture.airfieldRoom) {
                         s.target = goal
                         s.speed = rand.inRange(0.018, 0.03)
                         break
@@ -164,40 +222,53 @@ struct Pasture {
                     s.target = nil
                     s.speed = 0
                     s.restUntil = now + Double(rand.inRange(4, 14))
+                    s.clearing = false
                 } else {
-                    // Turn toward it — a sheep walks where it faces — then step forward.
+                    // Turn toward it — a sheep walks where it faces — then step forward. A sheep
+                    // shooed off an airfield wheels round rather than ambling.
                     let want = atan2(to.y, to.x)
-                    let turn = max(min((want - s.heading).wrappedAngle, 2.2 * dt), -2.2 * dt)
+                    let rate: Float = s.clearing ? 6 : 2.2
+                    let turn = max(min((want - s.heading).wrappedAngle, rate * dt), -rate * dt)
                     s.heading = (s.heading + turn).wrappedAngle
                     let facing = SIMD2(cos(s.heading), sin(s.heading))
                     let pace = abs((want - s.heading).wrappedAngle) < 0.6 ? s.speed : s.speed * 0.25
                     let next = s.position + facing * min(pace * dt, distance)
-                    if isGrass(next), isClear(next, ignoring: i) || !isClear(s.position, ignoring: i) {
+                    // Clearing, it may cross the strip and brush past the flock to get off; the
+                    // spacing below sorts the flock out once it has.
+                    let allowed = s.clearing
+                        ? isGrass(next) || Pasture.isOn(airfields, next, margin: Pasture.airfieldRoom)
+                        : isGrass(next) && !Pasture.isOn(airfields, next, margin: Pasture.airfieldRoom)
+                            && (isClear(next, ignoring: i) || !isClear(s.position, ignoring: i))
+                    if allowed {
                         s.position = next
                     } else {
                         // Blocked: give up and graze where it stands.
                         s.target = nil
                         s.speed = 0
                         s.restUntil = now + Double(rand.inRange(1, 4))
+                        s.clearing = false
                     }
                 }
             }
             sheep[i] = s
         }
-        separate()
+        separate(airfields)
     }
 
     /// Two sheep closer than a body length step apart — half the overlap each, along the line
     /// between them — where the grass allows. Only a trot from a tank can bring that about.
-    private mutating func separate() {
+    private mutating func separate(_ airfields: [Airfield]) {
+        func allowed(_ p: SIMD2<Float>) -> Bool {
+            isGrass(p) && !Pasture.isOn(airfields, p, margin: Pasture.airfieldRoom)
+        }
         for i in sheep.indices {
             for j in (i + 1)..<sheep.count {
                 let d = sheep[j].position - sheep[i].position
                 let distance = simd_length(d)
                 guard distance < Pasture.spacing * 0.9 else { continue }
                 let push = (distance > 1e-5 ? d / distance : SIMD2(1, 0)) * (Pasture.spacing * 0.9 - distance) * 0.5
-                if isGrass(sheep[i].position - push) { sheep[i].position -= push }
-                if isGrass(sheep[j].position + push) { sheep[j].position += push }
+                if allowed(sheep[i].position - push) { sheep[i].position -= push }
+                if allowed(sheep[j].position + push) { sheep[j].position += push }
             }
         }
     }
