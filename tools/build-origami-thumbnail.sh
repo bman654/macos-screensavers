@@ -8,13 +8,13 @@
 # It is a *crop* of a full frame, which the Aquarium's tile is not, and that was decided by
 # looking at candidates at 108x71, the size the picker draws. The whole arena at that size is a
 # handsome paper map with the planes reduced to six-pixel specks — nothing in it says "dogfight".
-# Cropped to the fight, a three-team match: two blue darts pass a red bomber over the meadow, a
-# red glider and a violet one cross below, two wrecks burn, and three paper tanks — a red heavy,
-# a red light and a violet — hold the ground, all of it inside the central 88% the picker keeps.
+# Cropped to the fight, a three-team match: yellow, red and violet planes cross over the meadow,
+# two wrecks burn, and four paper tanks — a red heavy, a red light, a yellow and a violet — hold
+# the ground, all of it inside the central 88% the picker keeps.
 # A crop changes nothing about how the saver draws: same camera, same light, same fight. The
-# moment was found by scanning a hundred and sixty seeds in the headless sim for a crop holding
+# moment was found by scanning two hundred and forty seeds in the headless sim for a crop holding
 # a tank, planes of two sides or more and a fresh fire, then judged by eye at tile size among
-# the six best.
+# the four best.
 #
 # The scoreboard is off for the tile: at 108x71 the card is a pale smudge in a corner, and the
 # tile has room for one idea, which is the fight.
@@ -30,12 +30,12 @@ OUT="$ROOT/Savers/OrigamiDogfight/Thumbnail"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/origami-thumbnail.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-SEED=6
+SEED=149
 TEAMS=teams
 TIER=some
 TANKS=always
 # A whole number of 1/120 s steps, nudged past the boundary so rounding cannot drop one.
-WARMUP=117.5087
+WARMUP=87.7504
 
 # The frame is drawn at 4320x2840, the tile's aspect, and the crop taken from it is still
 # larger than the 1080x710 tile, so the tile is a downsample rather than an enlargement.
