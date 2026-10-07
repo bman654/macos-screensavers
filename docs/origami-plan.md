@@ -30,6 +30,44 @@ Where v1 departed from the decisions below, and why:
   planes as specks. Any change to the simulation moves the fight, so the tile's frame has to be
   re-chosen after one (`tools/build-origami-thumbnail.sh`).
 
+## v3: more life (2026-10-07)
+
+Brandon picked from a list of ideas and asked for all of them, in whatever order works. His own
+words decided several details; the rest are calls made for him (*call*).
+
+**Atmosphere**
+- **Seasons**, one per session: summer (today's look), autumn (orange and red trees, golden
+  fields) and winter (white paper ground, snow on roofs, frozen lakes). *Call:* a frozen lake is
+  ground for everything — ammunition lies on the ice, a wreck burns on it, a tank may cross it,
+  and the boats are frozen in place.
+- **Time of day**, one per session — morning, midday or evening — drifting slowly toward evening
+  over a long session; house windows light up in the evening.
+- *Call:* both are settings (surprise me by default), alongside the existing four.
+
+**The fight**
+- **Aces earn stickers** on their wings at kill milestones — "a range of stickers: gold stars,
+  silver stars, smiley faces" — and the scoreboard shows them.
+- **Damage shows on the paper**: smudges and scorch marks that deepen as a plane's or tank's
+  health drops. Torn edges and crumpled noses would be better still but are much more work;
+  smudges and scorches suffice for now.
+- **Mid-air collisions**: two planes that touch both crumple and fall. *Call:* rare — about one
+  every few minutes at most — so the AI does not look clumsy.
+- **Scorch marks on the ground** where things died, fading when a new match begins.
+- **Fire spreads** to a nearby tree now and then; a burnt tree stays charred until the next match,
+  then folds back to green.
+- **Supply drops**: a paper crate drifts down on a tissue-paper parachute; the first plane through
+  it gets a better weapon for a while (*call:* triple shot or rapid fire, about 15 s); one that
+  lands just fades.
+
+**Around the fight**
+- **A flock of paper cranes** crosses now and then, ignoring the fight.
+- **A livelier landscape**: windmills turning, sheep wandering in the fields, boats bobbing and
+  drifting; paper roads between villages with little cars on them if it fits.
+- **Team bases**, only in team matches with two to four teams — "more than that and we'd need to
+  fall back to the current mechanism or else the landscape would be all airfields". Each team gets
+  an airfield (a runway and a hangar) on clear, flat ground on its side of the view; replacement
+  planes take off from it and tanks roll out of it. Free-for-all uses today's edge entry.
+
 ## v2: after the first look (2026-10-07)
 
 Brandon watched v1 and liked the overall design, the terrain and the lake banks. What he asked
