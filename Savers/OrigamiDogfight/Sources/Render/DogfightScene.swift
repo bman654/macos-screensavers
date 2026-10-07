@@ -25,6 +25,8 @@ final class DogfightScene {
     private let armour: TankField
     private let shots: ProjectileField
     private let wrecks: WreckField
+    private let supplies: SupplyField
+    private let airfields: AirfieldField
     private let scoreboard: Scoreboard?
     private let keyLight = SCNLight()
 
@@ -53,24 +55,28 @@ final class DogfightScene {
         let shelf = ModelShelf(library: library)
         let papers = PaperMaterials(seed: sim.seed)
         fleet = PlaneFleet(shelf: shelf, papers: papers, effects: effects)
-        armour = TankField(shelf: shelf, papers: papers)
+        armour = TankField(shelf: shelf, papers: papers, stickers: fleet.stickers)
         shots = ProjectileField(shelf: shelf)
         wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour)
+        supplies = SupplyField(shelf: shelf)
+        airfields = AirfieldField(shelf: shelf, papers: papers)
         // The lineup is for looking at models; a card in the corner would only be in the way.
         scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
 
         scene.background.contents = NSColor(srgbRed: 0.86, green: 0.84, blue: 0.78, alpha: 1)
         scene.rootNode.addChildNode(TerrainMesh.node(for: sim.terrain, seed: sim.seed))
         scene.rootNode.addChildNode(Scenery.node(spots: sim.props, shelf: shelf))
-        for root in [wrecks.root, armour.root, shots.root, fleet.root, effects.root] { scene.rootNode.addChildNode(root) }
+        for root in [airfields.root, wrecks.root, armour.root, shots.root, fleet.root, supplies.root, effects.root] {
+            scene.rootNode.addChildNode(root)
+        }
         buildLights(quality: quality)
         buildCamera()
         if let scoreboard { cameraNode.addChildNode(scoreboard.node) }
         // Which fight this scene was handed, and how far into it — the only way to see that an
         // idle release or a quality change resumed the fight rather than starting a new one.
         if LifecycleLog.isEnabled {
-            LifecycleLog.emit(String(format: "origami scene built seed=%llu simTime=%.2fs quality=%@",
-                                     sim.seed, sim.time, quality == .full ? "full" : "reduced"))
+            LifecycleLog.emit(String(format: "origami scene built seed=%llu simTime=%.2fs quality=%@ aspect=%.4f",
+                                     sim.seed, sim.time, quality == .full ? "full" : "reduced", sim.rig.aspect))
         }
         if sim.isLineup {
             // The lineup is for checking models, so say which ones are really the library's.
@@ -103,6 +109,9 @@ final class DogfightScene {
     func update(_ frame: FrameContext) {
         let aspect = Float(frame.drawableSize.width / max(frame.drawableSize.height, 1))
         if abs(aspect - sim.rig.aspect) > 1e-4 {
+            if LifecycleLog.isEnabled {
+                LifecycleLog.emit(String(format: "origami aspect %.4f -> %.4f at simTime=%.2fs", sim.rig.aspect, aspect, sim.time))
+            }
             sim.setAspect(aspect)
             placeCamera()
         }
@@ -127,6 +136,8 @@ final class DogfightScene {
         armour.sync(sim, alpha: alpha)
         shots.sync(sim, alpha: alpha)
         wrecks.sync(sim, time: frame.time)
+        supplies.sync(sim, alpha: alpha, time: frame.time)
+        airfields.sync(sim, now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
         scoreboard?.update(sim, drawableSize: frame.drawableSize,
                            now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
     }
@@ -157,7 +168,18 @@ final class DogfightScene {
             effects.crash(at: position.scene(altitude: ground + 0.03 * scale), color: PaperPalette.base(paper), scale: scale)
         case .splashed(let position, let kind, let scale):
             effects.shotSplash(at: position.scene(altitude: Terrain.waterLevel), size: kind.spec(scale: scale).size)
-        case .matchStarted, .matchEnded, .spawned, .fired, .exited, .tankSpawned, .tankFired, .tankLeft:
+        case .collided(_, _, let position, let altitude, let papers, let scale):
+            effects.collision(at: position.scene(altitude: altitude), colors: papers.map(PaperPalette.base), scale: scale)
+        case .dropGrabbed(_, _, _, let position, let altitude):
+            effects.cratePop(at: position.scene(altitude: altitude + SupplyDrop.canopyHeight * 0.4))
+        case .stickered(let vehicle, _, _):
+            if let plane = sim.plane(id: vehicle) {
+                effects.sparkle(at: plane.position.scene(altitude: plane.altitude), scale: plane.spec.scale)
+            } else if let tank = sim.tank(id: vehicle) {
+                effects.sparkle(at: tank.position.scene(altitude: tank.altitude + tank.spec.height), scale: tank.spec.scale)
+            }
+        case .matchStarted, .matchEnded, .spawned, .fired, .exited, .tankSpawned, .tankFired, .tankLeft,
+             .dropSpawned, .dropLanded, .tookOff:
             break
         }
     }

@@ -52,7 +52,10 @@ struct ModelTemplate {
 }
 
 enum ModelAxis { case length, height, longest, footprint }
-enum ModelAnchor { case center, base }
+/// Where a template's origin sits: the centre of its bounds, the middle of its base, or where the
+/// model itself put it — the parachute's is the knot its strings meet at, which is what ties it
+/// to a crate.
+enum ModelAnchor { case center, base, origin }
 
 final class OrigamiLibrary {
     struct Entry {
@@ -150,8 +153,11 @@ final class OrigamiLibrary {
             return nil
         }
         let center = (lo + hi) / 2
-        let anchorPoint = anchor == .center ? center : SIMD3(center.x, lo.y, center.z)
-        pivot.simdPosition = -anchorPoint
+        switch anchor {
+        case .center: pivot.simdPosition = -center
+        case .base: pivot.simdPosition = -SIMD3(center.x, lo.y, center.z)
+        case .origin: break
+        }
         let template = ModelTemplate(node: holder, extent: hi - lo,
                                      sheetAspect: entry.sheetAspect ?? StandIns.letterAspect,
                                      isStandIn: false)

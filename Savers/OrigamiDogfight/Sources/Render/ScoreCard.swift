@@ -18,6 +18,8 @@ struct ScoreCardContent: Equatable {
     struct Entry: Equatable {
         let paper: Paper
         let count: Int
+        /// Every sticker the side's aces have earned this match, in order.
+        var stickers: [Sticker] = []
     }
 
     enum Body: Equatable {
@@ -111,7 +113,10 @@ enum ScoreCard {
             for (row, entry) in entries.enumerated() {
                 let mid = top + teamRow * (CGFloat(row) + 0.5) + 2
                 swatch(ctx, entry.paper, CGRect(x: left, y: mid - 8, width: 16, height: 16), k: k)
-                tally(ctx, entry.count, from: left + 26, to: right - 30, mid: mid)
+                // The side's stickers stuck on beside its swatch, overlapping like a child's
+                // sheet of them; the tally makes room.
+                let shown = stickers(ctx, entry.stickers, from: left + 21, mid: mid, size: 15, step: 10, limit: 6)
+                tally(ctx, entry.count, from: left + 26 + shown, to: right - 30, mid: mid)
                 text(ctx, "\(entry.count)", at: CGPoint(x: right, y: mid + 6), size: 16, colour: ink, alignRight: true)
                 if leader == row { ring(ctx, around: CGPoint(x: right - 7, y: mid), width: 26) }
             }
@@ -122,6 +127,12 @@ enum ScoreCard {
                 let x = left + cell * CGFloat(index % gridColumns)
                 let mid = top + gridRow * (CGFloat(index / gridColumns) + 0.5) + 2
                 swatch(ctx, entry.paper, CGRect(x: x, y: mid - 7, width: 14, height: 14), k: k)
+                // An ace's stickers on its swatch's corner: the latest on top.
+                for (index, sticker) in entry.stickers.suffix(2).enumerated() {
+                    let size: CGFloat = 10
+                    StickerArt.draw(sticker, in: ctx, rect: CGRect(x: x + 7 + CGFloat(index) * 4, y: mid - 12 + CGFloat(index) * 2,
+                                                                   width: size, height: size), up: -1)
+                }
                 text(ctx, "\(entry.count)", at: CGPoint(x: x + 19, y: mid + 6), size: 15, colour: ink)
                 // Narrow, so the loop takes in the count and not the swatch beside it.
                 let digits = CGFloat("\(entry.count)".count)
@@ -133,6 +144,10 @@ enum ScoreCard {
                 swatch(ctx, winner.paper, CGRect(x: left, y: mid - 13, width: 26, height: 26), k: k)
                 let name = teams ? "\(PaperPalette.name(winner.paper)) wins!" : "wins!"
                 text(ctx, name, at: CGPoint(x: left + 36, y: mid + 8), size: 20, colour: ink)
+                // The winner's stickers in the card's corner, the way a teacher signs off work.
+                let count = CGFloat(min(winner.stickers.count, 4))
+                _ = stickers(ctx, winner.stickers, from: right - 16 - max(count - 1, 0) * 9, mid: mid - 2, size: 17,
+                             step: 9, limit: 4)
             } else {
                 // A draw: every side on the top score, side by side.
                 for (index, winner) in winners.prefix(6).enumerated() {
@@ -142,6 +157,24 @@ enum ScoreCard {
             }
         }
         return ctx.makeImage()
+    }
+
+    /// Up to `limit` stickers in a row from `x`, centred on `mid`; the width they took, or 0.
+    @discardableResult
+    private static func stickers(_ ctx: CGContext, _ stickers: [Sticker], from x: CGFloat, mid: CGFloat, size: CGFloat,
+                                 step: CGFloat, limit: Int) -> CGFloat {
+        let shown = Array(stickers.suffix(limit))
+        guard !shown.isEmpty else { return 0 }
+        for (index, sticker) in shown.enumerated() {
+            // Each a touch crooked, as stuck on by hand.
+            ctx.saveGState()
+            let c = CGPoint(x: x + CGFloat(index) * step + size / 2, y: mid)
+            ctx.translateBy(x: c.x, y: c.y)
+            ctx.rotate(by: CGFloat((index * 5 + sticker.rawValue * 3) % 7) * 0.05 - 0.15)
+            StickerArt.draw(sticker, in: ctx, rect: CGRect(x: -size / 2, y: -size / 2, width: size, height: size), up: -1)
+            ctx.restoreGState()
+        }
+        return CGFloat(shown.count - 1) * step + size
     }
 
     private static func soleLeader(_ entries: [ScoreCardContent.Entry]) -> Int? {

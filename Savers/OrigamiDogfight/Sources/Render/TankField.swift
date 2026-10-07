@@ -21,17 +21,26 @@ final class TankField {
     private final class Visual {
         let model: Model
         let size: Float
-        init(model: Model, size: Float) {
+        let stickerHolder: SCNNode
+        /// The paper it is wearing now, clean or marked — what a change of damage replaces.
+        var skin: SCNMaterial
+        var damage = 0
+        var stickerCount = 0
+        init(model: Model, size: Float, stickerHolder: SCNNode, skin: SCNMaterial) {
             self.model = model
             self.size = size
+            self.stickerHolder = stickerHolder
+            self.skin = skin
         }
     }
 
     private var visuals: [Int: Visual] = [:]
+    private let stickers: StickerMaterials
 
-    init(shelf: ModelShelf, papers: PaperMaterials) {
+    init(shelf: ModelShelf, papers: PaperMaterials, stickers: StickerMaterials) {
         self.shelf = shelf
         self.papers = papers
+        self.stickers = stickers
     }
 
     /// A tank of `type` folded from `paper`, its footprint `size` metres. `material` replaces the
@@ -52,6 +61,34 @@ final class TankField {
         return Model(node: instance, turret: turret, rest: turret?.simdOrientation ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
     }
 
+    /// Swaps the paper `model` is wearing, `old`, for `new` — a damaged sheet — and nothing else:
+    /// treads keep their authored material and stickers theirs.
+    static func reskin(_ model: Model, from old: SCNMaterial, to new: SCNMaterial) {
+        model.node.enumerateHierarchy { node, _ in
+            guard let geometry = node.geometry, geometry.materials.contains(where: { $0 === old }) else { return }
+            geometry.materials = geometry.materials.map { $0 === old ? new : $0 }
+        }
+    }
+
+    private func wear(_ visual: Visual, _ tank: Tank) {
+        let stage = tank.damageStage
+        if stage != visual.damage {
+            let template = shelf.tank(tank.type)
+            let skin = papers.material(for: tank.paper, aspect: CGFloat(template.sheetAspect), damage: stage)
+            TankField.reskin(visual.model, from: visual.skin, to: skin)
+            visual.skin = skin
+            visual.damage = stage
+        }
+        let earned = tank.stickers
+        if earned.count > visual.stickerCount {
+            let spots = shelf.stickerSpots(tank: tank.type)
+            for index in visual.stickerCount..<earned.count where index < spots.count {
+                visual.stickerHolder.addChildNode(StickerSpots.decal(earned[index], at: spots[index], materials: stickers))
+            }
+            visual.stickerCount = earned.count
+        }
+    }
+
     /// Turns the turret `angle` radians to the tank's left — counter-clockwise from above, the
     /// sim's sense. The models turn about their own z, which the import's pivot makes world up.
     static func aim(_ model: Model, at angle: Float) {
@@ -66,6 +103,7 @@ final class TankField {
             let visual = visuals[tank.id] ?? make(tank)
             visuals[tank.id] = visual
             pose(visual, tank, alpha: alpha, terrain: sim.terrain, now: now)
+            wear(visual, tank)
         }
         for (id, visual) in visuals where !seen.contains(id) {
             visual.model.node.removeFromParentNode()
@@ -76,7 +114,12 @@ final class TankField {
     private func make(_ tank: Tank) -> Visual {
         let model = model(type: tank.type, paper: tank.paper, size: tank.spec.size)
         root.addChildNode(model.node)
-        return Visual(model: model, size: tank.spec.size)
+        let template = shelf.tank(tank.type)
+        let holder = SCNNode()
+        holder.simdScale = SIMD3(repeating: tank.spec.size / max(template.extent.x, template.extent.z, 1e-5))
+        model.node.addChildNode(holder)
+        let skin = papers.material(for: tank.paper, aspect: CGFloat(template.sheetAspect))
+        return Visual(model: model, size: tank.spec.size, stickerHolder: holder, skin: skin)
     }
 
     private func pose(_ visual: Visual, _ tank: Tank, alpha: Float, terrain: Terrain, now: Double) {

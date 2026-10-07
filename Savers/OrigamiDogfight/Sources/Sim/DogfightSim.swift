@@ -22,7 +22,8 @@ final class DogfightSim {
     /// Everything standing on the landscape. Placed here rather than by the renderer because
     /// tanks have to drive round it.
     let props: [PropSpot]
-    let ground: Ground
+    /// Where a tank may drive — the landscape, and this match's hangars (`Airfield.swift`).
+    var ground: Ground
     let config: SimConfig
     private(set) var rig: ViewRig
     /// The soft wall: the view at the top of the band, inset by the match's scale.
@@ -38,6 +39,7 @@ final class DogfightSim {
     var tanks: [Tank] = []
     var projectiles: [Projectile] = []
     var wrecks: [Wreck] = []
+    var drops: [SupplyDrop] = []
     var match: Match
     private(set) var matchesCompleted = 0
 
@@ -51,7 +53,15 @@ final class DogfightSim {
     /// Every decision a pilot makes, and the scatter of every shot. A stream of its own so that
     /// a change to the AI does not reshuffle which modes and papers a seed draws.
     var combat: Rand
+    /// When and where supply drops fall, and what is in them — a stream of its own for the same
+    /// reason (`SupplyDrop.swift`).
+    var supply: Rand
+    var nextDropAt: Double = 0
+    var nextDropKind: PowerUpKind = .tripleShot
     private var nextID = 1
+
+    /// The ground the airfields may use, for the drawable shape it was built for.
+    var buildGridCache: (aspect: Float, grid: BuildGrid)?
 
     /// The roads open to each type of tank at this match's scale, built when first asked for.
     var navGrids: [TankType: NavGrid] = [:]
@@ -68,8 +78,11 @@ final class DogfightSim {
         rig = ViewRig(aspect: aspect)
         rand = Rand(seed: seed ^ 0x3A7C_0FF1_CE5E_ED)
         combat = Rand(seed: seed ^ 0xC0B4_7D06_F16E)
+        supply = Rand(seed: seed ^ 0x5A1D_C0A7_E5)
         match = Match.draw(index: 0, now: 0, config: config, rand: &rand)
         (wall, tankRegion) = DogfightSim.arena(rig, scale: match.scale)
+        planBases()
+        scheduleFirstDrop(now: 0)
         emit(.matchStarted(index: 0, mode: match.mode, planes: match.slots.count))
     }
 
@@ -84,6 +97,8 @@ final class DogfightSim {
         guard abs(aspect - rig.aspect) > 1e-4 else { return }
         rig = ViewRig(aspect: aspect)
         (wall, tankRegion) = DogfightSim.arena(rig, scale: match.scale)
+        // The airfields were placed inside the old view; a new shape may have cut one off.
+        replanBasesIfCutOff()
         navGrids.removeAll()
     }
 
@@ -135,12 +150,18 @@ final class DogfightSim {
         // planes are stored in cannot favour anyone.
         let snapshot = planes
         for i in planes.indices {
+            if planes[i].state.isTakingOff {
+                stepTakeOff(i, now: now, dt: dt)
+                continue
+            }
             let command = command(for: i, among: snapshot, now: now)
             fly(i, command: command, dt: dt)
             fireWeapon(i, among: snapshot, now: now, dt: dt)
         }
         stepTanks(among: snapshot, now: now, dt: dt)
         stepProjectiles(now: now, dt: dt)
+        checkCollisions(now: now)
+        stepSupplyDrops(now: now, dt: dt)
         retirePlanes(now: now)
         retireTanks(now: now)
         wrecks.removeAll { now - $0.crashedAt > $0.lifetime }
@@ -211,6 +232,7 @@ final class DogfightSim {
         case .won(_, let until):
             guard now >= until else { return }
             match.phase = .ending
+            match.endingSince = now
             for i in planes.indices where !planes[i].state.isDowned {
                 planes[i].state = .exiting(direction: exitDirection(for: planes[i]))
                 planes[i].stateSince = now
@@ -228,6 +250,8 @@ final class DogfightSim {
             match = Match.draw(index: match.index + 1, now: now, config: config, rand: &rand)
             (wall, tankRegion) = DogfightSim.arena(rig, scale: match.scale)
             navGrids.removeAll()
+            planBases()
+            scheduleFirstDrop(now: now)
             for i in tanks.indices where !tanks[i].isActive {
                 if case .leaving = tanks[i].state {
                     tanks[i].state = .folding(since: now)
@@ -257,9 +281,20 @@ final class DogfightSim {
         guard match.phase == .fighting else { return }
         for s in match.slots.indices {
             guard match.slots[s].plane == nil, let at = match.slots[s].spawnAt, now >= at else { continue }
-            let plane = spawn(slot: s, now: now)
+            let plane: Plane
+            if match.slots[s].launched, let base = base(for: match.slots[s].side) {
+                // A replacement takes off from its side's airfield, waiting its turn on the runway.
+                guard isRunwayClear(base, now: now) else {
+                    match.slots[s].spawnAt = now + 0.5
+                    continue
+                }
+                plane = launch(slot: s, from: base, now: now)
+            } else {
+                plane = spawn(slot: s, now: now)
+            }
             match.slots[s].plane = plane.id
             match.slots[s].spawnAt = nil
+            match.slots[s].launched = true
             planes.append(plane)
             emit(.spawned(plane: plane.id))
         }
@@ -301,10 +336,11 @@ final class DogfightSim {
                 let ground = terrain.surfaceHeight(at: p.position)
                 if p.altitude <= ground + 0.015 {
                     let inWater = terrain.isWater(at: p.position)
-                    let wreck = Wreck(id: makeID(), model: .plane(p.type), paper: p.paper, scale: p.spec.scale,
+                    var wreck = Wreck(id: makeID(), model: .plane(p.type), paper: p.paper, scale: p.spec.scale,
                                       position: p.position, ground: ground, heading: p.pose.heading,
                                       roll: max(min(p.pose.bank, 0.6), -0.6) * 0.5,
                                       crashedAt: now, inWater: inWater)
+                    wreck.crumpled = p.crumpled
                     wrecks.append(wreck)
                     emit(.crashed(wreck: wreck.id, position: p.position, ground: ground,
                                   inWater: inWater, paper: p.paper, scale: p.spec.scale))
@@ -321,7 +357,7 @@ final class DogfightSim {
                     emit(.exited(plane: p.id))
                     gone = true
                 }
-            case .entering, .fighting:
+            case .entering, .fighting, .takingOff:
                 break
             }
             if gone {
@@ -351,6 +387,7 @@ final class DogfightSim {
         planes[index].pilot.strafe = nil
         emit(.downed(victim: planes[index].id, by: shooter))
         credit(side: side, now: now)
+        awardKill(to: shooter, now: now)
     }
 
     /// A kill for `side`, if the match is still being fought — a shot still in the air when the

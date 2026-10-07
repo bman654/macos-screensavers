@@ -9,6 +9,7 @@ final class ModelShelf {
     let library: OrigamiLibrary
     private var cache: [String: ModelTemplate] = [:]
     private var propCache: [PropKind: [ModelTemplate]] = [:]
+    private var spotCache: [String: [StickerSpot]] = [:]
 
     init(library: OrigamiLibrary) { self.library = library }
 
@@ -29,6 +30,38 @@ final class ModelShelf {
         cached("tank-\(type.modelName)") {
             library.template(named: type.modelName, anchor: .base) ?? StandIns.tank(type)
         }
+    }
+
+    /// The supply drop's crate, standing on its base, and its parachute, whose origin is the knot
+    /// the strings meet at — tied to the top of the crate.
+    func crate() -> ModelTemplate {
+        cached("crate") { library.template(named: "supply_crate", anchor: .base) ?? StandIns.crate() }
+    }
+
+    func parachute() -> ModelTemplate {
+        cached("parachute") { library.template(named: "parachute", anchor: .origin) ?? StandIns.parachute() }
+    }
+
+    /// An airfield's hangar, opening toward +X, its team stripe in material `paper`.
+    func hangar() -> ModelTemplate {
+        cached("hangar") { library.template(named: "hangar", anchor: .base) ?? StandIns.hangar() }
+    }
+
+    /// Where a plane's or tank's stickers go, in its template's space (`StickerSpots`). Found once
+    /// per model, from its own geometry; a tank's turret turns, so it is not somewhere to stick one.
+    func stickerSpots(plane type: PlaneType) -> [StickerSpot] {
+        spots("plane-\(type.modelName)") { StickerSpots.spots(on: plane(type)) }
+    }
+
+    func stickerSpots(tank type: TankType) -> [StickerSpot] {
+        spots("tank-\(type.modelName)") { StickerSpots.spots(on: tank(type), exclude: ["turret"]) }
+    }
+
+    private func spots(_ key: String, _ find: () -> [StickerSpot]) -> [StickerSpot] {
+        if let hit = spotCache[key] { return hit }
+        let found = find()
+        spotCache[key] = found
+        return found
     }
 
     func fire() -> ModelTemplate {

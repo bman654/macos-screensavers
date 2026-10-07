@@ -21,7 +21,17 @@ extension DogfightSim {
         guard match.phase == .fighting else { return }
         for s in match.tankSlots.indices {
             guard match.tankSlots[s].tank == nil, let at = match.tankSlots[s].spawnAt, now >= at else { continue }
-            if let tank = spawnTank(slot: s, now: now) {
+            // A side with an airfield rolls its tanks out of the hangar, waiting for the door; one
+            // whose hangar has no road out comes on from the edge like everyone else.
+            var hangar: Tank?
+            if let base = base(for: match.tankSlots[s].side) {
+                guard isRunwayClear(base, now: now) else {
+                    match.tankSlots[s].spawnAt = now + 0.7
+                    continue
+                }
+                hangar = rollOut(slot: s, from: base, now: now)
+            }
+            if let tank = hangar ?? spawnTank(slot: s, now: now) {
                 match.tankSlots[s].tank = tank.id
                 match.tankSlots[s].spawnAt = nil
                 tanks.append(tank)
@@ -283,7 +293,7 @@ extension DogfightSim {
             let now = simd_distance(other.position, tank.position), then = simd_distance(other.position, next)
             return then < room && then < now
         }
-        guard !crowded, ground.isDriveable(next, footprint: tank.spec.footprint) else {
+        guard !crowded, ground.isDriveable(next, footprint: tank.spec.footprint, leaving: tank.position) else {
             tank.speed = 0
             // Still swinging onto the leg: the leg itself may be clear. Blocked only when
             // squarely facing it.
@@ -298,7 +308,11 @@ extension DogfightSim {
         tank.speed = max(tank.speed - 0.5 * tank.spec.scale * dt, 0)
         if tank.speed > 0 {
             let next = tank.position + tank.direction * tank.speed * dt
-            if ground.isDriveable(next, footprint: tank.spec.footprint) { tank.position = next } else { tank.speed = 0 }
+            if ground.isDriveable(next, footprint: tank.spec.footprint, leaving: tank.position) {
+                tank.position = next
+            } else {
+                tank.speed = 0
+            }
         }
     }
 
@@ -314,7 +328,7 @@ extension DogfightSim {
         switch plane.state {
         case .fighting: return true
         case .entering: return rig.visible(atAltitude: plane.altitude).contains(plane.position)
-        case .exiting, .downed: return false
+        case .exiting, .downed, .takingOff: return false
         }
     }
 
@@ -387,6 +401,7 @@ extension DogfightSim {
         emit(.tankDestroyed(tank: tank.id, by: shooter, wreck: wreck.id, position: tank.position,
                             ground: tank.altitude, paper: tank.paper, scale: tank.spec.scale))
         credit(side: side, now: now)
+        awardKill(to: shooter, now: now)
         if let s = match.tankSlots.firstIndex(where: { $0.tank == tank.id }) {
             match.tankSlots[s].tank = nil
             // Longer than a plane's: a burning tank should have the ground to itself a while.

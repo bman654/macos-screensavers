@@ -43,6 +43,9 @@ extension DogfightSim {
                            speed: me.spec.cruiseSpeed, altitude: me.pilot.cruiseAltitude)
         case .fighting:
             return fightingCommand(for: i, among: others, now: now)
+        case .takingOff:
+            // Flown by `stepTakeOff`, never by a command.
+            return Command(turn: 0, speed: me.speed, altitude: me.altitude)
         }
     }
 
@@ -52,7 +55,7 @@ extension DogfightSim {
         switch other.state {
         case .fighting: return true
         case .entering: return rig.visible(atAltitude: other.altitude).contains(other.position)
-        case .exiting, .downed: return false
+        case .exiting, .downed, .takingOff: return false
         }
     }
 
@@ -87,7 +90,7 @@ extension DogfightSim {
         // Threat: an enemy behind me, close, with its nose on me.
         var threat: Plane?
         var threatDistance: Float = 1.3 * k
-        for other in others where other.side != me.side && !other.state.isDowned {
+        for other in others where other.side != me.side && !other.state.isDowned && other.state.isAloft {
             let offset = other.position - me.position
             let distance = simd_length(offset)
             guard distance < threatDistance, distance > 1e-3 else { continue }
@@ -177,7 +180,11 @@ extension DogfightSim {
                 desired = SIMD2(cos(h), sin(h))
                 speed = spec.maxSpeed
             case .pursue:
-                if let target {
+                if threat == nil, let grab = supplySteering(for: me, among: others, target: target, now: now) {
+                    // A crate coming down within reach: go and take it.
+                    desired = grab.desired
+                    altitude = pilot.jinkAltitude ?? grab.altitude
+                } else if let target {
                     let weapon = me.gun
                     let offset = target.position - me.position
                     let distance = simd_length(offset)
@@ -205,7 +212,7 @@ extension DogfightSim {
 
         // Separation: clear of teammates, and never through anyone at the same height.
         var push = SIMD2<Float>(0, 0)
-        for other in others where other.id != me.id && !other.state.isDowned {
+        for other in others where other.id != me.id && !other.state.isDowned && other.state.isAloft {
             let offset = me.position - other.position
             let distance = simd_length(offset)
             guard distance > 1e-4 else { continue }
@@ -218,6 +225,16 @@ extension DogfightSim {
             }
         }
         if simd_length(push) > 0 { desired = unit(desired + push * 1.5, or: heading) }
+        // And never into anyone: a path about to cross another's at its height is broken off.
+        switch run == nil ? avoidance(for: me, among: others) : nil {
+        case .holdBack(let slower)?:
+            speed = min(speed, slower)
+        case .breakAway(let away, let height)?:
+            desired = unit(desired + away * 1.2, or: away)
+            altitude = height
+        case nil:
+            break
+        }
 
         // The wall has the last word.
         let (urgency, inward) = wallPull(for: me)
@@ -256,7 +273,7 @@ extension DogfightSim {
     func openSkyHeading(for me: Plane, among others: [Plane]) -> Float {
         let k = me.spec.scale
         var away = SIMD2<Float>(0, 0)
-        for other in others where other.id != me.id && !other.state.isDowned {
+        for other in others where other.id != me.id && !other.state.isDowned && other.state.isAloft {
             let offset = me.position - other.position
             let distance = max(simd_length(offset), 0.05 * k)
             if distance < 1.5 * k { away += offset / distance * (1.5 * k - distance) / k }

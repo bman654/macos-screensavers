@@ -135,11 +135,15 @@ struct Tank {
     /// When it last threw a pencil, for the turret's recoil.
     var firedAt: Double = -10
     var shotsFired = 0
+    /// Planes it has thrown down, for its stickers.
+    var kills = 0
     /// When it last actually moved, for the probe's "stuck" count.
     var lastMovedAt: Double
 
     var direction: SIMD2<Float> { SIMD2(cos(heading), sin(heading)) }
     var velocity: SIMD2<Float> { direction * speed }
+    var damageStage: Int { Damage.stage(health: health, armour: spec.armour, downed: false) }
+    var stickers: [Sticker] { Aces.stickers(kills: kills, id: id) }
 
     var isActive: Bool {
         switch state {
