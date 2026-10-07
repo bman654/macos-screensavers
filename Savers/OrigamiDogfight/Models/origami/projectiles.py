@@ -22,6 +22,7 @@ from .mesh import (
     lined_paper_image,
     mesh_object,
     textured_material,
+    wound_outward,
 )
 
 
@@ -228,6 +229,58 @@ def _build_eraser():
     return mesh_object("eraser", verts, faces, [eraser_material]), {}
 
 
+def _build_pencil():
+    """A sharpened stub, chunkier and brighter than a real pencil so it survives 12-24 px.
+
+    The body is a true hexagonal prism with a flat on top. Where the sharpener cut it, the
+    paint ends in the classic scallops — further forward on each flat than at its corners,
+    because the cone meets the corners first — and every paint face stays one flat panel.
+    The eraser is nearly as wide as the ferrule, so a pencil falling eraser-up is a pink dot.
+    """
+    apothem = 0.0047
+    corner = apothem / math.cos(math.pi / 6)
+    # A short, blunt sharpening: every millimetre of cone is a millimetre less of yellow.
+    back, cut_corner, cut_flat = -0.0112, 0.0110, 0.0140
+    lead_x, lead_r, tip = 0.0213, 0.0018, 0.0252
+    angles = [math.radians(30 * j) for j in range(12)]   # corners at even j: flats at 90 deg
+
+    def around(x, radius, angle):
+        return (x, radius * math.cos(angle), radius * math.sin(angle))
+
+    verts = [around(back, corner, angles[2 * k]) for k in range(6)]
+    verts += [around(cut_corner, corner, a) if j % 2 == 0 else around(cut_flat, apothem, a)
+              for j, a in enumerate(angles)]
+    verts += [around(lead_x, lead_r, a) for a in angles]
+    verts.append((tip, 0.0, 0.0))
+    scallop, lead, point = 6, 18, 30
+    faces = [list(range(6))]
+    for k in range(6):
+        faces.append([k, (k + 1) % 6, scallop + (2 * k + 2) % 12, scallop + 2 * k + 1,
+                      scallop + 2 * k])
+    for j in range(12):
+        faces.append([scallop + j, scallop + (j + 1) % 12, lead + (j + 1) % 12, lead + j])
+    for j in range(12):
+        faces.append([lead + j, lead + (j + 1) % 12, point])
+    paint = flat_material("pencil_paint", "#ffc414", roughness=0.55)
+    wood = flat_material("pencil_wood", "#f7d6a0", roughness=0.9)
+    graphite = flat_material("graphite", "#383a40", roughness=0.45, specular=0.5)
+    body = mesh_object("pencil_body", verts, wound_outward(verts, faces),
+                       [paint, wood, graphite],
+                       face_materials=[0] * 7 + [1] * 12 + [2] * 12)
+
+    eraser = _lathe_x("pencil_eraser", [
+        (-0.0252, 0.0), (-0.0252, 0.0037), (-0.0240, 0.0050), (-0.0168, 0.0050),
+        (-0.0168, 0.0),
+    ], flat_material("pencil_eraser", "#ff6b9d", roughness=0.85), sides=12)
+    # Two crimped grooves: the ferrule's one recognisable detail, and it costs two rings.
+    ferrule = _lathe_x("pencil_ferrule", [
+        (-0.0178, 0.0), (-0.0178, 0.0053), (-0.0172, 0.0057), (-0.0154, 0.0057),
+        (-0.0150, 0.0053), (-0.0146, 0.0057), (-0.0140, 0.0057), (-0.0136, 0.0053),
+        (-0.0132, 0.0057), (-0.0114, 0.0057), (-0.0108, 0.0053), (-0.0108, 0.0),
+    ], flat_material("ferrule", "#d5dfe8", roughness=0.28, specular=0.45), sides=12)
+    return join([body, ferrule, eraser], "pencil"), {}
+
+
 spitball = Model(name="spitball", kind="projectile", build=_build_spitball,
                  summary="A small irregular wet off-white spitball.")
 paper_ball = Model(name="paper_ball", kind="projectile", build=_build_paper_ball,
@@ -242,3 +295,5 @@ rubber_band = Model(name="rubber_band", kind="projectile", build=_build_rubber_b
                     summary="A stretched red rubber loop with a flat rectangular band.")
 eraser = Model(name="eraser", kind="projectile", build=_build_eraser,
                summary="A faceted pink-pearl eraser crumb, broken into a chunky wedge.")
+pencil = Model(name="pencil", kind="projectile", build=_build_pencil,
+               summary="A fat yellow hex pencil stub: pink eraser, silver ferrule, sharpened tip.")

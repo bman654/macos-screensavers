@@ -16,6 +16,12 @@ Writes into `build/origami-models/`:
   enough to see the rules cross the folds; `planes_overhead_lined.png` at game size.
 - `<family>.png` (labelled studio lineup) and `<family>_overhead.png` (small, from above at
   the game's slight tilt; `_x4`/`_x6` enlarged) for planes, projectiles, scenery and fire.
+- `tanks_overhead.png` — every tank straight down at game size (40-80 px), at true relative
+  size, in two sides' colours with the turret at two angles; `_x4` enlarged, `_large` at
+  four times the pixels. `tanks_turret.png` — each tank large with its turret at 0, 45 and
+  90 degrees about a pin marking the pivot: the turret must turn about the pin.
+- `pencil_pitch.png` — the pencil at game size climbing toward the camera and falling back,
+  since that is how a tank's shot is seen; `_x6` enlarged.
 """
 
 import argparse
@@ -42,7 +48,10 @@ FAMILIES = {
     "projectiles": ("projectile",),
     "scenery": ("tree", "rock", "house", "boat"),
     "fire": ("fire", "smoke"),
+    "tanks": ("tank",),
 }
+# Team papers from the runtime's palette (`PaperPalette.plain`), for tinting a tank's paper.
+SIDES = {"red": "#e0332e", "blue": "#2e6bdb"}
 _PLANE_ORDER = ["dart", "interceptor", "glider", "bomber", "stunt"]
 
 
@@ -61,11 +70,30 @@ def _fresh(resolution, samples=64, exposure=-1.0):
 def _place(name):
     """Build one model into the current scene, contract-checked; returns (root, bounds).
 
-    The root is renamed once built, so the same model can be placed again beside it.
+    Every object in it is renamed once built, so the same model can be placed again beside
+    it.
     """
     root, _, bounds = build_model.build(CATALOG[name])
-    root.name = f"review_{name}_{len(bpy.data.objects)}"
+    # Every object, not only the root: a second tank built beside the first would otherwise
+    # find `turret` taken, be handed `turret.001`, and fail its own contract.
+    prefix = f"review_{len(bpy.data.objects)}_"
+    for obj in [root, *root.children_recursive]:
+        obj.name = prefix + obj.name
     return root, bounds
+
+
+def _child(root, name):
+    return next(obj for obj in root.children_recursive if obj.name.endswith("_" + name))
+
+
+def _tint(root, colour):
+    """Paint the paper the runtime would replace, the way a side's plain paper looks."""
+    team = flat_material(f"side_{colour}", colour, roughness=0.9)
+    for obj in [root, *root.children_recursive]:
+        if obj.type == "MESH":
+            for slot in obj.material_slots:
+                if slot.material is not None and slot.material.name == "paper":
+                    slot.material = team
 
 
 def _label(text, location, size, colour="#e8e4da"):
@@ -251,13 +279,84 @@ def family_studio(family, spacing=1.6):
     return _render(os.path.join(_OUT, f"{family}.png"))
 
 
+def tanks_overhead(pixels_per_metre=380, spacing=0.26, suffix=""):
+    """Both tanks straight down at true relative size, nose up the image: per row a tank in
+    two sides' colours, its turret straight ahead and turned."""
+    names = _names("tanks")
+    cells = [(colour, angle) for colour in SIDES.values() for angle in (0.0, 60.0)]
+    width, height = len(cells) * spacing, len(names) * spacing
+    _fresh((round(width * pixels_per_metre), round(height * pixels_per_metre)),
+           samples=32, exposure=-0.6)
+    for row, name in enumerate(names):
+        for column, (colour, angle) in enumerate(cells):
+            root, _ = _place(name)
+            _tint(root, colour)
+            _child(root, "turret").rotation_euler.z = math.radians(angle)
+            root.rotation_euler = (0.0, 0.0, math.pi * 0.5)
+            root.location = ((column - (len(cells) - 1) * 0.5) * spacing,
+                             ((len(names) - 1) * 0.5 - row) * spacing, 0.0)
+    _ground(width * 4.0)
+    _sun()
+    _ortho_camera((0.0, 0.0), width)
+    return _render(os.path.join(_OUT, f"tanks_overhead{suffix}.png"))
+
+
+def tanks_turret(pixels_per_metre=1400, spacing=0.26):
+    """Each tank with its turret at 0, 45 and 90 degrees; a pin stands on the pivot."""
+    names = _names("tanks")
+    angles = (0.0, 45.0, 90.0)
+    width, height = len(angles) * spacing, len(names) * spacing
+    _fresh((round(width * pixels_per_metre), round(height * pixels_per_metre)),
+           samples=32, exposure=-0.6)
+    pin = flat_material("review_pin", "#ffe14d", emission=2.0)
+    for row, name in enumerate(names):
+        for column, angle in enumerate(angles):
+            root, _ = _place(name)
+            _tint(root, SIDES["red"])
+            turret = _child(root, "turret")
+            turret.rotation_euler.z = math.radians(angle)
+            root.rotation_euler = (0.0, 0.0, math.pi * 0.5)
+            root.location = ((column - (len(angles) - 1) * 0.5) * spacing,
+                             ((len(names) - 1) * 0.5 - row) * spacing, 0.0)
+            bpy.context.view_layer.update()
+            pivot = turret.matrix_world.translation
+            bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=0.0016, depth=0.05,
+                                                location=(pivot.x, pivot.y, pivot.z + 0.025))
+            bpy.context.active_object.data.materials.append(pin)
+    _ground(width * 4.0)
+    _sun()
+    _ortho_camera((0.0, 0.0), width)
+    return _render(os.path.join(_OUT, "tanks_turret.png"))
+
+
+def pencil_pitch(pixels_per_unit=18, spacing=1.5):
+    """The pencil at game size as a tank's shot is seen: level, climbing toward the camera
+    at 45 and 75 degrees, then falling back eraser-up at 75 and 45."""
+    pitches = (0.0, 45.0, 75.0, -75.0, -45.0)
+    width = len(pitches) * spacing
+    _fresh((round(width * pixels_per_unit), round(spacing * pixels_per_unit)),
+           samples=32, exposure=-0.6)
+    for column, pitch in enumerate(pitches):
+        root, bounds = _place("pencil")
+        lo, hi = bounds
+        root.scale = (1.0 / max(hi - lo),) * 3
+        # Pitched about the pencil's own left (+pitch lifts the nose), then turned nose-up
+        # the image: XYZ order applies the Y turn before the Z one.
+        root.rotation_euler = (0.0, math.radians(-pitch), math.pi * 0.5)
+        root.location = ((column - (len(pitches) - 1) * 0.5) * spacing, 0.0, 0.4)
+    _ground(width * 4.0)
+    _sun()
+    _ortho_camera((0.0, 0.0), width)
+    return _render(os.path.join(_OUT, "pencil_pitch.png"))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheet", required=True,
-                        choices=["planes", "projectiles", "scenery", "fire", "all"])
+                        choices=[*FAMILIES, "all"])
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args = parser.parse_args(argv)
-    sheets = ["planes", "projectiles", "scenery", "fire"] if args.sheet == "all" else [args.sheet]
+    sheets = list(FAMILIES) if args.sheet == "all" else [args.sheet]
 
     for sheet in sheets:
         if not _names(sheet):
@@ -271,6 +370,8 @@ def main():
         elif sheet == "projectiles":
             family_studio("projectiles")
             _enlarge(family_overhead("projectiles", 18, altitude=0.4), 6)
+            if "pencil" in CATALOG:
+                _enlarge(pencil_pitch(), 6)
         elif sheet == "scenery":
             family_studio("scenery")
             _enlarge(family_overhead("scenery", 32, tilt=12.0), 4)
@@ -279,6 +380,11 @@ def main():
             family_studio("fire")
             _enlarge(family_overhead("fire", 48, tilt=12.0), 4)
             family_overhead("fire", 160, tilt=12.0, suffix="_large")
+        elif sheet == "tanks":
+            family_studio("tanks")
+            _enlarge(tanks_overhead(), 4)
+            tanks_overhead(pixels_per_metre=1520, suffix="_large")
+            tanks_turret()
 
 
 if __name__ == "__main__":

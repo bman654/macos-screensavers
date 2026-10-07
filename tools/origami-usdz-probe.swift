@@ -1,7 +1,7 @@
 // What SceneKit actually makes of an Origami Dogfight model: the node tree, the geometry and
 // materials that survived the Blender → USDZ export, how the Blender axes arrive, whether every
-// face is still flat, what the paper's UVs look like, and whether the fire's flames pivot about
-// their bases. It renders each model offscreen with the axis correction the runtime uses, so a
+// face is still flat, what the paper's UVs look like, whether the fire's flames pivot about
+// their bases, and whether a tank's turret turns cleanly about its own origin. It renders each model offscreen with the axis correction the runtime uses, so a
 // broken export is a picture and a FAIL line rather than a surprise inside the saver.
 //
 // The contract it checks is `docs/origami-plan.md` §Asset contract.
@@ -17,7 +17,8 @@
 // `build/origami-models/scenekit/` unless `--out` says otherwise: `<name>_top.png` (straight
 // down, nose up the image), `<name>_34.png` (from front-left-above), and with `--lined`
 // `<name>_top_lined.png`, the paper replaced by a lined-notebook sheet so the UV layout — and
-// whether SceneKit flips v — can be seen. A `<name>.json` manifest beside the usdz, when present,
+// whether SceneKit flips v — can be seen. A tank adds `<name>_top_turret_45.png` and `_90`,
+// its turret turned the way the runtime turns it. A `<name>.json` manifest beside the usdz, when present,
 // is the reference for the bounds and the axis verdict. Exits nonzero if any file FAILs.
 //
 // Never opens a window or takes focus: `SCNRenderer` offscreen, no `NSApplication`.
@@ -91,6 +92,8 @@ struct Manifest {
     let kind: String?
     let bounds: Box?
     let sheetAspect: Float?
+    /// A tank's turret origin, in Blender axes.
+    let turretPivot: SIMD3<Float>?
 }
 
 /// The manifest beside the usdz, or nil when there is none. A manifest that exists but does
@@ -110,7 +113,8 @@ func loadManifest(beside usdz: URL) -> (Manifest?, String?) {
         bounds = Box(lo: lo, hi: hi)
     }
     return (Manifest(kind: json["kind"] as? String, bounds: bounds,
-                     sheetAspect: (json["sheetAspect"] as? NSNumber)?.floatValue),
+                     sheetAspect: (json["sheetAspect"] as? NSNumber)?.floatValue,
+                     turretPivot: vec((json["turret"] as? [String: Any])?["pivot"])),
             bounds == nil ? "manifest has no usable bounds" : nil)
 }
 
@@ -705,6 +709,61 @@ func checkFlames(root: SCNNode, map: AxisMap, failures: inout [String]) -> [SCNN
     return flames
 }
 
+/// A tank's `turret` node: where it pivots, whether its own z is the model's up, which way the
+/// barrel points, and whether turning it about its own z keeps it seated on its ring. The
+/// runtime aims a turret exactly so — `turret.simdOrientation = rest * quat(angle, (0, 0, 1))`.
+func checkTurret(root: SCNNode, map: AxisMap, manifest: Manifest?, failures: inout [String]) -> SCNNode? {
+    var turrets: [SCNNode] = []
+    root.enumerateHierarchy { node, _ in if node.name == "turret" { turrets.append(node) } }
+    guard let turret = turrets.first else {
+        if manifest?.kind == "tank" { failures.append("tank has no node named turret") }
+        return nil
+    }
+    if turrets.count > 1 { failures.append("\(turrets.count) nodes named turret") }
+    let axes = ["X", "Y", "Z"]
+    let upAxis = map.source.firstIndex(of: 2)!
+    let pivot = root.simdConvertPosition(.zero, from: turret)
+    let localMin = turret.geometry.flatMap { g in
+        g.sources(for: .vertex).first.flatMap(points(of:)).flatMap { $0.map(\.z).min() }
+    }
+    let tilt = angleDegrees(root.simdConvertVector(SIMD3(0, 0, 1), from: turret), map.matrix * SIMD3(0, 0, 1))
+    print("-- turret (root-space up axis is \(axes[upAxis]))")
+    print("  \(path(of: turret, under: root))  pivot \(fmt(pivot, 6))\(transformSummary(turret))")
+    print("    geometry local min z: " + (localMin.map { String(format: "%.6f", $0) } ?? "no geometry on this node")
+          + String(format: "; own z vs Blender up: %.2f°", tilt))
+    if turret.geometry == nil { failures.append("turret node carries no geometry") }
+    if let localMin, abs(localMin) > boundsTolerance { failures.append("turret origin is not at its foot") }
+    if tilt > 0.5 { failures.append("turret's own z is not the model's up") }
+    if let expected = manifest?.turretPivot {
+        let off = simd_length(pivot - map.matrix * expected)
+        print(String(format: "    manifest pivot (Blender axes) %@, off by %.4f mm", fmt(expected, 6), off * 1000))
+        if off > boundsTolerance { failures.append(String(format: "turret pivot %.2f mm from the manifest's", off * 1000)) }
+    } else if manifest?.kind == "tank" {
+        failures.append("manifest has no turret pivot")
+    }
+    guard let rest = bounds(of: turret, in: root) else { return turret }
+    var reach = rest.center - pivot
+    reach[upAxis] = 0
+    let forward = dominantAxis(map.matrix * SIMD3(1, 0, 0))
+    print("    barrel points toward root \(dominantAxis(reach)) (Blender +X is root \(forward))")
+    if dominantAxis(reach) != forward { failures.append("turret's barrel does not point along Blender +X") }
+
+    let original = turret.simdOrientation
+    for degrees: Float in [45, 90, 180] {
+        turret.simdOrientation = original * simd_quatf(angle: degrees * .pi / 180, axis: SIMD3(0, 0, 1))
+        let drift = simd_length(root.simdConvertPosition(.zero, from: turret) - pivot)
+        guard let box = bounds(of: turret, in: root) else { continue }
+        let foot = abs(box.lo[upAxis] - rest.lo[upAxis]), top = abs(box.hi[upAxis] - rest.hi[upAxis])
+        print(String(format: "    turned %3.0f°: pivot drift %.4f mm, foot moved %.4f mm, top moved %.4f mm",
+                     degrees, drift * 1000, foot * 1000, top * 1000))
+        if max(drift, foot, top) > boundsTolerance {
+            failures.append(String(format: "turret does not turn cleanly about its origin at %.0f°", degrees))
+        }
+    }
+    turret.simdOrientation = original
+    return turret
+}
+
 // MARK: - Probe one file
 
 func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
@@ -763,6 +822,7 @@ func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
     let isFire = name == "fire" || manifest?.kind == "fire"
     let flames = checkFlames(root: root, map: map, failures: &failures)
     if isFire && flames.isEmpty { failures.append("fire model has no flame_<n> nodes") }
+    let turret = checkTurret(root: root, map: map, manifest: manifest, failures: &failures)
 
     // Rendering: the runtime renders paper double-sided, so the probe does too.
     let rotation = pivotRotation(for: map)
@@ -782,6 +842,14 @@ func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
     }
     render(staged.top, "top")
     render(staged.threeQuarter, "34")
+    if let turret {
+        let rest = turret.simdOrientation
+        for degrees in [45, 90] {
+            turret.simdOrientation = rest * simd_quatf(angle: Float(degrees) * .pi / 180, axis: SIMD3(0, 0, 1))
+            render(staged.top, "top_turret_\(degrees)")
+        }
+        turret.simdOrientation = rest
+    }
     if options.lined {
         let papers = geometryNodes(under: scene.rootNode).flatMap { $0.geometry!.materials }.filter { $0.name == "paper" }
         if papers.isEmpty {

@@ -8,7 +8,8 @@ Each model is built headlessly by `Savers/OrigamiDogfight/Models/build_model.py`
 checks the asset contract inside Blender before writing anything. This script checks it
 again from the outside, on the files the saver will actually load: the archive is a USDZ,
 `usdcat` can load it, every mesh carries per-face normals, the manifest says what the
-contract says it must, and a plane's sheet UVs and a fire's flames are really in the file.
+contract says it must, and a plane's sheet UVs, a fire's flames and a tank's turret are
+really in the file.
 Nothing is installed unless every selected model passes.
 
 No textures are baked: every model is flat colour except the crumpled paper ball, whose
@@ -38,7 +39,7 @@ _ERROR = re.compile(r"Error|Traceback")
 # when it was first built. The budget is generous headroom over that, not a target, and a
 # model that breaks it has almost certainly grown a texture or a dense mesh by accident.
 _BUDGET_BYTES = 3_000_000
-_KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke")
+_KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke", "tank")
 _FACE_VARYING_NORMALS = re.compile(
     r"normal3f\[\] (?:primvars:)?normals = \[[^\]]*\]\s*\(\s*interpolation = \"faceVarying\"")
 
@@ -92,6 +93,58 @@ def _meshes(usda):
     return meshes
 
 
+def _finite_vector(value):
+    return (isinstance(value, list) and len(value) == 3
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and math.isfinite(v) for v in value))
+
+
+def _check_sheet_aspect(name, manifest):
+    # The runtime sizes a generated bitmap from this and falls back to letter paper outside
+    # the same range, so a value it would refuse is refused here first.
+    aspect = manifest.get("sheetAspect")
+    if (isinstance(aspect, bool) or not isinstance(aspect, (int, float))
+            or not math.isfinite(aspect) or not 0.25 <= aspect <= 4):
+        raise BuildFailure(f"{name}: sheetAspect must be a number in [0.25, 4], got {aspect!r}")
+
+
+def _check_sheet_uvs(name, mesh, body):
+    uv = re.search(r"texCoord2f\[\] primvars:st = \[(.*?)\]", body, re.DOTALL)
+    if uv is None:
+        raise BuildFailure(f"{name}: mesh {mesh!r} has no primvars:st sheet UVs")
+    # Every component, parsed whatever it says: a number-shaped regex skips `nan` and `inf`
+    # outright, and a NaN compares false against both ends of the range.
+    values = []
+    for pair in re.findall(r"\(([^()]*)\)", uv.group(1)):
+        try:
+            values.extend(float(v) for v in pair.split(","))
+        except ValueError:
+            raise BuildFailure(f"{name}: unreadable sheet UV {pair!r}") from None
+    if not values or not all(math.isfinite(v) and -1e-6 <= v <= 1 + 1e-6 for v in values):
+        raise BuildFailure(f"{name}: mesh {mesh!r} sheet UVs leave [0, 1] or are not finite")
+
+
+def _check_turret(name, manifest, meshes, bounds):
+    """The runtime finds the turret by name and turns it about its own origin, so the node
+    must be in the file, and be where the manifest says the pivot is."""
+    turret = manifest.get("turret")
+    if not isinstance(turret, dict) or turret.get("node") != "turret":
+        raise BuildFailure(f"{name}: manifest turret must name the node 'turret', got {turret!r}")
+    pivot, muzzles = turret.get("pivot"), turret.get("muzzles")
+    lo, hi = bounds
+    if not _finite_vector(pivot) or not all(a <= v <= b for a, v, b in zip(lo, pivot, hi)):
+        raise BuildFailure(f"{name}: turret pivot {pivot!r} is not a point inside the tank")
+    if (not isinstance(muzzles, list) or not muzzles
+            or not all(_finite_vector(m) and m[0] > 0 for m in muzzles)):
+        raise BuildFailure(f"{name}: turret muzzles {muzzles!r} must be points ahead of the pivot")
+    if "turret" not in meshes:
+        raise BuildFailure(f"{name}: no Mesh prim named 'turret', got {list(meshes)}")
+    translate = re.search(r"double3 xformOp:translate = \(([^)]*)\)", meshes["turret"])
+    placed = [float(v) for v in translate.group(1).split(",")] if translate else [0.0] * 3
+    if max(abs(a - b) for a, b in zip(placed, pivot)) > 1e-5:
+        raise BuildFailure(f"{name}: the turret prim sits at {placed}, the manifest says {pivot}")
+
+
 def _validate(name, kind, asset, manifest_path):
     if not asset.is_file() or asset.stat().st_size == 0:
         raise BuildFailure(f"{name} produced no USDZ")
@@ -138,27 +191,18 @@ def _validate(name, kind, asset, manifest_path):
     if kind == "plane":
         if manifest["materials"] != ["paper"]:
             raise BuildFailure(f"{name}: a plane has exactly one material, paper")
-        # The runtime sizes a generated bitmap from this and falls back to letter paper outside
-        # the same range, so a value it would refuse is refused here first.
-        aspect = manifest.get("sheetAspect")
-        if (isinstance(aspect, bool) or not isinstance(aspect, (int, float))
-                or not math.isfinite(aspect) or not 0.25 <= aspect <= 4):
-            raise BuildFailure(f"{name}: sheetAspect must be a number in [0.25, 4], got {aspect!r}")
+        _check_sheet_aspect(name, manifest)
         if list(meshes) != [name]:
             raise BuildFailure(f"{name}: a plane is one mesh named {name!r}, got {list(meshes)}")
-        uv = re.search(r"texCoord2f\[\] primvars:st = \[(.*?)\]", meshes[name], re.DOTALL)
-        if uv is None:
-            raise BuildFailure(f"{name}: no primvars:st sheet UVs")
-        # Every component, parsed whatever it says: a number-shaped regex skips `nan` and `inf`
-        # outright, and a NaN compares false against both ends of the range.
-        values = []
-        for pair in re.findall(r"\(([^()]*)\)", uv.group(1)):
-            try:
-                values.extend(float(v) for v in pair.split(","))
-            except ValueError:
-                raise BuildFailure(f"{name}: unreadable sheet UV {pair!r}") from None
-        if not values or not all(math.isfinite(v) and -1e-6 <= v <= 1 + 1e-6 for v in values):
-            raise BuildFailure(f"{name}: sheet UVs leave [0, 1] or are not finite")
+        _check_sheet_uvs(name, name, meshes[name])
+    if kind == "tank":
+        if "paper" not in manifest["materials"]:
+            raise BuildFailure(f"{name}: a tank's hull and turret need the material paper")
+        _check_sheet_aspect(name, manifest)
+        _check_turret(name, manifest, meshes, (lo, hi))
+        # Hull and turret both carry paper, so every mesh in a tank is textured.
+        for mesh, body in meshes.items():
+            _check_sheet_uvs(name, mesh, body)
     if kind == "fire":
         flames = [entry["node"] for entry in manifest.get("flames", [])]
         expected = [f"flame_{i}" for i in range(len(flames))]

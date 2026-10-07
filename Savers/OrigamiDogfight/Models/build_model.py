@@ -15,7 +15,9 @@ arriving in the saver as a stand-in.
 """
 
 import argparse
+import bisect
 import json
+import math
 import os
 import sys
 
@@ -54,6 +56,7 @@ _SIZE_RANGE = {
     "boat": (0.5, 12.0),
     "fire": (0.05, 1.0),
     "smoke": (0.02, 1.0),
+    "tank": (0.05, 0.4),
 }
 
 
@@ -139,12 +142,8 @@ def _check_contract(model, root, extra, bounds):
         materials = [m.name for m in root.data.materials]
         if materials != ["paper"]:
             raise ContractError(f"{name}: a plane has one material named paper, got {materials}")
-        layer = root.data.uv_layers.get("st")
-        if layer is None:
-            raise ContractError(f"{name}: a plane needs its sheet UVs in layer 'st'")
-        coords = [c for loop in layer.data for c in loop.uv]
-        if min(coords) < -1e-6 or max(coords) > 1.0 + 1e-6:
-            raise ContractError(f"{name}: sheet UVs leave [0, 1]")
+        if not _sheet_uvs_in_range(root):
+            raise ContractError(f"{name}: a plane needs its sheet UVs in layer 'st', in [0, 1]")
         if not extra.get("sheetAspect"):
             raise ContractError(f"{name}: a plane's manifest needs sheetAspect")
         if size.x <= max(size.y, size.z) * 0.4:
@@ -168,6 +167,88 @@ def _check_contract(model, root, extra, bounds):
                     f"{local_min_z:+.4f} m in its own space"
                 )
 
+    if model.kind == "tank":
+        _check_tank(name, root, meshes, extra)
+        if size.x <= size.y:
+            raise ContractError(f"{name}: does not look front-along-X: {tuple(size)}")
+
+
+def _sheet_uvs_in_range(obj):
+    layer = obj.data.uv_layers.get("st")
+    if layer is None:
+        return False
+    coords = [c for loop in layer.data for c in loop.uv]
+    return all(math.isfinite(c) and -1e-6 <= c <= 1.0 + 1e-6 for c in coords)
+
+
+def _check_tank(name, root, meshes, extra):
+    """One `turret` that the runtime can turn by rotating a single node about its own z.
+
+    Its origin must be on the turning axis at the turret's foot, it must sit over the hull,
+    point its barrel along +X, and clear the hull all the way round.
+    """
+    if root.type != "EMPTY":
+        raise ContractError(f"{name}: a tank's root is an Empty over its hull and turret")
+    turrets = [obj for obj in root.children if obj.name == "turret"]
+    if len(turrets) != 1 or turrets[0].type != "MESH":
+        raise ContractError(f"{name}: needs exactly one mesh child named turret, got "
+                            f"{[obj.name for obj in root.children]}")
+    turret = turrets[0]
+    if turret.children:
+        raise ContractError(f"{name}: the barrel is part of the turret mesh, so one node turns "
+                            f"everything; turret has children {[c.name for c in turret.children]}")
+    if any(abs(a) > 1e-9 for a in turret.rotation_euler) or turret.rotation_mode != "XYZ":
+        raise ContractError(f"{name}: the turret must arrive unrotated, so the runtime's angle "
+                            f"is absolute")
+    hull = [obj for obj in meshes if obj is not turret]
+    if not hull:
+        raise ContractError(f"{name}: a tank needs a hull besides its turret")
+    for label, parts in (("turret", [turret]), ("hull", hull)):
+        if not any(m.name == "paper" for part in parts for m in part.data.materials):
+            raise ContractError(f"{name}: the {label} has no paper for the runtime to tint")
+    for obj in meshes:
+        if any(m.name == "paper" for m in obj.data.materials) and not _sheet_uvs_in_range(obj):
+            raise ContractError(f"{obj.name}: paper needs UVs in layer 'st' inside [0, 1]")
+    aspect = extra.get("sheetAspect")
+    if not isinstance(aspect, (int, float)) or not 0.25 <= aspect <= 4:
+        raise ContractError(f"{name}: sheetAspect must be in [0.25, 4], got {aspect!r}")
+
+    local = [v.co for v in turret.data.vertices]
+    lo = Vector([min(p[i] for p in local) for i in range(3)])
+    hi = Vector([max(p[i] for p in local) for i in range(3)])
+    if abs(lo.z) > 1e-4:
+        raise ContractError(f"{name}: the turret's origin must be at its foot; its lowest "
+                            f"point is {lo.z:+.5f} m in its own space")
+    if not (lo.x < 0 < hi.x and lo.y < 0 < hi.y):
+        raise ContractError(f"{name}: the turret's origin is outside its own footprint")
+    if hi.x <= -lo.x:
+        raise ContractError(f"{name}: the barrel must point along +X ({lo.x:.4f}..{hi.x:.4f})")
+    hull_lo, hull_hi = studio.world_mesh_bounds(hull)
+    pivot = turret.matrix_world.translation
+    if not (hull_lo.x < pivot.x < hull_hi.x and hull_lo.y < pivot.y < hull_hi.y):
+        raise ContractError(f"{name}: the turret's pivot {tuple(pivot)} is not over the hull")
+    for muzzle in extra.get("turret", {}).get("muzzles", []):
+        if abs(muzzle[0] - hi.x) > 1e-4:
+            raise ContractError(f"{name}: muzzle {muzzle} is not at the end of a barrel")
+
+    # Turning sweeps every turret point round a circle at its own height, so a hull point
+    # collides if any turret point at least as far out reaches down to it.
+    sweep = sorted(((p.x ** 2 + p.y ** 2) ** 0.5, p.z) for p in local)
+    lowest_beyond, low = [], math.inf
+    for radius, z in reversed(sweep):
+        low = min(low, z)
+        lowest_beyond.append((radius, low))
+    lowest_beyond.reverse()
+    radii = [radius for radius, _ in lowest_beyond]
+    for obj in hull:
+        for vertex in obj.data.vertices:
+            p = obj.matrix_world @ vertex.co - pivot
+            index = bisect.bisect_left(radii, (p.x ** 2 + p.y ** 2) ** 0.5)
+            if index < len(radii) and p.z > lowest_beyond[index][1] + 1e-4:
+                raise ContractError(
+                    f"{name}: turning, the turret would cut the hull at "
+                    f"{tuple(round(v, 4) for v in obj.matrix_world @ vertex.co)}")
+
 
 def _materials(root):
     return {m.name for obj in _meshes(root) for m in obj.data.materials}
@@ -189,6 +270,10 @@ def build(model):
             if entry["node"] not in nodes:
                 raise ContractError(f"{model.name}: manifest names missing node {entry['node']}")
             entry["base"] = [round(v, 6) for v in nodes[entry["node"]].location]
+    if model.kind == "tank":
+        # Likewise the turret: the manifest's pivot is where seating left the node.
+        turret = next(obj for obj in root.children if obj.name == "turret")
+        extra["turret"]["pivot"] = [round(v, 6) for v in turret.location]
     return root, extra, bounds
 
 

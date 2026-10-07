@@ -246,6 +246,23 @@ def lined_paper_image(name, path, size=(512, 662), rule_every=0.0255, header=0.1
     return image
 
 
+def wound_outward(verts, faces):
+    """`faces`, each rewound so its normal points out of the closed solid they bound.
+
+    A solid lofted or listed by hand is easy to wind inconsistently, and the export keeps
+    whatever winding it is given: a flat normal facing inward is lit from the wrong side.
+    """
+    bm = bmesh.new()
+    corners = [bm.verts.new(v) for v in verts]
+    for face in faces:
+        bm.faces.new([corners[i] for i in face])
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    bm.verts.index_update()
+    wound = [[v.index for v in face.verts] for face in bm.faces]
+    bm.free()
+    return wound
+
+
 def polygon_normal(points):
     """Newell's method: robust for any planar polygon, including slivers."""
     normal = Vector((0.0, 0.0, 0.0))
