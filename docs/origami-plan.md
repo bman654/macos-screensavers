@@ -192,11 +192,48 @@ as a simple stand-in, never a black screen.
   rotation axis, barrel along +X; the hull is the rest. Hull and turret paper use material
   `paper` (tinted per side at runtime, like a plane); treads and anything else keep authored
   colours.
+- **Moving parts turn about their own X.** A model whose root is a mesh with children (the
+  crane, the windmill) arrives as an Xform named for the model holding the root's mesh and each
+  child as sibling Mesh prims. A child keeps Blender's axes as its own frame under the runtime's
+  -90° X pivot, so "about its own X" is `node.simdOrientation = rest * simd_quatf(angle:,
+  axis: (1, 0, 0))`, which with the prop unturned is the world's +X, the model's forward axis.
+- **Birds** — kind `bird` (`crane`). The body is the root mesh; `wing_l` (+Y) and `wing_r` (-Y)
+  are child meshes whose origins sit on their hinge lines along X, each wing's root edge on that
+  line. At zero both wings are level; a positive turn lifts `wing_l` and lowers `wing_r`, so a
+  flap of `a` degrees is `+a` on one and `-a` on the other. Everything is `paper`, tinted per
+  bird, its UVs the bird seen from above on a square sheet. The body is centred on its bounds.
+- **Turning blades** — a landmark's child `blades` (the windmill's sails, stocks, hub and
+  windshaft) has its origin at the hub, faces +X and turns about its own X; at zero the sails
+  stand as a "+". A positive turn is counter-clockwise seen from in front, the way the sails
+  are pitched for the wind to drive them.
+- **Supply drops** — `supply_crate` (kind `crate`) stands on z = 0. `parachute` (kind
+  `parachute`) hangs from its origin: its lowest point is the knot where its strings meet, on
+  its vertical axis, so the runtime ties the origin to the middle of the crate's lid, the top of
+  the crate's bounds.
+- **Landscape life** — `windmill` (`landmark`), `sheep` (`animal`), `car` (`vehicle`) and
+  `hangar` (`building`) are authored at landscape scale like the houses, stand on z = 0 and face
+  +X. The car's body and roof, and the hangar's ridge stripe, are `paper`, tinted at runtime per
+  car or per team and UV-mapped as nets like a tank's. The hangar's open end faces +X, where the
+  runtime's runway begins.
+- **Material names are the seasons' handles.** The runtime recolours scenery by material name,
+  so a name says what a part is: foliage ends `_leaf`, roofs `_roof` (`paper_roof_red`,
+  `paper_windmill_roof`, `paper_hangar_roof`), and `paper_window` is every window that lights up
+  in the evening (houses, windmill, hangar) and nothing else. A car's glass is
+  `paper_windscreen`, which never lights.
 - **Manifest** — at least `name`, `kind` (`plane` / `projectile` / `tree` / `rock` / `house` /
-  `boat` / `fire` / `smoke` / `tank`), `asset`, and `bounds` (min and max in metres, in the authored
+  `boat` / `fire` / `smoke` / `tank` / `bird` / `crate` / `parachute` / `landmark` / `animal` /
+  `vehicle` / `building`), `asset`, and `bounds` (min and max in metres, in the authored
   Blender axes). Planes add `sheetAspect`. Tanks add `sheetAspect` and `turret: {node, pivot,
   muzzles}` — the pivot in Blender axes, the barrel tips in the turret's own space, which is
-  where the runtime spawns a shot.
+  where the runtime spawns a shot. Every other kind with `paper` (bird, vehicle, building) adds
+  `sheetAspect`. A bird adds `wings: {axis: [1, 0, 0], nodes: [{node, pivot, lift}, ...],
+  range: [down, up]}` — `lift` is the sign of a turn about +X that raises that wing (`wing_l`
+  1, `wing_r` -1), `range` the degrees of lift a wing may swing through without meeting the
+  body. A model with turning blades adds `blades: {node, hub, axis: [1, 0, 0], radius, turn}` —
+  `radius` is how far from the axis the sails reach at any angle (the rest pose's bounds do not
+  show it), `turn` the sign of the turn the wind drives them in. A building adds `opening:
+  {centre, width, height}` — the middle of its open end on the floor, and the clear width and
+  height there.
 
 ## Shared code
 
