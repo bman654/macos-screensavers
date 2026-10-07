@@ -28,6 +28,9 @@
 - `docs/tank-sound.md` — how the aquarium's audio is synthesised and why it sounds the way it
   does. Read before touching anything under `tools/audio/`, `Savers/Aquarium/Sounds/` or the
   `Sound*.swift` files; `spikes/006-saver-audio/README.md` is its plumbing half.
+- `docs/origami-plan.md` — Origami Dogfight, the second saver: the v1 decisions and the
+  contract between its Blender models and the runtime. Read before touching anything under
+  `Savers/OrigamiDogfight/`.
 - `docs/saver-backlog.md` — the other planned screensavers and why they are ordered the
   way they are.
 

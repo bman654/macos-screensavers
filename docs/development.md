@@ -37,6 +37,7 @@ re-bake is a normal part of the authoring loop, not an unusual event.
 ```bash
 tools/build-library.py    # ~44 MB of models and texture atlases. Needs Blender.
 tools/build-audio.py      # the grain library the tank's audio is assembled from
+tools/build-origami-library.py   # Origami Dogfight's models, ~230 KB. Needs Blender.
 ```
 
 Do both once before your first `build-saver.sh`, and again whenever you change a model script
@@ -107,6 +108,7 @@ replacement engine is private. Known Tahoe-specific hazards are documented in
   when starting a new saver
 - [`Shared/SaverKit/README.md`](../Shared/SaverKit/README.md) — the kit's API
 - [`docs/aquarium-plan.md`](aquarium-plan.md) — the aquarium's design decisions
+- [`docs/origami-plan.md`](origami-plan.md) — Origami Dogfight's design decisions and asset contract
 - [`docs/water-looks.md`](water-looks.md) — art direction for the three tank styles
 - [`docs/tank-sound.md`](tank-sound.md) — how the audio is synthesised
 - [`docs/decorations.md`](decorations.md) — the model manifest contract
