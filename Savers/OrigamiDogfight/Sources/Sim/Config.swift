@@ -65,4 +65,6 @@ struct SimConfig {
     var mode: MatchMode?
     /// An exact plane count, 2 to 12.
     var planeCount: Int?
+    /// A winter's: the lakes are ice, and ground for everything (`Terrain`).
+    var frozenLakes = false
 }

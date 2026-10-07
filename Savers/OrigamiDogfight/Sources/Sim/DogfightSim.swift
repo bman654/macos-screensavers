@@ -62,7 +62,7 @@ final class DogfightSim {
     init(seed: UInt64, aspect: Float, config: SimConfig = SimConfig()) {
         self.seed = seed
         self.config = config
-        terrain = Terrain(seed: seed)
+        terrain = Terrain(seed: seed, frozenLakes: config.frozenLakes)
         props = Scatter.spots(on: terrain, seed: seed)
         ground = Ground(terrain: terrain, props: props)
         rig = ViewRig(aspect: aspect)

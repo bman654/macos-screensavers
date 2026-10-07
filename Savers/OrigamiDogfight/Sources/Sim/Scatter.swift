@@ -78,7 +78,7 @@ enum Scatter {
                 let p = lake.center + SIMD2(cos(angle), sin(angle)) * rand.inRange(0, lake.radius * 0.6)
                 let clear = (0..<8).allSatisfy { k in
                     let a = Float(k) * .pi / 4
-                    return terrain.isWater(at: p + SIMD2(cos(a), sin(a)) * 0.13)
+                    return terrain.isLake(at: p + SIMD2(cos(a), sin(a)) * 0.13)
                 }
                 guard clear, !grid.isOccupied(p, radius: 0.12) else { continue }
                 place(.boat, p, spacing: 0.12, yaw: rand.inRange(0, 2 * .pi), scale: rand.inRange(0.85, 1.1))
