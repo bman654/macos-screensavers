@@ -6,9 +6,28 @@ spirals into the ground and burns as a little origami fire for a while before it
 replacement flies in from off-screen, so the number in the air stays constant. Sometimes it is a
 free-for-all, sometimes two or three small teams.
 
-Status: v1 is being built. Everything under "Decisions" is a starting point chosen so the whole
-thing can be built and watched; **look, feel and balance are judged on the running saver, not on
-paper**, and any of it can move once it has been seen.
+Status: **v1 is built and installable** (`tools/build-origami-library.py`, then
+`tools/build-saver.sh OrigamiDogfight -i`), awaiting a first look on the real screensaver.
+Everything under "Decisions" is a starting point chosen so the whole thing could be built and
+watched; **look, feel and balance are judged on the running saver, not on paper**, and any of it
+can move once it has been seen.
+
+What v1 measured: in a 30-minute headless soak per seed and mode, 6–9 kills a minute, a plane's
+centre off-screen for about 0.3% of its fighting time, no non-finite pose, and an identical event
+log for the same seed. GPU cost is 1.0–1.1 ms a frame at 2056x1329 and 2.4 ms at 4K. Two things
+are unverified: a session in the installed host (only the harness has run it), and two displays
+at once.
+
+Where v1 departed from the decisions below, and why:
+
+- **The glider has scissor cuts.** Folds alone left a plain rectangle that read as a sheet of
+  paper, not a plane; real tailed paper gliders are cut too.
+- **The landscape is a triangular lattice with every point nudged**, coloured per face. The first
+  square grid made every colour boundary a staircase and read as a pixel-art tile map.
+- **The fourth team colour is violet, not green**, because a green team disappears over meadow.
+- **The picker tile is a crop of a frozen frame**, because the whole arena at 108x71 shows the
+  planes as specks. Any change to the simulation moves the fight, so the tile's frame has to be
+  re-chosen after one (`tools/build-origami-thumbnail.sh`).
 
 ## Decisions (v1 defaults)
 
