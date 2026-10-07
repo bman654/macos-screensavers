@@ -113,6 +113,8 @@ final class WreckField {
             length = type.spec(scale: k).size
             restY = sin(WreckField.noseDown) * length * 0.32
             body.simdPosition = SIMD3(0, restY, 0)
+            // One that came down from a collision lies as crumpled as it fell.
+            if wreck.crumpled { body.simdScale = SIMD3(0.7, 1.25, 0.85) }
             body.simdOrientation = simd_quatf(angle: -WreckField.noseDown, axis: SIMD3(0, 0, 1))
                 // `roll` is in the sim's bank convention, positive into a left turn, which the model
                 // draws as a negative roll about its nose — the same flip `PlaneFleet` makes in

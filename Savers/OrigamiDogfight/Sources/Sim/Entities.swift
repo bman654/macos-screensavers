@@ -26,13 +26,27 @@ enum PlaneState: Equatable {
     case fighting
     /// The match is over; flying off the screen along `direction`.
     case exiting(direction: SIMD2<Float>)
-    /// Shot down: out of control, spiralling in. `spin` is ±1, the way it turns.
+    /// Shot down: out of control, spiralling in. `spin` is ±1, the way it turns. `killer` is 0
+    /// when nobody shot it — a mid-air collision.
     case downed(killer: Int, spin: Float)
+    /// A replacement rolling out of its side's hangar and down the runway, then climbing into the
+    /// band (`Airfield.swift`). Out of the fight until it is up: nobody chases a plane still on the
+    /// ground, and it chases nobody.
+    case takingOff(base: Int)
 
     var isDowned: Bool {
         if case .downed = self { return true }
         return false
     }
+
+    var isTakingOff: Bool {
+        if case .takingOff = self { return true }
+        return false
+    }
+
+    /// In the air and under control or not, but not on a runway: what the pilots' threat and
+    /// separation rules, and a collision, look at.
+    var isAloft: Bool { !isTakingOff }
 }
 
 /// What a pilot is doing beyond "chase the target". Each one ends on its own clock.
@@ -91,6 +105,12 @@ struct Plane {
     var burstTimer: Float = 0
     /// A burst aimed down at a tank keeps the first round's aim for the rest.
     var burstClimb: Float?
+    /// Planes and tanks it has shot down since it took to the air — what its stickers are for.
+    var kills = 0
+    /// Brought down by running into another plane rather than by a shot: it falls crumpled.
+    var crumpled = false
+    /// A supply drop's better weapon, while it lasts.
+    var powerUp: PowerUp?
 
     var direction: SIMD2<Float> { SIMD2(cos(pose.heading), sin(pose.heading)) }
     var velocity: SIMD2<Float> { direction * speed }
@@ -99,6 +119,16 @@ struct Plane {
 
     /// Below half armour a plane trails paper scraps.
     var isDamaged: Bool { health < spec.armour * 0.5 }
+
+    /// How marked its paper is, 0 (clean) to 3 (charred), from how much armour is left.
+    var damageStage: Int { Damage.stage(health: health, armour: spec.armour, downed: state.isDowned) }
+
+    /// The stickers its kills have earned, in the order they were stuck on.
+    var stickers: [Sticker] { Aces.stickers(kills: kills, id: id) }
+
+    func powerUp(at now: Double) -> PowerUpKind? {
+        powerUp.flatMap { now < $0.until ? $0.kind : nil }
+    }
 
     /// Its weapon at its own scale.
     var gun: WeaponSpec { weapon.spec(scale: spec.scale) }
@@ -192,6 +222,8 @@ struct Wreck {
     let roll: Float
     /// A tank's turret, relative to its hull, as it was knocked out.
     var turret: Float = 0
+    /// A plane that came down from a collision lies crumpled.
+    var crumpled = false
     let crashedAt: Double
     let inWater: Bool
 
@@ -218,6 +250,15 @@ enum SimEvent {
     case tankDestroyed(tank: Int, by: Int, wreck: Int, position: SIMD2<Float>, ground: Float, paper: Paper,
                        scale: Float)
     case tankLeft(tank: Int)
+    /// Two planes ran into each other; both are coming down, and nobody scores.
+    case collided(a: Int, b: Int, position: SIMD2<Float>, altitude: Float, papers: [Paper], scale: Float)
+    /// A plane or tank reached a kill milestone and has a new sticker.
+    case stickered(vehicle: Int, sticker: Sticker, kills: Int)
+    case dropSpawned(drop: Int)
+    case dropGrabbed(drop: Int, plane: Int, kind: PowerUpKind, position: SIMD2<Float>, altitude: Float)
+    case dropLanded(drop: Int, inWater: Bool)
+    /// A replacement started its roll out of the hangar.
+    case tookOff(plane: Int, base: Int)
 }
 
 /// `sin(time × rate + phase)`, with the argument formed in `Double`.

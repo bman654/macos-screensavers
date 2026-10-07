@@ -30,6 +30,9 @@ struct Slot {
     let homeEdge: Int?
     var plane: Int?
     var spawnAt: Double?
+    /// Whether this seat has flown yet: the opening wave flies in from the edge, and only a
+    /// replacement takes off from the side's airfield.
+    var launched = false
 }
 
 /// A tank's seat, which works the same way: a destroyed tank's replacement rolls in for the
@@ -70,6 +73,16 @@ struct Match {
     /// Kills credited to each side, planes and tanks alike — the card's tally.
     var score: [Int]
     var phase: MatchPhase = .fighting
+    /// Every sticker each side's aces have earned this match, kept after the ace is gone — the
+    /// card's record of them.
+    var stickers: [[Sticker]]
+    /// Each side's airfield, nil where the side comes on from the edge instead
+    /// (`Airfield.swift`). Planned by the sim once the match is drawn, since it needs the ground.
+    var bases: [Airfield?] = []
+    /// When the survivors turned for home, which is when the airfields start folding away.
+    var endingSince: Double?
+    /// Planes lost to collisions, which count toward the match's end but score for nobody.
+    var collisions = 0
 
     /// A match that has not reached its kill target by now ends anyway, so a stalemate can
     /// never hold the screen.
@@ -172,7 +185,8 @@ struct Match {
         let killTarget = planes * 2 + rand.index(count: planes + 1) + tankSlots.count
         return Match(index: index, mode: mode, tier: tier, scale: scale(planes: planes), slots: slots,
                      tankSlots: tankSlots, killTarget: killTarget, startedAt: now, lastKillAt: now,
-                     score: [Int](repeating: 0, count: sides))
+                     score: [Int](repeating: 0, count: sides),
+                     stickers: [[Sticker]](repeating: [], count: sides))
     }
 
     /// At most two tanks a side, per the plan. A free-for-all of twelve one-plane sides with two

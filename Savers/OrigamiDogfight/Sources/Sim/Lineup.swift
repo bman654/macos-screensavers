@@ -15,10 +15,15 @@ extension DogfightSim {
         tanks.removeAll()
         projectiles.removeAll()
         wrecks.removeAll()
+        drops.removeAll()
         let papers: [Paper] = [Paper(kind: .notebook, tint: 0), Paper(kind: .graph, tint: 0),
                                Paper(kind: .newspaper, tint: 0), Paper(kind: .kraft, tint: 0),
                                Paper(kind: .plain, tint: 0)]
         let now = time
+        // The top row wears an ace's stickers, none to all three left to right; the second row
+        // its paper's damage, clean to charred, so both can be checked on every model.
+        let kills = [0, 3, 5, 8, 8]
+        let worn: [Float] = [1, 0.7, 0.45, 0.2, 0.1]
         for (index, type) in PlaneType.allCases.enumerated() {
             let x = -1.8 + Float(index) * 0.9
             // Top row level, heading east (screen right); second row banked into a left turn,
@@ -27,10 +32,12 @@ extension DogfightSim {
                                                 (0.2, .pi / 2, 0.8, Paper(kind: .plain, tint: index + 1))] {
                 let pose = Pose(position: SIMD2(x, row), altitude: ViewRig.bandMid, heading: heading, bank: bank, pitch: 0)
                 let spec = type.spec(scale: 1)
-                planes.append(Plane(id: makeID(), slot: 0, side: index, type: type, weapon: spec.weapons[0],
-                                    paper: paper, spec: spec, state: .fighting, stateSince: now,
-                                    pose: pose, previous: pose, speed: spec.cruiseSpeed,
-                                    health: spec.armour, pilot: PilotMemory(lastShotAt: now, cruiseAltitude: ViewRig.bandMid)))
+                var plane = Plane(id: makeID(), slot: 0, side: index, type: type, weapon: spec.weapons[0],
+                                  paper: paper, spec: spec, state: .fighting, stateSince: now,
+                                  pose: pose, previous: pose, speed: spec.cruiseSpeed,
+                                  health: spec.armour, pilot: PilotMemory(lastShotAt: now, cruiseAltitude: ViewRig.bandMid))
+                if row > 0.5 { plane.kills = kills[index] } else { plane.health = spec.armour * worn[index] }
+                planes.append(plane)
             }
         }
         for (index, kind) in WeaponKind.allCases.enumerated() {
@@ -58,10 +65,21 @@ extension DogfightSim {
             let p = SIMD2<Float>(1.6 + Float(index) * 0.5, -1.15)
             let spec = type.spec(scale: 1)
             let altitude = terrain.surfaceHeight(at: p)
-            tanks.append(Tank(id: makeID(), slot: 0, side: index, type: type, paper: Paper(kind: .plain, tint: index),
-                              spec: spec, state: .patrol, stateSince: now, position: p, previousPosition: p,
-                              altitude: altitude, heading: 0, previousHeading: 0, turret: 0.7, previousTurret: 0.7,
-                              health: spec.armour, progressCheckAt: now, lastMovedAt: now))
+            var tank = Tank(id: makeID(), slot: 0, side: index, type: type, paper: Paper(kind: .plain, tint: index),
+                            spec: spec, state: .patrol, stateSince: now, position: p, previousPosition: p,
+                            altitude: altitude, heading: 0, previousHeading: 0, turret: 0.7, previousTurret: 0.7,
+                            health: spec.armour, progressCheckAt: now, lastMovedAt: now)
+            // One an ace, one badly knocked about.
+            if index == 0 { tank.kills = 5 } else { tank.health = spec.armour * 0.2 }
+            tanks.append(tank)
+        }
+        // A supply drop in the air over the right of the lineup, and one that has landed.
+        for (index, p) in [SIMD2<Float>(2.1, 0.5), SIMD2<Float>(2.1, -0.4)].enumerated() {
+            let altitude = index == 0 ? ViewRig.bandMid : terrain.surfaceHeight(at: p)
+            var drop = SupplyDrop(id: makeID(), kind: .tripleShot, spawnedAt: now, drift: SIMD2(0.02, 0), position: p,
+                                  previousPosition: p, altitude: altitude, previousAltitude: altitude)
+            if index == 1 { drop.state = .landed(at: now - 2) }
+            drops.append(drop)
         }
         let burning = SIMD2<Float>(2.6, -1.15)
         wrecks.append(Wreck(id: makeID(), model: .tank(.light), paper: Paper(kind: .plain, tint: 2), scale: 1,

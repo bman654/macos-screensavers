@@ -52,7 +52,8 @@ final class Scoreboard {
         let teams = match.mode != .ffa
         let entries = (0..<match.sides).map { side in
             ScoreCardContent.Entry(paper: match.slots.first { $0.side == side }?.paper ?? Paper(kind: .plain, tint: 0),
-                                   count: match.score[side])
+                                   count: match.score[side],
+                                   stickers: match.stickers.indices.contains(side) ? match.stickers[side] : [])
         }
         let body: ScoreCardContent.Body
         switch match.phase {

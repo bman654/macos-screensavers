@@ -16,6 +16,9 @@ extension DogfightSim {
     /// depth through the keel, plus some grace so a shot that looks on target is. At scale 1;
     /// a smaller plane is thinner by its scale.
     static let altitudeTolerance: Float = 0.08
+    /// Radians either side of the nose a triple shot's outer throws go: wide enough to be seen
+    /// as three, close enough that a target in the cone still takes one.
+    static let tripleFan: Float = 0.13
 
     func fireWeapon(_ i: Int, among others: [Plane], now: Double, dt: Float) {
         var me = planes[i]
@@ -43,7 +46,7 @@ extension DogfightSim {
             me.burstClimb = climb
             me.burstLeft = weapon.burst - 1
             me.burstTimer = weapon.burstInterval
-            me.cooldown = weapon.cooldown * combat.inRange(0.85, 1.2)
+            me.cooldown = weapon.cooldown * combat.inRange(0.85, 1.2) * reload(me, now: now)
             me.pilot.lastShotAt = now
             return
         }
@@ -67,10 +70,15 @@ extension DogfightSim {
             me.burstClimb = nil
             me.burstLeft = weapon.burst - 1
             me.burstTimer = weapon.burstInterval
-            me.cooldown = weapon.cooldown * combat.inRange(0.85, 1.2)
+            me.cooldown = weapon.cooldown * combat.inRange(0.85, 1.2) * reload(me, now: now)
             me.pilot.lastShotAt = now
             break
         }
+    }
+
+    /// A supply drop's rapid fire cuts the reload to under half.
+    private func reload(_ me: Plane, now: Double) -> Float {
+        me.powerUp(at: now) == .rapidFire ? 0.42 : 1
     }
 
     /// `climb` replaces the plane's own when the shot is aimed down at a tank.
@@ -78,9 +86,12 @@ extension DogfightSim {
         let weapon = me.gun
         let k = me.spec.scale
         emit(.fired(plane: me.id, weapon: me.weapon))
-        for pellet in 0..<weapon.pellets {
-            let fan = weapon.pellets > 1
-                ? (Float(pellet) / Float(weapon.pellets - 1) - 0.5) * 2 * weapon.spread : 0
+        // Triple shot: the same throw three times, fanned out either side of the nose.
+        let fans: [Float] = me.powerUp(at: time) == .tripleShot
+            ? [-DogfightSim.tripleFan, 0, DogfightSim.tripleFan] : [0]
+        for (pellet, extra) in (0..<weapon.pellets).flatMap({ p in fans.map { (p, $0) } }) {
+            let fan = extra + (weapon.pellets > 1
+                ? (Float(pellet) / Float(weapon.pellets - 1) - 0.5) * 2 * weapon.spread : 0)
             // Hand-thrown: every shot wanders a few degrees, which is what makes a long-range
             // shot a gamble and a close one a certainty.
             let angle = me.pose.heading + fan + combat.inRange(-0.14, 0.14)

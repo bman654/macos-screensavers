@@ -89,6 +89,37 @@ final class Effects {
         rings(at: position, reaches: [(0.0, 0.22 * k), (0.25, 0.14 * k)])
     }
 
+    /// Two planes meeting: scraps of both their papers burst out together, with a grey puff of
+    /// crumpled paper — bigger than a hit, so a collision is never mistaken for one.
+    func collision(at position: SIMD3<Float>, colors: [PaperColor], scale k: Float) {
+        for color in colors {
+            let scraps = paperBits(color: color, count: 26, speed: 0.34 * k, size: 0.016 * k, life: 1.1, scale: k)
+            burst(scraps, at: position, life: 2)
+        }
+        let puff = puffs(color: PaperColor(0.84, 0.82, 0.78), alpha: 0.5, count: 8, size: 0.04 * k,
+                         growTo: 0.12 * k, life: 0.9)
+        puff.particleVelocity = CGFloat(0.12 * k)
+        burst(puff, at: position, life: 1.4)
+    }
+
+    /// A supply crate taken: it bursts into paper confetti of every colour.
+    func cratePop(at position: SIMD3<Float>) {
+        let colours = [PaperColor(0.74, 0.56, 0.36), PaperColor(0.88, 0.20, 0.18), PaperColor(0.18, 0.42, 0.86),
+                       PaperColor(0.99, 0.80, 0.16), PaperColor(0.98, 0.96, 0.94)]
+        for color in colours {
+            let bits = paperBits(color: color, count: 7, speed: 0.2, size: 0.011, life: 0.9, scale: 0.8)
+            burst(bits, at: position, life: 2)
+        }
+    }
+
+    /// A sticker earned: a quick twinkle of gold over the ace.
+    func sparkle(at position: SIMD3<Float>, scale k: Float) {
+        let bits = paperBits(color: PaperColor(1.0, 0.86, 0.3), count: 14, speed: 0.2 * k, size: 0.012 * k, life: 0.8,
+                             scale: k * 0.3)
+        bits.particleColorVariation = SCNVector4(0.04, 0.2, 0.2, 0)
+        burst(bits, at: position, life: 1.4)
+    }
+
     /// A shot coming down in a lake: the same splash in miniature — a few blue paper bits and
     /// one small ring, sized to the shot rather than to a plane.
     func shotSplash(at position: SIMD3<Float>, size: Float) {
@@ -133,6 +164,21 @@ final class Effects {
         system.birthRate = 7
         system.loops = true
         system.emissionDuration = 1
+        return system
+    }
+
+    /// Glitter behind a plane carrying a supply drop's weapon: gold for triple shot, a cool white
+    /// for rapid fire, so the two read differently at a glance. Left in world space, so it
+    /// streams out behind.
+    func glintTrail(_ kind: PowerUpKind, scale k: Float) -> SCNParticleSystem {
+        let color = kind == .tripleShot ? PaperColor(1.0, 0.82, 0.24) : PaperColor(0.82, 0.92, 1.0)
+        let system = paperBits(color: color, count: 0, speed: 0.04 * k, size: 0.011 * k, life: 0.8, scale: k * 0.2)
+        system.birthRate = 30
+        system.loops = true
+        system.emissionDuration = 1
+        system.particleColorVariation = SCNVector4(0.03, 0.1, 0.15, 0)
+        // Glitter catches the light: a little glow, so it reads over the meadow as well as the lake.
+        system.blendMode = .additive
         return system
     }
 

@@ -18,6 +18,10 @@ struct Ground {
     private let obstacles: SpacingGrid
     /// One per terrain face: lake, rock, snow, or too steep for a tank to be seen on.
     private let forbidden: [Bool]
+    /// What this match has built on the landscape — the airfields' hangars — each a disc a tank
+    /// keeps out of. A tank may still drive *out* of one, which is how it leaves the hangar it
+    /// rolled out of (`isDriveable(_:footprint:leaving:)`).
+    var structures: [(center: SIMD2<Float>, radius: Float)] = []
 
     /// Rise over run. A meadow's crumple is about 0.1 and a hill's flank 0.3–0.5; past this a
     /// tank would be seen climbing a slope it plainly could not.
@@ -53,6 +57,19 @@ struct Ground {
     /// footprint — the hull's own width — since a tank brushing a tree's canopy is how a tank
     /// threads a wood.
     func isDriveable(_ p: SIMD2<Float>, footprint r: Float) -> Bool {
+        isOpenGround(p, footprint: r) && !structures.contains { simd_distance($0.center, p) < $0.radius + r * 0.5 }
+    }
+
+    /// The same, for a tank moving from `from` to `p`: a structure it is already inside does not
+    /// stop it so long as the move takes it further out.
+    func isDriveable(_ p: SIMD2<Float>, footprint r: Float, leaving from: SIMD2<Float>) -> Bool {
+        isOpenGround(p, footprint: r) && !structures.contains { s in
+            let distance = simd_distance(s.center, p)
+            return distance < s.radius + r * 0.5 && distance <= simd_distance(s.center, from)
+        }
+    }
+
+    private func isOpenGround(_ p: SIMD2<Float>, footprint r: Float) -> Bool {
         !terrain.lattice.anyFace(touching: p, radius: r) { forbidden[$0] }
             && !obstacles.isOccupied(p, radius: r * 0.5)
     }

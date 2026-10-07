@@ -225,6 +225,8 @@ enum PaperTextures {
 /// One material per paper, shared by every plane folded from it.
 final class PaperMaterials {
     private var cache: [String: SCNMaterial] = [:]
+    /// The same papers with damage marks over them (`DamageMarks`).
+    var damaged: [String: SCNMaterial] = [:]
     private let seed: UInt64
 
     init(seed: UInt64) { self.seed = seed }
