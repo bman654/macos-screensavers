@@ -18,8 +18,10 @@ lined paper is a small image packaged with it.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
@@ -37,6 +39,8 @@ _ERROR = re.compile(r"Error|Traceback")
 # model that breaks it has almost certainly grown a texture or a dense mesh by accident.
 _BUDGET_BYTES = 3_000_000
 _KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke")
+_FACE_VARYING_NORMALS = re.compile(
+    r"normal3f\[\] (?:primvars:)?normals = \[[^\]]*\]\s*\(\s*interpolation = \"faceVarying\"")
 
 
 class BuildFailure(RuntimeError):
@@ -123,7 +127,9 @@ def _validate(name, kind, asset, manifest_path):
     for mesh, body in meshes.items():
         # Flat shading travels as one normal per face corner. Without authored normals an
         # importer would invent smooth ones.
-        if "normal3f[] normals" not in body or 'interpolation = "faceVarying"' not in body:
+        # Bound to the normals themselves: the sheet UVs are faceVarying too, so a bare search
+        # for the interpolation passes a mesh whose normals are smooth.
+        if not _FACE_VARYING_NORMALS.search(body):
             raise BuildFailure(f"{asset.name}: mesh {mesh!r} has no per-corner normals")
     for material in manifest["materials"]:
         if f'def Material "{material}"' not in usda:
@@ -132,16 +138,27 @@ def _validate(name, kind, asset, manifest_path):
     if kind == "plane":
         if manifest["materials"] != ["paper"]:
             raise BuildFailure(f"{name}: a plane has exactly one material, paper")
-        if not manifest.get("sheetAspect", 0) > 0:
-            raise BuildFailure(f"{name}: a plane's manifest needs sheetAspect")
+        # The runtime sizes a generated bitmap from this and falls back to letter paper outside
+        # the same range, so a value it would refuse is refused here first.
+        aspect = manifest.get("sheetAspect")
+        if (isinstance(aspect, bool) or not isinstance(aspect, (int, float))
+                or not math.isfinite(aspect) or not 0.25 <= aspect <= 4):
+            raise BuildFailure(f"{name}: sheetAspect must be a number in [0.25, 4], got {aspect!r}")
         if list(meshes) != [name]:
             raise BuildFailure(f"{name}: a plane is one mesh named {name!r}, got {list(meshes)}")
         uv = re.search(r"texCoord2f\[\] primvars:st = \[(.*?)\]", meshes[name], re.DOTALL)
         if uv is None:
             raise BuildFailure(f"{name}: no primvars:st sheet UVs")
-        values = [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", uv.group(1))]
-        if min(values) < -1e-6 or max(values) > 1 + 1e-6:
-            raise BuildFailure(f"{name}: sheet UVs leave [0, 1]")
+        # Every component, parsed whatever it says: a number-shaped regex skips `nan` and `inf`
+        # outright, and a NaN compares false against both ends of the range.
+        values = []
+        for pair in re.findall(r"\(([^()]*)\)", uv.group(1)):
+            try:
+                values.extend(float(v) for v in pair.split(","))
+            except ValueError:
+                raise BuildFailure(f"{name}: unreadable sheet UV {pair!r}") from None
+        if not values or not all(math.isfinite(v) and -1e-6 <= v <= 1 + 1e-6 for v in values):
+            raise BuildFailure(f"{name}: sheet UVs leave [0, 1] or are not finite")
     if kind == "fire":
         flames = [entry["node"] for entry in manifest.get("flames", [])]
         expected = [f"flame_{i}" for i in range(len(flames))]
@@ -150,9 +167,13 @@ def _validate(name, kind, asset, manifest_path):
         missing = [flame for flame in flames if flame not in meshes]
         if missing:
             raise BuildFailure(f"{asset.name} has no Mesh prim for {missing}")
-    textures = [m for m in members if m.lower().endswith((".png", ".jpg", ".jpeg"))]
-    if re.search(r"asset inputs:file", usda) and not textures:
-        raise BuildFailure(f"{asset.name} references a texture it does not contain")
+    # Each reference must name a member that is actually packaged, resolved against the root
+    # layer — any image at all in the archive would otherwise satisfy a reference to another.
+    root = posixpath.dirname(members[0]) if members else ""
+    for reference in re.findall(r"asset inputs:file = @([^@]*)@", usda):
+        resolved = posixpath.normpath(posixpath.join(root, reference))
+        if resolved not in members:
+            raise BuildFailure(f"{asset.name} references {reference!r}, which it does not contain")
     return asset.stat().st_size + manifest_path.stat().st_size
 
 

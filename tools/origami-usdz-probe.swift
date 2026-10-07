@@ -347,7 +347,10 @@ func analyse(node: SCNNode, root: SCNNode, indent: String, isPlane: Bool) -> Geo
     let isPaper = geometry.materials.contains { $0.name == "paper" }
     if isPaper {
         if let uv = uvSets.first, !uv.isEmpty {
-            report.paperUVOutOfRange = uv.contains { $0.x < -1e-4 || $0.x > 1 + 1e-4 || $0.y < -1e-4 || $0.y > 1 + 1e-4 }
+            // Written as "not inside", because a NaN compares false against both ends of a range
+            // and would otherwise count as in range.
+            let unit: ClosedRange<Float> = -1e-4...(1 + 1e-4)
+            report.paperUVOutOfRange = uv.contains { !(unit.contains($0.x) && unit.contains($0.y)) }
         } else {
             report.paperWithoutUV = true
         }
