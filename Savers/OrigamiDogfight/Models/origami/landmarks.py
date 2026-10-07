@@ -96,6 +96,12 @@ def _walls(name, length, width, eaves, material, ridge=None):
     return mesh_object(name, vertices, faces, [material])
 
 
+def window_material():
+    """House windows are their own material, so the runtime can light them in the evening.
+    Unlit they are the door's dark paper, and every model with windows shares this one."""
+    return flat_material("paper_window", "#42372f")
+
+
 def _front_face(name, x, y, bottom, width, height, material):
     # A tiny offset avoids coplanar depth fighting after export and runtime rescaling.
     vertices = [(x + 0.012, y - width * 0.5, bottom),
@@ -110,6 +116,7 @@ def _house_a():
     roof = flat_material("paper_roof_red", "#c8402e")
     edge = flat_material("paper_roof_edge", "#ecd4b9")
     door = flat_material("paper_door", "#42372f")
+    window = window_material()
     objects = [_walls("house_a_walls", 5.8, 4.2, 2.365, wall, ridge=3.765)]
     vertices = [(-3.2, -2.4, 2.20), (3.2, -2.4, 2.20),
                 (-3.2, 0, 3.80), (3.2, 0, 3.80),
@@ -117,7 +124,7 @@ def _house_a():
     objects.append(_paper_shell("house_a_roof", vertices, [(0, 1, 3, 2), (2, 3, 5, 4)],
                                 [roof, edge], thickness=0.035, edge_material=1))
     objects.append(_front_face("house_a_door", 2.9, -0.45, 0, 0.86, 1.42, door))
-    objects.append(_front_face("house_a_window", 2.9, 1.03, 0.88, 0.64, 0.68, door))
+    objects.append(_front_face("house_a_window", 2.9, 1.03, 0.88, 0.64, 0.68, window))
     return join(objects, "house_a"), {}
 
 
@@ -127,6 +134,7 @@ def _house_b():
     hip = flat_material("paper_roof_blue_hip", "#4787af")
     edge = flat_material("paper_roof_edge", "#ecd4b9")
     door = flat_material("paper_door", "#42372f")
+    window = window_material()
     objects = [_walls("house_b_walls", 4.6, 4.6, 2.8, wall)]
     vertices = [(-2.54, -2.6, 2.64), (2.54, -2.6, 2.64),
                 (2.54, 2.6, 2.64), (-2.54, 2.6, 2.64),
@@ -136,8 +144,8 @@ def _house_b():
                                 [roof, hip, edge], [0, 1, 0, 1],
                                 thickness=0.035, edge_material=2))
     objects.append(_front_face("house_b_door", 2.3, 0, 0, 0.9, 1.63, door))
-    objects.append(_front_face("house_b_window_left", 2.3, 1.42, 1.15, 0.61, 0.77, door))
-    objects.append(_front_face("house_b_window_right", 2.3, -1.42, 1.15, 0.61, 0.77, door))
+    objects.append(_front_face("house_b_window_left", 2.3, 1.42, 1.15, 0.61, 0.77, window))
+    objects.append(_front_face("house_b_window_right", 2.3, -1.42, 1.15, 0.61, 0.77, window))
     return join(objects, "house_b"), {}
 
 

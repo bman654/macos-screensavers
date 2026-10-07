@@ -11,21 +11,26 @@ contract subtly different from its neighbours.
 from dataclasses import dataclass, field
 from typing import Callable
 
-KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke", "tank")
+KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke", "tank",
+         "bird", "crate", "parachute", "landmark", "animal", "vehicle", "building")
 
 # Things that stand on the landscape are seated on z = 0. Everything else flies, or is
 # placed by the simulation at an arbitrary height, and is centred on its own bounding box
-# so that a rotation about the node's origin turns it about its middle.
-GROUNDED = frozenset({"tree", "rock", "house", "boat", "fire", "tank"})
+# so that a rotation about the node's origin turns it about its middle. A crate falls but
+# lands, so it is seated like a prop; a parachute is seated the same way because its lowest
+# point is where it hangs from — the knot of its strings, on its axis — and that is the
+# point the runtime ties to the crate's lid.
+GROUNDED = frozenset({"tree", "rock", "house", "boat", "fire", "tank",
+                      "crate", "parachute", "landmark", "animal", "vehicle", "building"})
 
 
 @dataclass(frozen=True)
 class Model:
     name: str
     kind: str
-    # () -> (root object, extra manifest fields). The root is either the one mesh object
-    # named `name`, or an Empty named `name` whose children are the parts the runtime
-    # addresses by name (a fire's `flame_<n>`, a tank's `turret`).
+    # () -> (root object, extra manifest fields). The root is a mesh object or an Empty
+    # named `name`; its children, if any, are the parts the runtime addresses by name (a
+    # fire's `flame_<n>`, a tank's `turret`, a crane's `wing_l`, a windmill's `blades`).
     build: Callable[[], tuple]
     summary: str = ""
     # Review-sheet hints only; never read by the runtime.

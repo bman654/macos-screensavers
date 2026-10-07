@@ -8,8 +8,8 @@ Each model is built headlessly by `Savers/OrigamiDogfight/Models/build_model.py`
 checks the asset contract inside Blender before writing anything. This script checks it
 again from the outside, on the files the saver will actually load: the archive is a USDZ,
 `usdcat` can load it, every mesh carries per-face normals, the manifest says what the
-contract says it must, and a plane's sheet UVs, a fire's flames and a tank's turret are
-really in the file.
+contract says it must, and a plane's sheet UVs, a fire's flames, a tank's turret, a crane's
+wings, a windmill's blades and a parachute's knot are really in the file.
 Nothing is installed unless every selected model passes.
 
 No textures are baked: every model is flat colour except the crumpled paper ball, whose
@@ -39,7 +39,10 @@ _ERROR = re.compile(r"Error|Traceback")
 # when it was first built. The budget is generous headroom over that, not a target, and a
 # model that breaks it has almost certainly grown a texture or a dense mesh by accident.
 _BUDGET_BYTES = 3_000_000
-_KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke", "tank")
+_KINDS = ("plane", "projectile", "tree", "rock", "house", "boat", "fire", "smoke", "tank",
+          "bird", "crate", "parachute", "landmark", "animal", "vehicle", "building")
+# Kinds whose `paper` the runtime replaces, so it must arrive with sheet UVs and a sheet shape.
+_TINTED = ("tank", "bird", "vehicle", "building")
 _FACE_VARYING_NORMALS = re.compile(
     r"normal3f\[\] (?:primvars:)?normals = \[[^\]]*\]\s*\(\s*interpolation = \"faceVarying\"")
 
@@ -137,12 +140,79 @@ def _check_turret(name, manifest, meshes, bounds):
     if (not isinstance(muzzles, list) or not muzzles
             or not all(_finite_vector(m) and m[0] > 0 for m in muzzles)):
         raise BuildFailure(f"{name}: turret muzzles {muzzles!r} must be points ahead of the pivot")
-    if "turret" not in meshes:
-        raise BuildFailure(f"{name}: no Mesh prim named 'turret', got {list(meshes)}")
-    translate = re.search(r"double3 xformOp:translate = \(([^)]*)\)", meshes["turret"])
+    _check_node_at(name, meshes, "turret", pivot)
+
+
+def _check_node_at(name, meshes, node, point):
+    """The runtime turns `node` about its own origin, so the prim must be in the file and its
+    origin where the manifest says the pivot is."""
+    if node not in meshes:
+        raise BuildFailure(f"{name}: no Mesh prim named {node!r}, got {list(meshes)}")
+    if not _finite_vector(point):
+        raise BuildFailure(f"{name}: the manifest's pivot for {node} is {point!r}")
+    translate = re.search(r"double3 xformOp:translate = \(([^)]*)\)", meshes[node])
     placed = [float(v) for v in translate.group(1).split(",")] if translate else [0.0] * 3
-    if max(abs(a - b) for a, b in zip(placed, pivot)) > 1e-5:
-        raise BuildFailure(f"{name}: the turret prim sits at {placed}, the manifest says {pivot}")
+    if max(abs(a - b) for a, b in zip(placed, point)) > 1e-5:
+        raise BuildFailure(f"{name}: the {node} prim sits at {placed}, the manifest says {point}")
+
+
+def _check_wings(name, manifest, meshes):
+    wings = manifest.get("wings")
+    if not isinstance(wings, dict) or wings.get("axis") != [1, 0, 0]:
+        raise BuildFailure(f"{name}: manifest wings must turn about [1, 0, 0], got {wings!r}")
+    nodes = {entry.get("node"): entry for entry in wings.get("nodes", [])
+             if isinstance(entry, dict)}
+    if sorted(nodes) != ["wing_l", "wing_r"] or len(wings["nodes"]) != 2:
+        raise BuildFailure(f"{name}: manifest wings must be wing_l and wing_r, got {list(nodes)}")
+    if nodes["wing_l"].get("lift") != 1 or nodes["wing_r"].get("lift") != -1:
+        raise BuildFailure(f"{name}: a positive turn about +X lifts wing_l and lowers wing_r")
+    span = wings.get("range")
+    if not (isinstance(span, list) and len(span) == 2 and -90 <= span[0] < 0 < span[1] <= 90):
+        raise BuildFailure(f"{name}: wing range {span!r} must span level, within 90 degrees")
+    for node, entry in nodes.items():
+        _check_node_at(name, meshes, node, entry.get("pivot"))
+
+
+def _check_blades(name, manifest, meshes, bounds):
+    blades = manifest.get("blades")
+    if (not isinstance(blades, dict) or blades.get("node") != "blades"
+            or blades.get("axis") != [1, 0, 0] or blades.get("turn") not in (1, -1)):
+        raise BuildFailure(f"{name}: manifest blades must name the node, turn about [1, 0, 0] "
+                           f"and give a turn of 1 or -1, got {blades!r}")
+    radius, (lo, hi) = blades.get("radius"), bounds
+    if (isinstance(radius, bool) or not isinstance(radius, (int, float))
+            or not 0 < radius <= max(b - a for a, b in zip(lo, hi))):
+        raise BuildFailure(f"{name}: blade radius {radius!r} is not a reach the model has")
+    _check_node_at(name, meshes, "blades", blades.get("hub"))
+
+
+def _check_opening(name, manifest, bounds):
+    opening, (lo, hi) = manifest.get("opening"), bounds
+    if not isinstance(opening, dict) or not _finite_vector(opening.get("centre")):
+        raise BuildFailure(f"{name}: manifest opening needs a centre, got {opening!r}")
+    centre, width, height = opening["centre"], opening.get("width"), opening.get("height")
+    if abs(centre[0] - hi[0]) > 1e-3 or abs(centre[2] - lo[2]) > 1e-5:
+        raise BuildFailure(f"{name}: the opening {centre} is not on the floor at the front")
+    for value, limit in ((width, hi[1] - lo[1]), (height, hi[2] - lo[2])):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= limit:
+            raise BuildFailure(f"{name}: opening {width} x {height} m does not fit the model")
+
+
+def _check_knot(name, meshes):
+    """A parachute hangs from its origin: every one of its lowest points is on its axis."""
+    points = []
+    for body in meshes.values():
+        found = re.search(r"point3f\[\] points = \[(.*?)\]", body, re.DOTALL)
+        if found:
+            points += [tuple(float(v) for v in p.split(","))
+                       for p in re.findall(r"\(([^()]*)\)", found.group(1))]
+    if not points:
+        raise BuildFailure(f"{name}: no points to find the knot among")
+    lowest = min(p[2] for p in points)
+    stray = [p for p in points if p[2] < lowest + 1e-4 and math.hypot(p[0], p[1]) > 1e-4]
+    if abs(lowest) > 1e-5 or stray:
+        raise BuildFailure(f"{name}: the lowest point must be the knot at the origin; lowest "
+                           f"z {lowest}, off-axis {stray[:1]}")
 
 
 def _validate(name, kind, asset, manifest_path):
@@ -195,14 +265,28 @@ def _validate(name, kind, asset, manifest_path):
         if list(meshes) != [name]:
             raise BuildFailure(f"{name}: a plane is one mesh named {name!r}, got {list(meshes)}")
         _check_sheet_uvs(name, name, meshes[name])
-    if kind == "tank":
+    if kind in _TINTED:
         if "paper" not in manifest["materials"]:
-            raise BuildFailure(f"{name}: a tank's hull and turret need the material paper")
+            raise BuildFailure(f"{name}: a {kind} needs the material paper for the runtime to tint")
         _check_sheet_aspect(name, manifest)
+        papered = [mesh for mesh, body in meshes.items() if "/_materials/paper>" in body]
+        if not papered:
+            raise BuildFailure(f"{name}: no mesh is bound to the material paper")
+        for mesh in papered:
+            _check_sheet_uvs(name, mesh, meshes[mesh])
+    if kind == "tank":
         _check_turret(name, manifest, meshes, (lo, hi))
         # Hull and turret both carry paper, so every mesh in a tank is textured.
-        for mesh, body in meshes.items():
-            _check_sheet_uvs(name, mesh, body)
+        if len(papered) != len(meshes):
+            raise BuildFailure(f"{name}: hull and turret both need paper, got {papered}")
+    if kind == "bird":
+        _check_wings(name, manifest, meshes)
+    if "blades" in manifest or "blades" in meshes:
+        _check_blades(name, manifest, meshes, (lo, hi))
+    if kind == "building":
+        _check_opening(name, manifest, (lo, hi))
+    if kind == "parachute":
+        _check_knot(name, meshes)
     if kind == "fire":
         flames = [entry["node"] for entry in manifest.get("flames", [])]
         expected = [f"flame_{i}" for i in range(len(flames))]

@@ -1,8 +1,10 @@
 // What SceneKit actually makes of an Origami Dogfight model: the node tree, the geometry and
 // materials that survived the Blender → USDZ export, how the Blender axes arrive, whether every
 // face is still flat, what the paper's UVs look like, whether the fire's flames pivot about
-// their bases, and whether a tank's turret turns cleanly about its own origin. It renders each model offscreen with the axis correction the runtime uses, so a
-// broken export is a picture and a FAIL line rather than a surprise inside the saver.
+// their bases, whether a tank's turret turns cleanly about its own origin, whether a crane's
+// wings and a windmill's blades turn cleanly about their hinges, and whether a parachute hangs
+// from its origin. It renders each model offscreen with the axis correction the runtime uses,
+// so a broken export is a picture and a FAIL line rather than a surprise inside the saver.
 //
 // The contract it checks is `docs/origami-plan.md` §Asset contract.
 //
@@ -18,8 +20,10 @@
 // down, nose up the image), `<name>_34.png` (from front-left-above), and with `--lined`
 // `<name>_top_lined.png`, the paper replaced by a lined-notebook sheet so the UV layout — and
 // whether SceneKit flips v — can be seen. A tank adds `<name>_top_turret_45.png` and `_90`,
-// its turret turned the way the runtime turns it. A `<name>.json` manifest beside the usdz, when present,
-// is the reference for the bounds and the axis verdict. Exits nonzero if any file FAILs.
+// its turret turned the way the runtime turns it; a crane adds `<name>_top_flap_<deg>.png` and
+// `_34_flap_<deg>`, its wings at the ends of their range; a windmill `<name>_top_blades_<deg>`
+// and `_34_blades_<deg>`. A `<name>.json` manifest beside the usdz, when present, is the
+// reference for the bounds, the axis verdict and every pivot. Exits nonzero if any file FAILs.
 //
 // Never opens a window or takes focus: `SCNRenderer` offscreen, no `NSApplication`.
 
@@ -88,12 +92,53 @@ struct Box {
     }
 }
 
+/// How a hinged node moves, which decides the angles it is checked and drawn at.
+enum HingePose: Hashable {
+    /// A wing, which may travel from `down` to `up` degrees of lift.
+    case flap(down: Float, up: Float)
+    /// Blades, which turn all the way round.
+    case blades
+
+    var name: String {
+        switch self {
+        case .flap: return "flap"
+        case .blades: return "blades"
+        }
+    }
+
+    var checked: [Float] {
+        switch self {
+        case let .flap(down, up): return [down, up / 2, up]
+        case .blades: return [22.5, 45, 90]
+        }
+    }
+
+    var drawn: [Float] {
+        switch self {
+        case let .flap(down, up): return [down, up]
+        case .blades: return [22.5, 45]
+        }
+    }
+}
+
+/// A node the runtime turns about its own X axis: a crane's wing, a windmill's blades.
+struct Hinge {
+    let node: String
+    /// Its origin, in Blender axes.
+    let pivot: SIMD3<Float>
+    /// The sign of a turn about +X that the runtime calls positive: +1 lifts wing_l, -1 lifts
+    /// wing_r; blades turn the way the wind drives them.
+    let sign: Float
+    let pose: HingePose
+}
+
 struct Manifest {
     let kind: String?
     let bounds: Box?
     let sheetAspect: Float?
     /// A tank's turret origin, in Blender axes.
     let turretPivot: SIMD3<Float>?
+    let hinges: [Hinge]
 }
 
 /// The manifest beside the usdz, or nil when there is none. A manifest that exists but does
@@ -112,10 +157,33 @@ func loadManifest(beside usdz: URL) -> (Manifest?, String?) {
     if let b = json["bounds"] as? [String: Any], let lo = vec(b["min"]), let hi = vec(b["max"]) {
         bounds = Box(lo: lo, hi: hi)
     }
+    var hinges: [Hinge] = []
+    var problem: String? = bounds == nil ? "manifest has no usable bounds" : nil
+    if let wings = json["wings"] as? [String: Any] {
+        let range = (wings["range"] as? [NSNumber])?.map(\.floatValue) ?? []
+        for entry in wings["nodes"] as? [[String: Any]] ?? [] {
+            guard let node = entry["node"] as? String, let pivot = vec(entry["pivot"]),
+                  let lift = (entry["lift"] as? NSNumber)?.floatValue, range.count == 2 else {
+                problem = "manifest wings entry \(entry) is incomplete"
+                continue
+            }
+            hinges.append(Hinge(node: node, pivot: pivot, sign: lift,
+                                pose: .flap(down: range[0], up: range[1])))
+        }
+    }
+    if let blades = json["blades"] as? [String: Any] {
+        if let node = blades["node"] as? String, let hub = vec(blades["hub"]),
+           let turn = (blades["turn"] as? NSNumber)?.floatValue {
+            hinges.append(Hinge(node: node, pivot: hub, sign: turn, pose: .blades))
+        } else {
+            problem = "manifest blades \(blades) is incomplete"
+        }
+    }
     return (Manifest(kind: json["kind"] as? String, bounds: bounds,
                      sheetAspect: (json["sheetAspect"] as? NSNumber)?.floatValue,
-                     turretPivot: vec((json["turret"] as? [String: Any])?["pivot"])),
-            bounds == nil ? "manifest has no usable bounds" : nil)
+                     turretPivot: vec((json["turret"] as? [String: Any])?["pivot"]),
+                     hinges: hinges),
+            problem)
 }
 
 // MARK: - Geometry reading
@@ -764,6 +832,84 @@ func checkTurret(root: SCNNode, map: AxisMap, manifest: Manifest?, failures: ino
     return turret
 }
 
+/// Every node the manifest says turns about its own X axis — a crane's wings, a windmill's
+/// blades — checked the way the runtime turns it: `node.simdOrientation = rest * quat(angle,
+/// (1, 0, 0))`. Its origin must be where the manifest puts the pivot, its own X must be the
+/// model's X, and at every angle each vertex must keep both its place along the axis and its
+/// distance from it: anything else is a wobble, a shear or a pivot off the hinge line.
+func checkHinges(root: SCNNode, map: AxisMap, manifest: Manifest?,
+                 failures: inout [String]) -> [(SCNNode, Hinge)] {
+    guard let hinges = manifest?.hinges, !hinges.isEmpty else { return [] }
+    let axis = map.matrix * SIMD3<Float>(1, 0, 0)
+    print("-- hinges (turned about their own X; Blender +X is root \(dominantAxis(axis)))")
+    var found: [(SCNNode, Hinge)] = []
+    for hinge in hinges {
+        guard let node = root.childNode(withName: hinge.node, recursively: true) else {
+            failures.append("no node named \(hinge.node)")
+            continue
+        }
+        guard let local = node.geometry?.sources(for: .vertex).first.flatMap(points(of:)),
+              !local.isEmpty else {
+            failures.append("\(hinge.node) carries no readable geometry")
+            continue
+        }
+        let pivot = root.simdConvertPosition(.zero, from: node)
+        let off = simd_length(pivot - map.matrix * hinge.pivot)
+        let tilt = angleDegrees(root.simdConvertVector(SIMD3(1, 0, 0), from: node), axis)
+        print("  \(path(of: node, under: root))  pivot \(fmt(pivot, 6))\(transformSummary(node))")
+        print(String(format: "    manifest pivot (Blender axes) %@, off by %.4f mm; own X vs Blender X: %.2f°",
+                     fmt(hinge.pivot, 6), off * 1000, tilt))
+        if off > boundsTolerance { failures.append(String(format: "\(hinge.node) pivot %.2f mm from the manifest's", off * 1000)) }
+        if tilt > 0.5 { failures.append("\(hinge.node)'s own X is not the model's X") }
+
+        let rest = node.simdOrientation
+        let before = local.map { root.simdConvertPosition($0, from: node) }
+        func radius(_ p: SIMD3<Float>) -> Float {
+            let d = p - pivot
+            return simd_length(d - simd_dot(d, axis) * axis)
+        }
+        let reach = before.map(radius).max() ?? 0
+        for degrees in hinge.pose.checked {
+            node.simdOrientation = rest * simd_quatf(angle: hinge.sign * degrees * .pi / 180, axis: SIMD3(1, 0, 0))
+            let drift = simd_length(root.simdConvertPosition(.zero, from: node) - pivot)
+            var along: Float = 0, across: Float = 0
+            for (q, b) in zip(local, before) {
+                let a = root.simdConvertPosition(q, from: node)
+                along = max(along, abs(simd_dot(a - b, axis)))
+                across = max(across, abs(radius(a) - radius(b)))
+            }
+            print(String(format: "    %@ %5.1f°: pivot drift %.4f mm, worst shift along the axis %.4f mm,"
+                         + " worst change of reach %.4f mm (reach %.4f m)",
+                         hinge.pose.name, degrees, drift * 1000, along * 1000, across * 1000, reach))
+            if max(drift, along, across) > boundsTolerance {
+                failures.append(String(format: "\(hinge.node) does not turn cleanly about its hinge at %.1f°", degrees))
+            }
+        }
+        node.simdOrientation = rest
+        found.append((node, hinge))
+    }
+    return found
+}
+
+/// A parachute hangs from its origin: its lowest points are the knot, on its up axis.
+func checkKnot(root: SCNNode, map: AxisMap, failures: inout [String]) {
+    let up = map.matrix * SIMD3<Float>(0, 0, 1)
+    var all: [SIMD3<Float>] = []
+    for node in geometryNodes(under: root) {
+        for p in node.geometry?.sources(for: .vertex).first.flatMap(points(of:)) ?? [] {
+            all.append(root.simdConvertPosition(p, from: node))
+        }
+    }
+    guard let lowest = all.map({ simd_dot($0, up) }).min() else { return }
+    let knot = all.filter { simd_dot($0, up) < lowest + 1e-4 }
+    let worst = knot.map { simd_length($0 - simd_dot($0, up) * up) }.max() ?? 0
+    print(String(format: "-- knot: lowest point %.6f m up, %d vertices there, furthest %.4f mm off the axis",
+                 lowest, knot.count, worst * 1000))
+    if abs(lowest) > boundsTolerance || worst > boundsTolerance {
+        failures.append("the parachute does not hang from its origin")
+    }
+}
+
 // MARK: - Probe one file
 
 func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
@@ -823,6 +969,9 @@ func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
     let flames = checkFlames(root: root, map: map, failures: &failures)
     if isFire && flames.isEmpty { failures.append("fire model has no flame_<n> nodes") }
     let turret = checkTurret(root: root, map: map, manifest: manifest, failures: &failures)
+    let hinged = checkHinges(root: root, map: map, manifest: manifest, failures: &failures)
+    if manifest?.kind == "bird", hinged.count != 2 { failures.append("a bird needs wing_l and wing_r") }
+    if manifest?.kind == "parachute" { checkKnot(root: root, map: map, failures: &failures) }
 
     // Rendering: the runtime renders paper double-sided, so the probe does too.
     let rotation = pivotRotation(for: map)
@@ -849,6 +998,19 @@ func probe(_ url: URL, options: Options, device: MTLDevice) -> [String] {
             render(staged.top, "top_turret_\(degrees)")
         }
         turret.simdOrientation = rest
+    }
+    // Every hinge of one pose together, as the runtime drives them: both wings, or the blades.
+    let poses = Dictionary(grouping: hinged, by: { $0.1.pose })
+    for (pose, members) in poses.sorted(by: { $0.key.name < $1.key.name }) {
+        let rests = members.map { $0.0.simdOrientation }
+        for degrees in pose.drawn {
+            for (node, hinge) in members {
+                node.simdOrientation = node.simdOrientation * simd_quatf(angle: hinge.sign * degrees * .pi / 180, axis: SIMD3(1, 0, 0))
+            }
+            render(staged.top, "top_\(pose.name)_\(Int(degrees))")
+            render(staged.threeQuarter, "34_\(pose.name)_\(Int(degrees))")
+            for (k, (node, _)) in members.enumerated() { node.simdOrientation = rests[k] }
+        }
     }
     if options.lined {
         let papers = geometryNodes(under: scene.rootNode).flatMap { $0.geometry!.materials }.filter { $0.name == "paper" }

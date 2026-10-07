@@ -30,6 +30,7 @@ sys.path[:0] = [os.path.join(_REPO, "tools", "blender"), _HERE]
 
 from saverlib import studio  # noqa: E402
 from origami import CATALOG  # noqa: E402
+import contract_checks as checks  # noqa: E402
 
 # Overhead is the in-game view, so it is in every sheet twice: straight down, and at the
 # slight tilt the saver's camera actually has.
@@ -57,17 +58,25 @@ _SIZE_RANGE = {
     "fire": (0.05, 1.0),
     "smoke": (0.02, 1.0),
     "tank": (0.05, 0.4),
+    "bird": (0.08, 0.4),
+    "crate": (0.02, 0.15),
+    "parachute": (0.04, 0.4),
+    "landmark": (2.0, 25.0),
+    "animal": (0.3, 5.0),
+    "vehicle": (1.0, 12.0),
+    "building": (4.0, 40.0),
 }
 
+# Kinds whose `paper` the runtime replaces with a side's (or a crane's) paper, so it needs
+# UVs and the manifest needs the sheet's shape. A projectile's paper is its own texture.
+_TINTED = frozenset({"tank", "bird", "vehicle", "building"})
 
-class ContractError(RuntimeError):
-    pass
+
+ContractError = checks.ContractError
 
 
 def _meshes(root):
-    if root.type == "MESH":
-        return [root]
-    return [obj for obj in root.children_recursive if obj.type == "MESH"]
+    return [obj for obj in (root, *root.children_recursive) if obj.type == "MESH"]
 
 
 def _apply_scales(root):
@@ -104,13 +113,16 @@ def _seat(model, root):
         if root.location.length > 1e-9 or root.parent is not None:
             raise ContractError(f"{root.name}: a mesh root must sit at the origin")
         root.data.transform(Matrix.Translation(-offset))
+        # Moving the root's mesh does not move its children: they hang off the object.
+        for child in root.children:
+            child.location -= offset
     else:
         if root.location.length > 1e-9:
             raise ContractError(f"{root.name}: the root Empty must sit at the origin")
         for child in root.children:
             child.location -= offset
     bpy.context.view_layer.update()
-    return studio.world_mesh_bounds(_meshes(root))
+    return studio.world_mesh_bounds(_meshes(root)), offset
 
 
 def _check_contract(model, root, extra, bounds):
@@ -172,6 +184,26 @@ def _check_contract(model, root, extra, bounds):
         if size.x <= size.y:
             raise ContractError(f"{name}: does not look front-along-X: {tuple(size)}")
 
+    if model.kind in _TINTED:
+        if not any(m.name == "paper" for obj in meshes for m in obj.data.materials):
+            raise ContractError(f"{name}: a {model.kind} needs paper for the runtime to tint")
+        for obj in meshes:
+            if any(m.name == "paper" for m in obj.data.materials) and not _sheet_uvs_in_range(obj):
+                raise ContractError(f"{obj.name}: paper needs UVs in layer 'st' inside [0, 1]")
+        aspect = extra.get("sheetAspect")
+        if not isinstance(aspect, (int, float)) or not 0.25 <= aspect <= 4:
+            raise ContractError(f"{name}: sheetAspect must be in [0.25, 4], got {aspect!r}")
+    if model.kind in ("vehicle", "animal") and size.x <= size.y:
+        raise ContractError(f"{name}: does not look front-along-X: {tuple(size)}")
+    if model.kind == "bird":
+        checks.check_wings(name, root, extra)
+    if any(obj.name == "blades" for obj in root.children) or "blades" in extra:
+        checks.check_blades(name, root, meshes, extra)
+    if model.kind == "parachute":
+        checks.check_hangs_from_origin(name, meshes)
+    if "opening" in extra:
+        checks.check_opening(name, extra["opening"], bounds)
+
 
 def _sheet_uvs_in_range(obj):
     layer = obj.data.uv_layers.get("st")
@@ -206,12 +238,6 @@ def _check_tank(name, root, meshes, extra):
     for label, parts in (("turret", [turret]), ("hull", hull)):
         if not any(m.name == "paper" for part in parts for m in part.data.materials):
             raise ContractError(f"{name}: the {label} has no paper for the runtime to tint")
-    for obj in meshes:
-        if any(m.name == "paper" for m in obj.data.materials) and not _sheet_uvs_in_range(obj):
-            raise ContractError(f"{obj.name}: paper needs UVs in layer 'st' inside [0, 1]")
-    aspect = extra.get("sheetAspect")
-    if not isinstance(aspect, (int, float)) or not 0.25 <= aspect <= 4:
-        raise ContractError(f"{name}: sheetAspect must be in [0.25, 4], got {aspect!r}")
 
     local = [v.co for v in turret.data.vertices]
     lo = Vector([min(p[i] for p in local) for i in range(3)])
@@ -260,7 +286,18 @@ def build(model):
         raise ContractError(f"{model.name}: build returned no root")
     bpy.context.view_layer.update()
     _apply_scales(root)
-    bounds = _seat(model, root)
+    bounds, offset = _seat(model, root)
+    # A child node's pivot is wherever seating left it; the manifest must say where it is in
+    # the file, not where it was authored.
+    nodes = {obj.name: obj for obj in root.children}
+    for entry in extra.get("wings", {}).get("nodes", []):
+        if entry["node"] in nodes:
+            entry["pivot"] = [round(v, 6) for v in nodes[entry["node"]].location]
+    if "blades" in extra and "blades" in nodes:
+        extra["blades"]["hub"] = [round(v, 6) for v in nodes["blades"].location]
+    if "opening" in extra:
+        extra["opening"]["centre"] = [round(v - o, 6) for v, o in
+                                      zip(extra["opening"]["centre"], offset)]
     _check_contract(model, root, extra, bounds)
     if model.kind == "fire":
         # Seating moves the flames after build() has described them; the manifest must say

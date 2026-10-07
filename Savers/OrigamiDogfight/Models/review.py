@@ -49,6 +49,7 @@ FAMILIES = {
     "scenery": ("tree", "rock", "house", "boat"),
     "fire": ("fire", "smoke"),
     "tanks": ("tank",),
+    "v3": ("bird", "crate", "parachute", "landmark", "animal", "vehicle", "building"),
 }
 # Team papers from the runtime's palette (`PaperPalette.plain`), for tinting a tank's paper.
 SIDES = {"red": "#e0332e", "blue": "#2e6bdb"}
@@ -249,7 +250,7 @@ def family_overhead(family, pixels_per_unit, spacing=1.5, altitude=0.0, tilt=0.0
     return _render(os.path.join(_OUT, f"{family}_overhead{suffix}.png"))
 
 
-def family_studio(family, spacing=1.6):
+def family_studio(family, spacing=1.6, out=None):
     """A labelled three-quarter lineup under the studio rig: judge the models themselves."""
     names = _names(family)
     columns = min(len(names), 5)
@@ -276,7 +277,7 @@ def family_studio(family, spacing=1.6):
     bpy.context.scene.collection.objects.link(camera)
     bpy.context.scene.camera = camera
     studio.studio_lights(radius=columns * spacing * 1.2)
-    return _render(os.path.join(_OUT, f"{family}.png"))
+    return _render(os.path.join(_OUT, out or f"{family}.png"))
 
 
 def tanks_overhead(pixels_per_metre=380, spacing=0.26, suffix=""):
@@ -350,6 +351,116 @@ def pencil_pitch(pixels_per_unit=18, spacing=1.5):
     return _render(os.path.join(_OUT, "pencil_pitch.png"))
 
 
+# ---- v3: the new models at the size the game draws them --------------------------------
+
+# A 16:9 frame shows 4.6 m of the world across 2056 px (ViewRig.arenaArea), and the runtime
+# draws landscape props at a fiftieth of their authored size (Scenery.dioramaScale).
+# Desk-sized models (crane, crate, parachute) are shown at their authored size, as the planes
+# are drawn at about theirs.
+GAME_PX_PER_METRE = 2056 / 4.6
+DIORAMA = 0.02
+CRANE_PAPERS = ("#ee9aae", "#7fb3dc")
+
+
+def _pose(root, location, scale=1.0, yaw=90.0):
+    """Nose up the image by default: +X to +Y."""
+    root.rotation_euler = (0.0, 0.0, math.radians(yaw))
+    root.scale = (scale,) * 3
+    root.location = location
+
+
+def v3_overhead(pixels_per_metre=GAME_PX_PER_METRE, tilt=0.0, suffix=""):
+    """Every v3 model from above at its in-game size on the game's ground under its sun.
+
+    Top row, in the air: two cranes, wings level and lifted 40 degrees; a crate under its
+    parachute; a crate that has landed. Bottom row, on the ground: the windmill with its
+    sails at 0 and 45 degrees, a few sheep, two cars in two sides' papers, a hangar in a
+    side's paper with its open end up the image.
+    """
+    width, height = 1.56, 0.62
+    _fresh((round(width * pixels_per_metre), round(height * pixels_per_metre)),
+           samples=48, exposure=-0.6)
+    top, bottom = 0.15, -0.14
+    for x, lift, paper in ((-0.62, 0.0, CRANE_PAPERS[0]), (-0.38, 40.0, CRANE_PAPERS[1])):
+        root, _ = _place("crane")
+        _tint(root, paper)
+        _child(root, "wing_l").rotation_euler.x = math.radians(lift)
+        _child(root, "wing_r").rotation_euler.x = math.radians(-lift)
+        _pose(root, (x, top, 0.35), yaw=100.0)
+    crate, crate_bounds = _place("supply_crate")
+    _pose(crate, (-0.12, top, 0.22), yaw=15.0)
+    chute, _ = _place("parachute")
+    _pose(chute, (-0.12, top, 0.22 + crate_bounds[1].z), yaw=15.0)
+    landed, _ = _place("supply_crate")
+    _pose(landed, (0.06, top, 0.0), yaw=-20.0)
+    for x, angle in ((0.26, 0.0), (0.48, 45.0)):
+        mill, _ = _place("windmill")
+        _child(mill, "blades").rotation_euler.x = math.radians(angle)
+        _pose(mill, (x, top, 0.0), scale=DIORAMA, yaw=60.0)
+    for dx, dy, yaw in ((-0.03, 0.0, 70.0), (0.0, 0.03, 140.0), (0.035, -0.01, 20.0),
+                        (0.01, -0.035, -100.0)):
+        sheep, _ = _place("sheep")
+        _pose(sheep, (-0.58 + dx, bottom + dy, 0.0), scale=DIORAMA, yaw=yaw)
+    for x, colour, yaw in ((-0.36, SIDES["red"], 90.0), (-0.22, SIDES["blue"], 30.0)):
+        car, _ = _place("car")
+        _tint(car, colour)
+        _pose(car, (x, bottom, 0.0), scale=DIORAMA, yaw=yaw)
+    hangar, _ = _place("hangar")
+    _tint(hangar, SIDES["red"])
+    _pose(hangar, (0.05, bottom, 0.0), scale=DIORAMA)
+    hangar_b, _ = _place("hangar")
+    _tint(hangar_b, SIDES["blue"])
+    _pose(hangar_b, (0.38, bottom, 0.0), scale=DIORAMA, yaw=-30.0)
+    _ground(width * 4.0)
+    _sun()
+    camera = _ortho_camera((0.0, 0.0), width)
+    if tilt:
+        # The game's camera leans toward the top of the screen; tilting the view about X
+        # shows the faces that look down the image, as the game does.
+        camera.rotation_euler = (math.radians(tilt), 0.0, 0.0)
+        camera.location = (0.0, -20.0 * math.sin(math.radians(tilt)),
+                           20.0 * math.cos(math.radians(tilt)))
+    return _render(os.path.join(_OUT, f"v3_overhead{suffix}.png"))
+
+
+def v3_motion(pixels_per_metre=3 * GAME_PX_PER_METRE):
+    """The parts that move, larger: the crane's wings from -30 to +55 degrees of lift and
+    the windmill's sails a quarter turn in steps, each beside a pin on its pivot."""
+    lifts, sails = (-30.0, 0.0, 30.0, 55.0), (0.0, 22.5, 45.0, 67.5)
+    width, height = 1.0, 0.6
+    _fresh((round(width * pixels_per_metre), round(height * pixels_per_metre)),
+           samples=48, exposure=-0.6)
+    pin = flat_material("review_pin", "#ffe14d", emission=2.0)
+
+    def mark(node):
+        bpy.context.view_layer.update()
+        p = node.matrix_world.translation
+        bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=0.0015, depth=0.06,
+                                            location=(p.x, p.y, p.z + 0.03))
+        bpy.context.active_object.data.materials.append(pin)
+
+    for k, lift in enumerate(lifts):
+        root, _ = _place("crane")
+        _child(root, "wing_l").rotation_euler.x = math.radians(lift)
+        _child(root, "wing_r").rotation_euler.x = math.radians(-lift)
+        # Turned to face the camera, a little from above, so the lift shows as an angle:
+        # nose toward the lens, up the image, left wing to the right.
+        root.rotation_euler = (0.0, math.radians(-70.0), math.radians(-90.0))
+        root.location = (-0.375 + 0.25 * k, 0.15, 0.3)
+        mark(_child(root, "wing_l"))
+    for k, angle in enumerate(sails):
+        mill, _ = _place("windmill")
+        _child(mill, "blades").rotation_euler.x = math.radians(angle)
+        mill.rotation_euler = (0.0, math.radians(-70.0), math.radians(-90.0))
+        mill.scale = (DIORAMA,) * 3
+        mill.location = (-0.375 + 0.25 * k, -0.25, 0.12)
+        mark(_child(mill, "blades"))
+    _ground(width * 4.0)
+    _sun()
+    _ortho_camera((0.0, 0.0), width)
+    return _render(os.path.join(_OUT, "v3_motion.png"))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheet", required=True,
@@ -380,6 +491,12 @@ def main():
             family_studio("fire")
             _enlarge(family_overhead("fire", 48, tilt=12.0), 4)
             family_overhead("fire", 160, tilt=12.0, suffix="_large")
+        elif sheet == "v3":
+            family_studio("v3", out="v3_studio.png")
+            _enlarge(v3_overhead(), 4)
+            v3_overhead(tilt=11.0, suffix="_tilt")
+            v3_overhead(pixels_per_metre=4 * GAME_PX_PER_METRE, suffix="_large")
+            v3_motion()
         elif sheet == "tanks":
             family_studio("tanks")
             _enlarge(tanks_overhead(), 4)
