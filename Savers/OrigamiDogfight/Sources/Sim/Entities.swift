@@ -230,6 +230,19 @@ struct Wreck {
     var lifetime: Double {
         inWater ? Wreck.sinkDuration : Wreck.fireDuration + Wreck.foldDuration + Wreck.fadeDuration
     }
+
+    /// How far from its position a wreck on land reaches — half the body it was, and the fire's
+    /// tongues round it — for whatever must not drive or roll through it.
+    var reach: Float {
+        switch model {
+        case .plane(let type): return type.spec(scale: scale).size * 0.5 + 0.03 * scale
+        case .tank(let type): return type.spec(scale: scale).size * 0.5 + 0.03 * scale
+        }
+    }
+
+    /// How tall it stands with its fire on it, at scale 1 a fire two thirds of a plane long
+    /// (`WreckField`), and the smoke's first puff a little above.
+    var fireTop: Float { 0.26 * scale }
 }
 
 enum SimEvent {

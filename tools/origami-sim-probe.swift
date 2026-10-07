@@ -27,7 +27,11 @@
 // stickers and aces (planes or tanks that reached the first milestone), airfields placed against
 // those asked for, take-offs begun and finished, and tanks that rolled out of a hangar. "badSite"
 // re-checks every placed airfield against the ground independently of the planner — wet, steep,
-// under a prop, on a road, overlapping another, or out of view — and must be zero.
+// under a prop, on a road, overlapping another, or out of view — and must be zero. "thruWr" counts
+// take-offs that rolled or climbed through a land wreck already lying there when the plane was
+// launched — within the wreck's reach and below its fire — and must be zero; "late" is the same
+// for a wreck that came down in front of a plane already rolling, which nothing can prevent and
+// is only reported.
 
 import Foundation
 import simd
@@ -82,6 +86,8 @@ struct Report {
     var tanksSpawned = 0
     var maxDrops = 0
     var poweredShots = 0
+    var takeOffsThroughWreck = 0
+    var takeOffsLateWreck = 0
 }
 
 func fnv(_ hash: inout UInt64, _ value: UInt64) {
@@ -211,6 +217,10 @@ func soak(_ run: RunSpec, minutes: Double) -> Report {
     var strafing = Set<Int>()
     var tankIDs = Set<Int>()
     var takingOff = Set<Int>()
+    /// Take-offs in progress, by when they were launched, and those already counted as through
+    /// a wreck.
+    var launchedAt: [Int: Double] = [:]
+    var throughWreck = Set<Int>()
     var countedMatch = -1
     var stuck: [Int: Double] = [:]
     let start = Date()
@@ -242,6 +252,7 @@ func soak(_ run: RunSpec, minutes: Double) -> Report {
             case .tookOff(let plane, _):
                 r.takeOffs += 1
                 takingOff.insert(plane)
+                launchedAt[plane] = now
             case .tankDestroyed:
                 r.tankKills += 1
                 r.longestNoKill = max(r.longestNoKill, now - lastKill); lastKill = now
@@ -270,9 +281,22 @@ func soak(_ run: RunSpec, minutes: Double) -> Report {
                 r.badSites += badSites(sim)
             }
         }
+        for id in takingOff {
+            guard let plane = sim.plane(id: id), plane.state.isTakingOff, !throughWreck.contains(id) else { continue }
+            let low = sim.wrecks.first { wreck in
+                !wreck.inWater && simd_distance(plane.position, wreck.position) < wreck.reach + plane.spec.size * 0.5
+                    && plane.altitude - wreck.ground < wreck.fireTop
+            }
+            if let low {
+                throughWreck.insert(id)
+                if low.crashedAt <= launchedAt[id] ?? now { r.takeOffsThroughWreck += 1 } else { r.takeOffsLateWreck += 1 }
+            }
+        }
         for id in takingOff where !(sim.plane(id: id)?.state.isTakingOff ?? false) {
+            launchedAt[id] = nil
             takingOff.remove(id)
             if let plane = sim.plane(id: id), plane.state == .fighting { r.takeOffsDone += 1 }
+            throughWreck.remove(id)
         }
         // Forget planes that have left, so twenty minutes of replacements does not pile up here.
         if circleTime.count > 4 * max(sim.planes.count, 1) {
@@ -384,10 +408,11 @@ func row(_ r: Report, minutes: Double) -> String {
 
 func v3Row(_ r: Report, minutes: Double) -> String {
     pad(r.label, 34) + String(
-        format: " %6.3f %6.1f %6.1f %4d %4d %4d %5d %5d %6.2f %3d/%-3d %3d %4d/%-4d %4d/%-4d %4d",
+        format: " %6.3f %6.1f %6.1f %4d %4d %4d %5d %5d %6.2f %3d/%-3d %3d %4d/%-4d %4d/%-4d %4d %6d %4d",
         Double(r.collisions) / minutes, Double(r.shots) / minutes, r.fightTime / minutes, r.dropsSpawned, r.dropsGrabbed, r.dropsLanded, r.aces, r.stickers,
         r.matches > 0 ? Double(r.stickers) / Double(r.matches) : 0, r.basesPlaced, r.basesAsked, r.badSites,
-        r.takeOffsDone, r.takeOffs, r.rollOuts, r.tanksSpawned, r.maxDrops)
+        r.takeOffsDone, r.takeOffs, r.rollOuts, r.tanksSpawned, r.maxDrops,
+        r.takeOffsThroughWreck, r.takeOffsLateWreck)
 }
 
 func pad(_ s: String, _ n: Int) -> String { s.count >= n ? s : s + String(repeating: " ", count: n - s.count) }
@@ -455,12 +480,13 @@ struct Probe {
         let pin = RunSpec(seed: seeds.first ?? 1, mode: "surprise", tier: .surprise, tanks: .always, aspect: aspect)
         let first = soak(pin, minutes: min(minutes, 10))
         let second = soak(pin, minutes: min(minutes, 10))
-        print("\n" + pad("run", 34) + " col/m shot/m fight/m drSp drGr drLd  aces stkrs stk/mt bases bad  takeoffs   rollouts maxDr")
+        print("\n" + pad("run", 34) + " col/m shot/m fight/m drSp drGr drLd  aces stkrs stk/mt bases bad  takeoffs   rollouts maxDr thruWr late")
         for r in all { print(v3Row(r, minutes: r.minutes)) }
         let minutesAll = all.reduce(0) { $0 + $1.minutes }
         let collisions = all.reduce(0) { $0 + $1.collisions }
         let asked = all.reduce(0) { $0 + $1.basesAsked }, placed = all.reduce(0) { $0 + $1.basesPlaced }
         let bad = all.reduce(0) { $0 + $1.badSites }
+        let throughWreck = all.reduce(0) { $0 + $1.takeOffsThroughWreck }
         print(String(format: "\ncollisions: %d in %.0f sim-minutes, one every %.1f minutes", collisions, minutesAll,
                      collisions > 0 ? minutesAll / Double(collisions) : .infinity))
         print(String(format: "supply drops: %d spawned, %d grabbed, %d landed", all.reduce(0) { $0 + $1.dropsSpawned },
@@ -473,9 +499,11 @@ struct Probe {
         let outTime = all.reduce(0) { $0 + $1.outTime }
         print("\nnon-finite poses across every run: \(nonFinite)")
         print("tank-steps on water across every run: \(wet)")
+        print("take-offs through a wreck already down, every run: \(throughWreck)"
+              + " (and \(all.reduce(0) { $0 + $1.takeOffsLateWreck }) through one that fell after the launch)")
         print(String(format: "planes' centre off-screen while fighting, all runs: %.3f%%", 100 * outTime / max(fightTime, 1e-9)))
         print(String(format: "determinism: %016llx vs %016llx  %@", first.hash, second.hash,
                      first.hash == second.hash ? "SAME" : "DIFFERENT"))
-        if !covered || first.hash != second.hash || nonFinite > 0 || wet > 0 || bad > 0 { exit(1) }
+        if !covered || first.hash != second.hash || nonFinite > 0 || wet > 0 || bad > 0 || throughWreck > 0 { exit(1) }
     }
 }

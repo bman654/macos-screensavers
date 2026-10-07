@@ -314,17 +314,24 @@ final class DogfightSim {
             guard match.slots[s].plane == nil, let at = match.slots[s].spawnAt, now >= at else { continue }
             let plane: Plane
             if match.slots[s].launched, let base = base(for: match.slots[s].side) {
-                // A replacement takes off from its side's airfield, waiting its turn on the runway.
-                guard isRunwayClear(base, now: now) else {
+                // A replacement takes off from its side's airfield, waiting its turn on the runway
+                // — but not for ever: a runway still blocked after a while is given up on.
+                let waiting = match.slots[s].runwayWaitSince ?? now
+                if isRunwayClear(base, now: now) {
+                    plane = launch(slot: s, from: base, now: now)
+                } else if now - waiting < DogfightSim.longestRunwayWait {
+                    match.slots[s].runwayWaitSince = waiting
                     match.slots[s].spawnAt = now + 0.5
                     continue
+                } else {
+                    plane = spawn(slot: s, now: now)
                 }
-                plane = launch(slot: s, from: base, now: now)
             } else {
                 plane = spawn(slot: s, now: now)
             }
             match.slots[s].plane = plane.id
             match.slots[s].spawnAt = nil
+            match.slots[s].runwayWaitSince = nil
             match.slots[s].launched = true
             planes.append(plane)
             emit(.spawned(plane: plane.id))

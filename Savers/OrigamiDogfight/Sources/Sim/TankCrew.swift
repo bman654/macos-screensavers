@@ -25,15 +25,21 @@ extension DogfightSim {
             // whose hangar has no road out comes on from the edge like everyone else.
             var hangar: Tank?
             if let base = base(for: match.tankSlots[s].side) {
-                guard isRunwayClear(base, now: now) else {
+                // A door still blocked after a while — a wreck burning in front of it — is given
+                // up on, and the tank comes on from the edge.
+                let waiting = match.tankSlots[s].runwayWaitSince ?? now
+                if isRunwayClear(base, now: now) {
+                    hangar = rollOut(slot: s, from: base, now: now)
+                } else if now - waiting < DogfightSim.longestRunwayWait {
+                    match.tankSlots[s].runwayWaitSince = waiting
                     match.tankSlots[s].spawnAt = now + 0.7
                     continue
                 }
-                hangar = rollOut(slot: s, from: base, now: now)
             }
             if let tank = hangar ?? spawnTank(slot: s, now: now) {
                 match.tankSlots[s].tank = tank.id
                 match.tankSlots[s].spawnAt = nil
+                match.tankSlots[s].runwayWaitSince = nil
                 tanks.append(tank)
                 emit(.tankSpawned(tank: tank.id))
             } else {

@@ -78,7 +78,8 @@ extension DogfightSim {
     }
 
     /// Whether an airfield has finished unfolding and nothing is on its runway: a plane still
-    /// rolling or climbing out low, or a tank in the doorway.
+    /// rolling or climbing out low, a tank in the doorway, or a wreck lying anywhere a plane
+    /// would roll through it or climb out through its fire.
     func isRunwayClear(_ base: Airfield, now: Double) -> Bool {
         guard match.phase == .fighting, now - match.startedAt > Airfield.unfoldTime else { return false }
         let busy = planes.contains { plane in
@@ -92,8 +93,44 @@ extension DogfightSim {
             return s > -base.hangarLength && s < base.hangarLength / 2 + base.runwayLength * 0.5
                 && off < base.runwayWidth + tank.spec.size
         }
-        return !busy && !blocked
+        return !busy && !blocked && !isWrecked(base)
     }
+
+    /// Whether a wreck on land — burning, folding or fading, for as long as it is drawn — lies
+    /// across the strip a plane covers from where it starts its roll to where its climb takes
+    /// it over the fire. A tank rolling out uses the same door and the first of the same strip.
+    func isWrecked(_ base: Airfield) -> Bool {
+        // The widest and fastest plane this match could send down it.
+        let span = PlaneType.allCases.map { $0.spec(scale: match.scale).size }.max() ?? 0
+        let speed = PlaneType.allCases.map { $0.spec(scale: match.scale).cruiseSpeed }.max() ?? 0
+        let liftGround = terrain.surfaceHeight(at: base.hangar + base.direction * base.liftDistance)
+        return wrecks.contains { wreck in
+            guard !wreck.inWater else { return false }
+            let s = base.along(wreck.position)
+            let off: Float = abs(cross(base.direction, wreck.position - base.hangar))
+            // Past the lift point, a plane is over the fire once it has climbed to the fire's top
+            // from the runway's height there — the ground can fall or rise a little along it.
+            let height: Float = wreck.ground + wreck.fireTop - liftGround
+            let climb = DogfightSim.climbTime(toClear: height)
+            let end = base.liftDistance + speed * climb
+            let room = wreck.reach + span * 0.5
+            return s > base.rollStart - room && s < end + room && off < room
+        }
+    }
+
+    /// Seconds from leaving the runway to standing `height` over it, on `stepTakeOff`'s climb:
+    /// the climb rate gathering at 0.9 m/s² up to `takeOffClimb`, then held.
+    static func climbTime(toClear height: Float) -> Float {
+        let gather: Float = 0.9
+        let rampTime = takeOffClimb / gather
+        let rampHeight = 0.5 * gather * rampTime * rampTime
+        guard height > rampHeight else { return (2 * max(height, 0) / gather).squareRoot() }
+        return rampTime + (height - rampHeight) / takeOffClimb
+    }
+
+    /// The longest a replacement waits on a blocked runway — a wreck burning across it, most
+    /// likely — before it gives up the airfield and comes on from the edge instead.
+    static let longestRunwayWait: Double = 8
 
     // MARK: Take-off
 

@@ -33,6 +33,8 @@ struct Slot {
     /// Whether this seat has flown yet: the opening wave flies in from the edge, and only a
     /// replacement takes off from the side's airfield.
     var launched = false
+    /// When this seat's replacement started waiting for its runway, while it waits.
+    var runwayWaitSince: Double?
 }
 
 /// A tank's seat, which works the same way: a destroyed tank's replacement rolls in for the
@@ -44,6 +46,8 @@ struct TankSlot {
     let homeEdge: Int?
     var tank: Int?
     var spawnAt: Double?
+    /// When this seat's replacement started waiting for its hangar door, while it waits.
+    var runwayWaitSince: Double?
 }
 
 enum MatchPhase: Equatable {
