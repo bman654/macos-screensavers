@@ -44,7 +44,7 @@ struct Marks {
     /// A long match with lots of planes leaves a few dozen; past this the oldest go first.
     static let scorchCap = 40
     /// How often a crash on land spreads to a tree near enough to catch.
-    static let spreadChance: Float = 0.4
+    static let spreadChance: Float = 0.25
 
     /// `at` is when it burned: the wreck's own crash time when the sim still has the wreck,
     /// which is what lets a mark made during a warmup be the age it really is.

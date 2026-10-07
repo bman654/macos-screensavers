@@ -97,7 +97,7 @@ struct CraneSchedule {
     private(set) var flocks: [CraneFlock] = []
 
     /// How often a match's end brings a flock over the empty sky.
-    static let lullChance: Float = 0.4
+    static let lullChance: Float = 0.3
 
     /// `firstAt` pins the first flock, for a harness that wants one in its picture.
     init(seed: UInt64, firstAt: Double? = nil) {

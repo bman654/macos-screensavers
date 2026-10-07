@@ -65,7 +65,7 @@ final class TreeFires {
         let height = template.isStandIn ? 0.13 * spot.scale : template.extent.y * Scenery.dioramaScale * spot.scale
         let char = SCNMaterial()
         char.lightingModel = .lambert
-        char.diffuse.contents = NSColor(srgbRed: 0.15, green: 0.12, blue: 0.11, alpha: 1)
+        char.diffuse.contents = NSColor(srgbRed: 0.25, green: 0.21, blue: 0.19, alpha: 1)
         char.isDoubleSided = true
         tree.enumerateHierarchy { child, _ in
             guard let geometry = child.geometry, let copy = geometry.copy() as? SCNGeometry else { return }

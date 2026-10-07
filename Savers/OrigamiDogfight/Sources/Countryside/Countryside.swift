@@ -46,7 +46,7 @@ final class Countryside {
         switch event {
         case .crashed(let wreck, let position, _, let inWater, _, let scale):
             guard !inWater else { return }
-            burned(wreck: wreck, at: position, size: 0.17 * scale, sim: sim, live: live)
+            burned(wreck: wreck, at: position, size: 0.21 * scale, sim: sim, live: live)
         case .tankDestroyed(_, _, let wreck, let position, _, _, let scale):
             burned(wreck: wreck, at: position, size: 0.22 * scale, sim: sim, live: live)
         case .matchStarted(let index, _, _):
