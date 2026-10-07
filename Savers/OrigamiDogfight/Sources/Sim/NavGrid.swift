@@ -15,12 +15,12 @@ struct NavGrid {
     let cell: Float
     let columns: Int
     let rows: Int
-    /// Driveable by a tank of this grid's clearance.
+    /// Driveable by a tank of this grid's footprint.
     let open: [Bool]
     /// Inside the tanks' region, where a patrol may go. Entering and leaving cross the rest.
     let inRegion: [Bool]
 
-    init(ground: Ground, clearance: Float, covering view: ConvexQuad, region: ConvexQuad, margin: Float) {
+    init(ground: Ground, footprint: Float, covering view: ConvexQuad, region: ConvexQuad, margin: Float) {
         cell = 0.07
         let (lo, hi) = view.bounds
         origin = lo - SIMD2(repeating: 0.6)
@@ -32,7 +32,7 @@ struct NavGrid {
             for column in 0..<columns {
                 let index = row * columns + column
                 let p = origin + SIMD2(Float(column) + 0.5, Float(row) + 0.5) * cell
-                open[index] = ground.isDriveable(p, clearance: clearance)
+                open[index] = ground.isDriveable(p, footprint: footprint)
                 inside[index] = region.contains(p, margin: margin)
             }
         }
@@ -95,7 +95,7 @@ struct NavGrid {
         /// From `position` — the tank's own, which is not its cell's centre — through the cells
         /// to `goal`, pulled taut: every corner the road can cut in a straight line is cut, so a
         /// tank drives a few long legs rather than a staircase of cell centres.
-        func route(from position: SIMD2<Float>, to goal: Int, ground: Ground, clearance: Float) -> [SIMD2<Float>] {
+        func route(from position: SIMD2<Float>, to goal: Int, ground: Ground, footprint: Float) -> [SIMD2<Float>] {
             var cells: [Int] = []
             var at = goal
             while at != start {
@@ -107,7 +107,7 @@ struct NavGrid {
             var from = 0
             while from < points.count - 1 {
                 var to = points.count - 1
-                while to > from + 1, !ground.isClear(from: points[from], to: points[to], clearance: clearance) { to -= 1 }
+                while to > from + 1, !ground.isClear(from: points[from], to: points[to], footprint: footprint) { to -= 1 }
                 taut.append(points[to])
                 from = to
             }

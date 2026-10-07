@@ -23,11 +23,11 @@ enum TankType: Int, CaseIterable {
         // About a house's footprint: big enough to be a tank from up here, small enough that a
         // plane passing over it still reads as the larger thing.
         case .light:
-            return TankSpec(size: 0.17, speed: 0.13, hullTurnRate: 1.6, turretTurnRate: 1.8, armour: 3,
-                            cooldown: 2.6, range: 1.05, height: 0.058, barrels: [0])
+            return TankSpec(size: 0.17, breadth: 0.7, speed: 0.13, hullTurnRate: 1.6, turretTurnRate: 1.8,
+                            armour: 3, cooldown: 2.6, range: 1.05, height: 0.058, barrels: [0])
         case .heavy:
-            return TankSpec(size: 0.22, speed: 0.1, hullTurnRate: 1.2, turretTurnRate: 1.3, armour: 5,
-                            cooldown: 3.2, range: 1.2, height: 0.077, barrels: [0.044, -0.044])
+            return TankSpec(size: 0.22, breadth: 0.67, speed: 0.1, hullTurnRate: 1.2, turretTurnRate: 1.3,
+                            armour: 5, cooldown: 3.2, range: 1.2, height: 0.077, barrels: [0.044, -0.044])
         }
     }
 
@@ -35,7 +35,7 @@ enum TankType: Int, CaseIterable {
     /// and a strafing shot must reach, and both belong to the tank.
     func spec(scale: Float) -> TankSpec {
         let b = baseSpec
-        return TankSpec(size: b.size * scale, speed: b.speed * scale, hullTurnRate: b.hullTurnRate,
+        return TankSpec(size: b.size * scale, breadth: b.breadth, speed: b.speed * scale, hullTurnRate: b.hullTurnRate,
                         turretTurnRate: b.turretTurnRate, armour: b.armour, cooldown: b.cooldown,
                         range: b.range * scale, height: b.height * scale, barrels: b.barrels, scale: scale)
     }
@@ -44,6 +44,9 @@ enum TankType: Int, CaseIterable {
 struct TankSpec {
     /// Drawn footprint, metres — hull and barrel, the longer horizontal dimension.
     let size: Float
+    /// Width over length of the hull and treads — the models' bounds (`tank.json`,
+    /// `tank_heavy.json`), so the footprint below encloses the tank actually drawn.
+    let breadth: Float
     /// Cruising speed over flat ground, m/s. About a tenth of a plane's, so the ground war is a
     /// slow undertow to the dogfight rather than a second race.
     let speed: Float
@@ -64,8 +67,10 @@ struct TankSpec {
 
     /// A tank is a solid lump, unlike a plane, so most of its footprint takes a hit.
     var hitRadius: Float { size * 0.4 }
-    /// How far round it must be clear: water, steep ground and props.
-    var clearance: Float { size * 0.5 }
+    /// The radius of a disc round its centre that holds the whole hull and both treads at any
+    /// heading — half the hull's diagonal — so one disc answers for every way it may turn. Water
+    /// and steep ground are kept out of all of it (`Ground`).
+    var footprint: Float { size * 0.5 * (1 + breadth * breadth).squareRoot() }
 }
 
 enum TankState: Equatable {

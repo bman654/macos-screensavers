@@ -17,7 +17,11 @@
 // outside the camera's view at its own altitude; "edge" is the same with any of its body
 // outside. Entering, exiting and downed planes are excluded — they are meant to cross the edge.
 // "stuck" is the longest a tank that was trying to drive went without moving; "wet" counts
-// tank-steps with any of its footprint on water and must be zero, as must "nan".
+// tank-steps with any of its footprint on water and must be zero, as must "nan". The footprint is
+// the sim's own (`TankSpec.footprint`, the disc round hull and treads), tested face by face.
+//
+// Every run starts with the known regressions — fights that once broke a rule — whatever the
+// flags ask for, so a change that brings one back fails here.
 
 import Foundation
 import simd
@@ -232,10 +236,7 @@ func soak(_ run: RunSpec, minutes: Double) -> Report {
             if ![tank.position.x, tank.position.y, tank.heading, tank.turret, tank.altitude].allSatisfy(\.isFinite) {
                 r.nonFinite += 1
             }
-            let rim = tank.spec.clearance * 0.9
-            let wet = [SIMD2<Float>(0, 0), SIMD2(rim, 0), SIMD2(-rim, 0), SIMD2(0, rim), SIMD2(0, -rim)]
-                .contains { sim.terrain.isWater(at: tank.position + $0) }
-            if wet { r.wetSteps += 1 }
+            if sim.terrain.isWater(underDisc: tank.position, radius: tank.spec.footprint) { r.wetSteps += 1 }
             // Standing still while trying to drive. Stopping to shoot or to look round is the
             // tank's choice, and resets the clock.
             switch tank.state {
@@ -271,6 +272,19 @@ func checkTerrainCoverage() -> Bool {
         if !covered { print(String(format: "  aspect %.3f TERRAIN GAP", aspect)) }
     }
     return ok
+}
+
+func row(_ r: Report, minutes: Double) -> String {
+    pad(r.label, 34) + String(
+        format: " %6.2f %6.2f %5d %6.2f %5d %5.1f%% %5.2f%% %5.2f%% %6.1fs %5.1fs %5.1fs %5.1fs %5.1fs %5d %4.0f%% %3d %6.3f %5d %4d %7d %5d %5.1f %016llx",
+        Double(r.planeKills) / minutes, Double(r.tankKills) / minutes, r.planesByTanks,
+        Double(r.strafes) / minutes, r.matches,
+        r.shots > 0 ? 100 * Double(r.hits) / Double(r.shots + r.pencils) : 0,
+        100 * r.outTime / max(r.fightTime, 1e-9), 100 * r.edgeTime / max(r.fightTime, 1e-9),
+        r.longestNoShot, r.longestNoKill, r.longestCircle, r.longestWall, r.longestStuck,
+        r.stuckEpisodes, 100 * r.tankMoving / max(r.tankTime, 1e-9), r.wetSteps,
+        r.minClearance == .greatestFiniteMagnitude ? -1 : r.minClearance,
+        r.maxPlanes, r.maxTanks, r.maxProjectiles, r.maxWrecks, r.wall, r.hash)
 }
 
 func pad(_ s: String, _ n: Int) -> String { s.count >= n ? s : s + String(repeating: " ", count: n - s.count) }
@@ -312,6 +326,15 @@ struct Probe {
         print(pad("run", 34) + " pk/min tk/min byTnk strf/m match   acc   out%  edge%  noShot noKill circle wallRn"
               + " stuck st>10 mov% wet  minClr  maxP maxT maxProj maxWr   sec hash")
         var all: [Report] = []
+        // A light tank turned so a rear tread corner hung over a lake (step 13989, ~117 s in),
+        // between the five points the old check sampled.
+        let regressions = [(RunSpec(seed: 7, mode: "teams", tier: .few, tanks: .always, aspect: 16 / 9), 2.5)]
+        for (run, length) in regressions {
+            var r = soak(run, minutes: length)
+            r.label = "regression " + r.label
+            all.append(r)
+            print(row(r, minutes: length))
+        }
         for seed in seeds {
             for tier in tiers {
                 for mode in modes {
@@ -319,15 +342,7 @@ struct Probe {
                         let r = soak(RunSpec(seed: seed, mode: mode, tier: tier, tanks: tank, aspect: aspect),
                                      minutes: minutes)
                         all.append(r)
-                        print(pad(r.label, 34) + String(
-                            format: " %6.2f %6.2f %5d %6.2f %5d %5.1f%% %5.2f%% %5.2f%% %6.1fs %5.1fs %5.1fs %5.1fs %5.1fs %5d %4.0f%% %3d %6.3f %5d %4d %7d %5d %5.1f %016llx",
-                            Double(r.planeKills) / minutes, Double(r.tankKills) / minutes, r.planesByTanks,
-                            Double(r.strafes) / minutes, r.matches,
-                            r.shots > 0 ? 100 * Double(r.hits) / Double(r.shots + r.pencils) : 0,
-                            100 * r.outTime / max(r.fightTime, 1e-9), 100 * r.edgeTime / max(r.fightTime, 1e-9),
-                            r.longestNoShot, r.longestNoKill, r.longestCircle, r.longestWall, r.longestStuck,
-                            r.stuckEpisodes, 100 * r.tankMoving / max(r.tankTime, 1e-9), r.wetSteps, r.minClearance == .greatestFiniteMagnitude ? -1 : r.minClearance,
-                            r.maxPlanes, r.maxTanks, r.maxProjectiles, r.maxWrecks, r.wall, r.hash))
+                        print(row(r, minutes: minutes))
                     }
                 }
             }

@@ -138,6 +138,45 @@ struct FacetLattice {
         return best.map { ($0.face, $0.weights) }
     }
 
+    /// Whether any face that a disc of `radius` round `center` overlaps — even by a sliver —
+    /// satisfies `test`. Exact, not sampled: a face counts when the centre is inside it or any
+    /// of its edges passes within `radius` of the centre. Faces off the lattice do not exist.
+    ///
+    /// Candidates are found as in `locate`, widened by the disc: a nudged face lies within its
+    /// unnudged triangle grown by under a third of a step, so the strips and columns the disc's
+    /// box spans, plus one either side, hold every face it can touch.
+    func anyFace(touching center: SIMD2<Float>, radius: Float, where test: (Int) -> Bool) -> Bool {
+        let g = center - origin
+        let r2 = radius * radius
+        let firstStrip = max(Int(floor((g.y - radius) / rowStep)) - 1, 0)
+        let lastStrip = min(Int(floor((g.y + radius) / rowStep)) + 1, rows - 2)
+        let firstColumn = max(Int(floor((g.x - radius) / spacing)) - 2, 0)
+        let lastColumn = min(Int(floor((g.x + radius) / spacing)) + 1, columns - 2)
+        guard firstStrip <= lastStrip, firstColumn <= lastColumn else { return false }
+        for j in firstStrip...lastStrip {
+            for i in firstColumn...lastColumn {
+                for k in 0..<2 {
+                    let face = (j * (columns - 1) + i) * 2 + k
+                    let c = corners(of: face)
+                    let a = points[Int(c.x)], b = points[Int(c.y)], d = points[Int(c.z)]
+                    let touches = FacetLattice.barycentric(center, a, b, d).min() >= 0
+                        || FacetLattice.distanceSquared(center, a, b) <= r2
+                        || FacetLattice.distanceSquared(center, b, d) <= r2
+                        || FacetLattice.distanceSquared(center, d, a) <= r2
+                    if touches && test(face) { return true }
+                }
+            }
+        }
+        return false
+    }
+
+    /// From `p` to the nearest point of the segment `a`–`b`, squared.
+    private static func distanceSquared(_ p: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+        let ab = b - a
+        let t = min(max(simd_dot(p - a, ab) / max(simd_length_squared(ab), 1e-12), 0), 1)
+        return simd_distance_squared(p, a + ab * t)
+    }
+
     private static func barycentric(_ p: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>,
                                     _ c: SIMD2<Float>) -> SIMD3<Float> {
         let v0 = b - a, v1 = c - a, v2 = p - a

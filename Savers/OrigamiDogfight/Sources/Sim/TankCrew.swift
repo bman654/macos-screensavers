@@ -45,7 +45,7 @@ extension DogfightSim {
             let a = view.corners[edge], b = view.corners[(edge + 1) % 4]
             let normal = view.normals[edge]
             let start = a + (b - a) * rand.inRange(0.15, 0.85) - normal * spec.size * 0.7
-            guard ground.isDriveable(start, clearance: spec.clearance),
+            guard ground.isDriveable(start, footprint: spec.footprint),
                   !tanks.contains(where: { simd_distance($0.position, start) < spec.size * 2 }),
                   let search = grid.search(from: start, blocked: { self.isTankNear($0, size: spec.size, except: nil) })
             else { continue }
@@ -53,7 +53,7 @@ extension DogfightSim {
             guard inside.count >= DogfightSim.roomToPatrol else { continue }
             // Among the nearest cells in, so it rolls straight in rather than across the map.
             let goal = inside[rand.index(count: min(inside.count, 40))]
-            let route = search.route(from: start, to: goal, ground: ground, clearance: spec.clearance)
+            let route = search.route(from: start, to: goal, ground: ground, footprint: spec.footprint)
             let heading = atan2(normal.y, normal.x)
             var tank = Tank(id: makeID(), slot: index, side: slot.side, type: slot.type, paper: slot.paper, spec: spec,
                             state: .entering, stateSince: now, position: start, previousPosition: start,
@@ -73,7 +73,7 @@ extension DogfightSim {
     func navGrid(for type: TankType) -> NavGrid {
         if let grid = navGrids[type] { return grid }
         let spec = type.spec(scale: match.scale)
-        let grid = NavGrid(ground: ground, clearance: spec.clearance, covering: groundView, region: tankRegion,
+        let grid = NavGrid(ground: ground, footprint: spec.footprint, covering: groundView, region: tankRegion,
                            margin: spec.size)
         navGrids[type] = grid
         return grid
@@ -220,7 +220,7 @@ extension DogfightSim {
         if goals.isEmpty { goals = search.order.filter { grid.inRegion[$0] && search.depth[$0] >= 2 } }
         guard !goals.isEmpty else { return [] }
         return search.route(from: tank.position, to: goals[combat.index(count: goals.count)], ground: ground,
-                            clearance: tank.spec.clearance)
+                            footprint: tank.spec.footprint)
     }
 
     /// The nearest point a short straight hop away that is open, in sixteen directions.
@@ -229,7 +229,7 @@ extension DogfightSim {
             for k in 0..<16 {
                 let angle = tank.heading + .pi + Float(k / 2) * (.pi / 8) * (k % 2 == 0 ? 1 : -1)
                 let hop = tank.position + SIMD2(cos(angle), sin(angle)) * reach
-                if ground.isClear(from: tank.position, to: hop, clearance: tank.spec.clearance) { return hop }
+                if ground.isClear(from: tank.position, to: hop, footprint: tank.spec.footprint) { return hop }
             }
         }
         return nil
@@ -281,7 +281,7 @@ extension DogfightSim {
             let now = simd_distance(other.position, tank.position), then = simd_distance(other.position, next)
             return then < room && then < now
         }
-        guard !crowded, ground.isDriveable(next, clearance: tank.spec.clearance) else {
+        guard !crowded, ground.isDriveable(next, footprint: tank.spec.footprint) else {
             tank.speed = 0
             // Still swinging onto the leg: the leg itself may be clear. Blocked only when
             // squarely facing it.
@@ -296,7 +296,7 @@ extension DogfightSim {
         tank.speed = max(tank.speed - 0.5 * tank.spec.scale * dt, 0)
         if tank.speed > 0 {
             let next = tank.position + tank.direction * tank.speed * dt
-            if ground.isDriveable(next, clearance: tank.spec.clearance) { tank.position = next } else { tank.speed = 0 }
+            if ground.isDriveable(next, footprint: tank.spec.footprint) { tank.position = next } else { tank.speed = 0 }
         }
     }
 
@@ -403,7 +403,7 @@ extension DogfightSim {
             let search = grid.search(from: tank.position, blocked: { _ in false })
             let exit = search?.order.first { !view.contains(grid.center(of: $0), margin: -tank.spec.size * 1.2) }
             if let search, let exit {
-                tanks[i].route = search.route(from: tank.position, to: exit, ground: ground, clearance: tank.spec.clearance)
+                tanks[i].route = search.route(from: tank.position, to: exit, ground: ground, footprint: tank.spec.footprint)
                 tanks[i].state = .leaving
             } else {
                 tanks[i].state = .folding(since: now)

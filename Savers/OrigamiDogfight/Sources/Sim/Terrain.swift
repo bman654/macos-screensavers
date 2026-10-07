@@ -150,7 +150,17 @@ struct Terrain {
     /// Rise over run of the facet under a point.
     func slope(at p: SIMD2<Float>) -> Float {
         guard let (face, _) = lattice.locate(p) else { return 0 }
-        return Terrain.slope(of: lattice.corners(of: face), lattice, ground)
+        return slope(ofFace: face)
+    }
+
+    func slope(ofFace face: Int) -> Float {
+        Terrain.slope(of: lattice.corners(of: face), lattice, ground)
+    }
+
+    /// Whether any part of the disc lies over water — every face it overlaps, not a sample of
+    /// points, so nothing round its rim can slip between the samples.
+    func isWater(underDisc center: SIMD2<Float>, radius: Float) -> Bool {
+        lattice.anyFace(touching: center, radius: radius) { bands[$0] == .water }
     }
 
     // MARK: Shape
