@@ -55,7 +55,7 @@ final class Effects {
 
     /// The moment a plane is shot down: a bigger burst of its own paper.
     func shootDown(at position: SIMD3<Float>, color: PaperColor) {
-        let system = paperBits(color: color, count: 30, speed: 0.32, size: 0.015, life: 1.1)
+        let system = paperBits(color: color, count: 22, speed: 0.26, size: 0.014, life: 0.9)
         burst(system, at: position, life: 1.8)
     }
 
