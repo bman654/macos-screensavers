@@ -268,7 +268,9 @@ extension DogfightSim {
             let approach = -simd_dot(heading, n)
             var u: Float
             if approach > 0 {
-                let need = radius * (1 - (1 - approach * approach).squareRoot())
+                // Clamped: a unit heading dotted with a unit normal can round past 1, and the NaN
+                // that follows would switch the wall off for that tick.
+                let need = radius * (1 - max(0, 1 - approach * approach).squareRoot())
                 u = (need + plane.speed * 0.3 + soft - d) / soft
             } else {
                 u = (0.15 - d) / 0.3

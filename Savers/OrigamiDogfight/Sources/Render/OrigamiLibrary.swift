@@ -101,7 +101,11 @@ final class OrigamiLibrary {
             let assetName = URL(fileURLWithPath: (manifest["asset"] as? String) ?? "\(name).usdz").lastPathComponent
             let asset = directory.appendingPathComponent(assetName)
             guard fm.fileExists(atPath: asset.path) else { continue }
-            let aspect = (manifest["sheetAspect"] as? NSNumber)?.floatValue
+            // Bounded here because it sizes a generated bitmap: a manifest that parses but says
+            // something absurd would otherwise trap converting it, or allocate gigabytes, inside
+            // the host. Anything outside what a sheet of paper could be falls back to letter.
+            let aspect = ((manifest["sheetAspect"] as? NSNumber)?.floatValue)
+                .flatMap { $0.isFinite && (0.25...4).contains($0) ? $0 : nil }
             entries.append(Entry(name: name, kind: kind, asset: asset, sheetAspect: aspect))
         }
     }

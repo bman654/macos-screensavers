@@ -210,11 +210,19 @@ struct Probe {
             let flag = arguments.removeFirst()
             let value = arguments.isEmpty ? "" : arguments.removeFirst()
             switch flag {
-            case "--minutes": minutes = Double(value) ?? minutes
+            case "--minutes":
+                guard let parsed = Double(value), parsed.isFinite, parsed > 0, parsed <= 60 * 24 * 30 else {
+                    print("--minutes needs a positive number of minutes, at most 30 days"); exit(2)
+                }
+                minutes = parsed
             case "--seeds": seeds = value.split(separator: ",").compactMap { UInt64($0) }
             case "--modes": modes = value.split(separator: ",").map { MatchMode(rawValue: String($0)) }
             case "--planes": planes = Int(value)
-            case "--aspect": aspect = Float(value) ?? aspect
+            case "--aspect":
+                guard let parsed = Float(value), parsed.isFinite, parsed > 0 else {
+                    print("--aspect needs a positive width / height ratio"); exit(2)
+                }
+                aspect = parsed
             default: print("unknown flag \(flag)"); exit(2)
             }
         }
