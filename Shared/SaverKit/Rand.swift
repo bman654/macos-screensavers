@@ -1,12 +1,14 @@
-// The seeded RNG the whole tank is drawn from.
+// The seeded RNG every saver draws its scene from.
 //
-// Split out of `Tank` when the tank became a value: the tank's *dimensions* are now one of the
-// things this draws, so it can no longer live inside them.
+// Split out of the Aquarium's `Tank` when the tank became a value (the tank's *dimensions* are
+// one of the things this draws, so it could no longer live inside them), and moved into SaverKit
+// when Origami Dogfight became the second saver to need it. The stream itself is unchanged by the
+// move — every seed on record still names the tank, or the fight, it always did.
 
 import Foundation
 
 /// Seeded so a layout that looked right in a render is the same layout next launch; tuning
-/// numbers against a school that reshuffles every run is guesswork.
+/// numbers against a scene that reshuffles every run is guesswork.
 struct Rand {
     private var state: UInt64
 
