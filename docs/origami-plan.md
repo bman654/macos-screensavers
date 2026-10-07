@@ -6,17 +6,18 @@ spirals into the ground and burns as a little origami fire for a while before it
 replacement flies in from off-screen, so the number in the air stays constant. Sometimes it is a
 free-for-all, sometimes two or three small teams.
 
-Status: **v1 is built and installable** (`tools/build-origami-library.py`, then
-`tools/build-saver.sh OrigamiDogfight -i`), awaiting a first look on the real screensaver.
+Status: **v2 is built, installed and signed off by eye** (`tools/build-origami-library.py`, then
+`tools/build-saver.sh OrigamiDogfight -i`). Brandon ran it in the installed host on the Retina
+display on 2026-10-07: the scoreboard reads, and pencils read as ballistic. Not yet released —
+it reaches `main` by a release merge, like the Aquarium.
 Everything under "Decisions" is a starting point chosen so the whole thing could be built and
 watched; **look, feel and balance are judged on the running saver, not on paper**, and any of it
 can move once it has been seen.
 
 What v1 measured: in a 30-minute headless soak per seed and mode, 6–9 kills a minute, a plane's
 centre off-screen for about 0.3% of its fighting time, no non-finite pose, and an identical event
-log for the same seed. GPU cost is 1.0–1.1 ms a frame at 2056x1329 and 2.4 ms at 4K. Two things
-are unverified: a session in the installed host (only the harness has run it), and two displays
-at once.
+log for the same seed. GPU cost is 1.0–1.1 ms a frame at 2056x1329 and 2.4 ms at 4K. Still
+unverified: two displays at once, and a run of hours in the installed host.
 
 Where v1 departed from the decisions below, and why:
 
