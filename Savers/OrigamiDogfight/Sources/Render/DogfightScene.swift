@@ -3,7 +3,7 @@
 //
 // This file owns only what is true of the whole scene — camera, lights, the clock that turns
 // frame time into fixed sim steps, and the dispatch of the sim's events to effects. Planes,
-// shots and wrecks each have a file of their own.
+// tanks, shots, wrecks and the scoreboard each have a file of their own.
 
 import AppKit
 import Foundation
@@ -22,8 +22,10 @@ final class DogfightScene {
 
     private let effects = Effects()
     private let fleet: PlaneFleet
+    private let armour: TankField
     private let shots: ProjectileField
     private let wrecks: WreckField
+    private let scoreboard: Scoreboard?
     private let keyLight = SCNLight()
 
     /// The sun's direction of travel, in sim axes: toward the lower right of the frame, mostly
@@ -39,7 +41,7 @@ final class DogfightScene {
     /// rebuild then costs a skipped quarter-second, never a burst of a hundred steps on one frame.
     private static let maxCatchUp = 30
 
-    init(sim: DogfightSim, bundle: Bundle, quality: RenderQuality) {
+    init(sim: DogfightSim, bundle: Bundle, quality: RenderQuality, showsScoreboard: Bool) {
         self.sim = sim
         // Zero-duration, for the reason `SceneKitHost.encode` gives: a node property set outside
         // SceneKit's render loop is otherwise an implicit animation stamped with a clock the
@@ -51,15 +53,19 @@ final class DogfightScene {
         let shelf = ModelShelf(library: library)
         let papers = PaperMaterials(seed: sim.seed)
         fleet = PlaneFleet(shelf: shelf, papers: papers, effects: effects)
+        armour = TankField(shelf: shelf, papers: papers)
         shots = ProjectileField(shelf: shelf)
-        wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet)
+        wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour)
+        // The lineup is for looking at models; a card in the corner would only be in the way.
+        scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
 
         scene.background.contents = NSColor(srgbRed: 0.86, green: 0.84, blue: 0.78, alpha: 1)
         scene.rootNode.addChildNode(TerrainMesh.node(for: sim.terrain, seed: sim.seed))
-        scene.rootNode.addChildNode(Scenery.node(spots: Scatter.spots(on: sim.terrain, seed: sim.seed), shelf: shelf))
-        for root in [wrecks.root, shots.root, fleet.root, effects.root] { scene.rootNode.addChildNode(root) }
+        scene.rootNode.addChildNode(Scenery.node(spots: sim.props, shelf: shelf))
+        for root in [wrecks.root, armour.root, shots.root, fleet.root, effects.root] { scene.rootNode.addChildNode(root) }
         buildLights(quality: quality)
         buildCamera()
+        if let scoreboard { cameraNode.addChildNode(scoreboard.node) }
         // Which fight this scene was handed, and how far into it — the only way to see that an
         // idle release or a quality change resumed the fight rather than starting a new one.
         if LifecycleLog.isEnabled {
@@ -70,9 +76,19 @@ final class DogfightScene {
             // The lineup is for checking models, so say which ones are really the library's.
             let planes = PlaneType.allCases.map { "\($0.modelName)=\(shelf.plane($0).isStandIn ? "stand-in" : "library")" }
             let shots = WeaponKind.allCases.map { "\($0)=\(shelf.projectile($0).isStandIn ? "stand-in" : "library")" }
+            let tanks = TankType.allCases.map { type -> String in
+                let template = shelf.tank(type)
+                let model = armour.model(type: type, paper: Paper(kind: .plain, tint: 0), size: 0.2)
+                var paper = 0
+                model.node.enumerateHierarchy { node, _ in
+                    paper += node.geometry?.materials.filter { $0.name == "paper" }.count ?? 0
+                }
+                return "\(type.modelName)=\(template.isStandIn ? "stand-in" : "library") turret=\(model.turret != nil) paperMaterials=\(paper)"
+            }
             let props = PropKind.allCases.map { kind in "\(kind.rawValue)×\(shelf.props(kind).filter { !$0.isStandIn }.count)" }
-            NSLog("Origami lineup: %d library models; planes %@; shots %@; props %@; fire=%@ smoke=%@",
+            NSLog("Origami lineup: %d library models; planes %@; shots %@; tanks %@; props %@; fire=%@ smoke=%@",
                   library.entries.count, planes.joined(separator: " "), shots.joined(separator: " "),
+                  tanks.joined(separator: " "),
                   props.joined(separator: " "), shelf.fire().isStandIn ? "stand-in" : "library",
                   shelf.smoke() == nil ? "stand-in" : "library")
         }
@@ -108,25 +124,40 @@ final class DogfightScene {
         effects.update(time: frame.time)
         for event in sim.drainEvents() { react(to: event) }
         fleet.sync(sim, alpha: alpha, time: frame.time)
+        armour.sync(sim, alpha: alpha)
         shots.sync(sim, alpha: alpha)
         wrecks.sync(sim, time: frame.time)
+        scoreboard?.update(sim, drawableSize: frame.drawableSize,
+                           now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
+    }
+
+    /// The scale actually rendered at, from `RenderTargets` — the scene is built before the
+    /// view has a window, at a provisional scale of 1, and this is what corrects it.
+    func adopt(backingScale: CGFloat) {
+        scoreboard?.backingScale = backingScale
     }
 
     private func react(to event: SimEvent) {
         switch event {
-        case .hit(_, _, _, let position, let altitude, let paper):
-            effects.confetti(at: position.scene(altitude: altitude), color: PaperPalette.base(paper))
+        case .hit(_, _, _, let position, let altitude, let paper, let scale),
+             .tankHit(_, _, let position, let altitude, let paper, let scale):
+            effects.confetti(at: position.scene(altitude: altitude), color: PaperPalette.base(paper), scale: scale)
         case .downed(let victim, _):
             if let plane = sim.plane(id: victim) {
-                effects.shootDown(at: plane.position.scene(altitude: plane.altitude), color: PaperPalette.base(plane.paper))
+                effects.shootDown(at: plane.position.scene(altitude: plane.altitude), color: PaperPalette.base(plane.paper),
+                                  scale: plane.spec.scale)
             }
-        case .crashed(_, let position, let ground, let inWater, let paper):
+        case .crashed(_, let position, let ground, let inWater, let paper, let scale):
             if inWater {
-                effects.splash(at: position.scene(altitude: ground))
+                effects.splash(at: position.scene(altitude: ground), scale: scale)
             } else {
-                effects.crash(at: position.scene(altitude: ground + 0.02), color: PaperPalette.base(paper))
+                effects.crash(at: position.scene(altitude: ground + 0.02 * scale), color: PaperPalette.base(paper), scale: scale)
             }
-        case .matchStarted, .matchEnded, .spawned, .fired, .exited:
+        case .tankDestroyed(_, _, _, let position, let ground, let paper, let scale):
+            effects.crash(at: position.scene(altitude: ground + 0.03 * scale), color: PaperPalette.base(paper), scale: scale)
+        case .splashed(let position, let kind, let scale):
+            effects.shotSplash(at: position.scene(altitude: Terrain.waterLevel), size: kind.spec(scale: scale).size)
+        case .matchStarted, .matchEnded, .spawned, .fired, .exited, .tankSpawned, .tankFired, .tankLeft:
             break
         }
     }

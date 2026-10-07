@@ -155,6 +155,8 @@ enum StandIns {
             node = SCNNode(geometry: SCNTorus(ringRadius: 0.45, pipeRadius: 0.035))
             node.geometry?.materials = [paperMaterial(PaperColor(0.86, 0.52, 0.32))]
             node.simdScale = SIMD3(1, 1, 0.42)
+        case .pencil:
+            node = pencil()
         case .confetti:
             node = SCNNode(geometry: SCNCylinder(radius: 0.5, height: 0.1))
             node.geometry?.materials = [paperMaterial(PaperColor(0.96, 0.95, 0.9))]
@@ -259,7 +261,7 @@ enum StandIns {
         return ModelTemplate(node: holder, extent: hi - lo, sheetAspect: sheetAspect, isStandIn: true)
     }
 
-    private static func based(_ node: SCNNode) -> ModelTemplate {
+    static func based(_ node: SCNNode) -> ModelTemplate {
         let holder = SCNNode()
         holder.addChildNode(node)
         let (lo, hi) = OrigamiLibrary.bounds(of: holder) ?? (SIMD3(repeating: -0.5), SIMD3(repeating: 0.5))
@@ -322,7 +324,7 @@ enum StandIns {
         }
     }
 
-    private static func addPrism(_ mesh: inout FacetMesh, sides: Int, radius: Float, bottom: Float, top: Float,
+    static func addPrism(_ mesh: inout FacetMesh, sides: Int, radius: Float, bottom: Float, top: Float,
                                  color: SIMD4<Float>?) {
         for k in 0..<sides {
             let a0 = Float(k) / Float(sides) * 2 * .pi, a1 = Float(k + 1) / Float(sides) * 2 * .pi

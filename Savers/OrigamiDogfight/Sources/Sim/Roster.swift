@@ -159,7 +159,7 @@ enum WeaponKind: Int, CaseIterable {
         // a straight line; the tank's range is in `TankSpec`.
         case .pencil:
             return WeaponSpec(muzzleSpeed: 1.6, dragTime: 1_000, gravity: 1.3, damage: 1.4,
-                              cooldown: 2.6, range: 1.0, cone: 0.12, radius: 0.02, size: 0.1)
+                              cooldown: 2.6, range: 1.0, cone: 0.12, radius: 0.02, size: 0.075)
         }
     }
 }

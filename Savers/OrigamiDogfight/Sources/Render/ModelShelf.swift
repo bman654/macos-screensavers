@@ -24,6 +24,13 @@ final class ModelShelf {
         }
     }
 
+    /// Anchored at its base, like a prop: a tank stands on the ground.
+    func tank(_ type: TankType) -> ModelTemplate {
+        cached("tank-\(type.modelName)") {
+            library.template(named: type.modelName, anchor: .base) ?? StandIns.tank(type)
+        }
+    }
+
     func fire() -> ModelTemplate {
         cached("fire") {
             library.names(ofKind: "fire").first.flatMap { library.template(named: $0, anchor: .base) }

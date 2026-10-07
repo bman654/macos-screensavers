@@ -52,10 +52,10 @@ final class PlaneFleet {
         }
     }
 
-    /// A model of the plane's type folded from its paper, at its on-screen size.
-    func model(type: PlaneType, paper: Paper, material: SCNMaterial? = nil) -> SCNNode {
+    /// A model of the plane's type folded from its paper, at its on-screen size for `scale`.
+    func model(type: PlaneType, paper: Paper, scale: Float, material: SCNMaterial? = nil) -> SCNNode {
         let template = shelf.plane(type)
-        let instance = template.instance(size: type.spec.size, along: .footprint)
+        let instance = template.instance(size: type.spec(scale: scale).size, along: .footprint)
         let skin = material ?? papers.material(for: paper, aspect: CGFloat(template.sheetAspect))
         instance.enumerateHierarchy { node, _ in
             guard let geometry = node.geometry, let copy = geometry.copy() as? SCNGeometry else { return }
@@ -69,7 +69,7 @@ final class PlaneFleet {
 
     private func make(_ plane: Plane) -> Visual {
         let node = SCNNode()
-        node.addChildNode(model(type: plane.type, paper: plane.paper))
+        node.addChildNode(model(type: plane.type, paper: plane.paper, scale: plane.spec.scale))
         let tail = SCNNode()
         tail.simdPosition = SIMD3(-plane.spec.size * 0.45, 0, 0)
         node.addChildNode(tail)
@@ -103,12 +103,12 @@ final class PlaneFleet {
 
     private func trails(_ visual: Visual, _ plane: Plane) {
         if (plane.isDamaged || plane.state.isDowned), visual.scraps == nil {
-            let system = effects.scrapTrail(color: PaperPalette.base(plane.paper))
+            let system = effects.scrapTrail(color: PaperPalette.base(plane.paper), scale: plane.spec.scale)
             visual.tail.addParticleSystem(system)
             visual.scraps = system
         }
         if plane.state.isDowned, visual.smoke == nil {
-            let system = effects.smokeTrail()
+            let system = effects.smokeTrail(scale: plane.spec.scale)
             visual.tail.addParticleSystem(system)
             visual.smoke = system
         }

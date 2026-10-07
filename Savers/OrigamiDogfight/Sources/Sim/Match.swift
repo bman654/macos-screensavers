@@ -99,7 +99,7 @@ struct Match {
     /// Chosen by watching: a gentler curve (0.86 at six, 0.63 at twelve) still read as big,
     /// fast planes at "lots".
     static func scale(planes: Int) -> Float {
-        min(0.92, 0.82 * (6 / Float(max(planes, 1))).squareRoot())
+        min(0.88, 0.82 * (6 / Float(max(planes, 1))).squareRoot())
     }
 
     static func draw(index: Int, now: Double, config: SimConfig, rand: inout Rand) -> Match {
