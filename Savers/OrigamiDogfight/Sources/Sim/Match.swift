@@ -102,6 +102,11 @@ struct Match {
         min(0.88, 0.82 * (6 / Float(max(planes, 1))).squareRoot())
     }
 
+    /// Tanks shrink with the planes but by less — the square root of their scale. Fully
+    /// self-similar, a tank at "lots" came out the size of a house on a landscape that never
+    /// shrinks. Its speed, range and footprint follow its size (`TankType.spec`).
+    var tankScale: Float { scale.squareRoot() }
+
     static func draw(index: Int, now: Double, config: SimConfig, rand: inout Rand) -> Match {
         let mode: MatchMode
         if let pinned = config.mode {

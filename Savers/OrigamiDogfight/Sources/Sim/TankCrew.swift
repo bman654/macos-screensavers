@@ -37,7 +37,7 @@ extension DogfightSim {
     /// is not a pocket — a meadow ringed by woods would hold a tank for the whole match.
     private func spawnTank(slot index: Int, now: Double) -> Tank? {
         let slot = match.tankSlots[index]
-        let spec = slot.type.spec(scale: match.scale)
+        let spec = slot.type.spec(scale: match.tankScale)
         let grid = navGrid(for: slot.type)
         let view = groundView
         for attempt in 0..<16 {
@@ -72,7 +72,7 @@ extension DogfightSim {
 
     func navGrid(for type: TankType) -> NavGrid {
         if let grid = navGrids[type] { return grid }
-        let spec = type.spec(scale: match.scale)
+        let spec = type.spec(scale: match.tankScale)
         let grid = NavGrid(ground: ground, footprint: spec.footprint, covering: groundView, region: tankRegion,
                            margin: spec.size)
         navGrids[type] = grid

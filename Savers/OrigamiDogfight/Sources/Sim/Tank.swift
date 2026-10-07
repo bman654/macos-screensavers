@@ -2,7 +2,9 @@
 //
 // Tanks belong to a side the way planes do, live on the ground under the fight, and are scaled
 // with their match like everything else that belongs to a side — a furball of small planes
-// fights small tanks, so a tank never towers over the planes strafing it.
+// fights small tanks, so a tank never towers over the planes strafing it. They shrink less than
+// the planes do (`Match.tankScale`): the landscape and its houses never change size, and a tank
+// shrunk all the way with a crowd of planes reads as a toy beside a cottage.
 
 import Foundation
 import simd

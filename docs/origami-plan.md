@@ -55,7 +55,9 @@ for next, and the calls made on his behalf where he left a detail open (marked *
   its crumpled paper balls on them; a destroyed tank burns like a crashed plane and a replacement
   rolls in from the edge. Tanks fire **pencil stubs** steeply upward, which rise toward the camera
   and fall back if they miss. Tanks keep to dry, gentle ground inside the view. When tanks are in
-  a match, a side has at most two.
+  a match, a side has at most two. *Call (after the review):* tanks shrink with the planes but by
+  less — the square root of the planes' scale — since a tank shrunk fully with a "lots" crowd came
+  out the size of a house on a landscape that never shrinks.
 - **Sound: not yet.** v1's question was what an origami dogfight should sound like; ideas are
   offered rather than built.
 
