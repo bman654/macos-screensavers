@@ -14,6 +14,13 @@ struct FacetMesh {
     private(set) var normals: [SIMD3<Float>] = []
     private(set) var uvs: [SIMD2<Float>] = []
     private(set) var colors: [SIMD4<Float>] = []
+    /// Optional second and third texcoord channels, for a shader modifier that needs to know
+    /// more about a face than its colour; they arrive as `_geometry.texcoords[1]` and `[2]`.
+    /// Written only if every face supplied them — and a modifier must not be attached without
+    /// them, since reading an absent channel makes the whole mesh vanish rather than read zero
+    /// (`docs/next-session.md`, traps).
+    private(set) var channel1: [SIMD2<Float>] = []
+    private(set) var channel2: [SIMD2<Float>] = []
 
     var isEmpty: Bool { positions.isEmpty }
 
@@ -36,6 +43,15 @@ struct FacetMesh {
         if let color { colors += [color, color, color] }
     }
 
+    mutating func triangle(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>,
+                           uv: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>), color: SIMD4<Float>,
+                           channel1 one: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>),
+                           channel2 two: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)) {
+        triangle(a, b, c, uv: uv, color: color)
+        channel1 += [one.0, one.1, one.2]
+        channel2 += [two.0, two.1, two.2]
+    }
+
     mutating func quad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>,
                        color: SIMD4<Float>? = nil) {
         triangle(a, b, c, color: color)
@@ -48,6 +64,10 @@ struct FacetMesh {
                        FacetMesh.source(uvs, .texcoord, components: 2)]
         if colors.count == positions.count {
             sources.append(FacetMesh.source(colors, .color, components: 4))
+        }
+        if channel1.count == positions.count && channel2.count == positions.count {
+            sources.append(FacetMesh.source(channel1, .texcoord, components: 2))
+            sources.append(FacetMesh.source(channel2, .texcoord, components: 2))
         }
         let element = SCNGeometryElement(indices: Array(0..<UInt32(positions.count)), primitiveType: .triangles)
         let geometry = SCNGeometry(sources: sources, elements: [element])

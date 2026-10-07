@@ -1,5 +1,5 @@
 // The landscape as geometry: every triangle of `Terrain` its own flat-shaded facet in its own
-// colour of paper.
+// colour of paper, with its fold lines scored in.
 //
 // Three vertices per triangle, never shared, so each face carries its own normal and colour —
 // a shared-vertex mesh would smooth the folds away, and the folds are the whole look.
@@ -31,11 +31,14 @@ enum TerrainMesh {
         let lattice = terrain.lattice
         let points = (0..<lattice.faceCount).map { scenePoints(terrain, face: $0) }
         let normals = points.map { simd_normalize(simd_cross($0[1] - $0[0], $0[2] - $0[0])) }
+        let creases = creaseCodes(terrain, points: points, normals: normals)
         var mesh = FacetMesh()
         mesh.reserve(faces: lattice.faceCount)
         // One grain tile spans this many metres; small enough that the fibres read at screen
         // scale, large enough that the repeat is not seen.
         let grainTile: Float = 0.9
+        // Which corner of its face each vertex is, for the crease shader.
+        let corner = (SIMD2<Float>(1, 0), SIMD2<Float>(0, 1), SIMD2<Float>(0, 0))
 
         for face in 0..<lattice.faceCount {
             let p = points[face]
@@ -44,7 +47,9 @@ enum TerrainMesh {
             let shade = foldShade(normals[face])
             color = SIMD4(simd_min(SIMD3(color.x, color.y, color.z) * shade, SIMD3(repeating: 1)), color.w)
             let uv = p.map { SIMD2($0.x, $0.z) / grainTile }
-            mesh.triangle(p[0], p[1], p[2], uv: (uv[0], uv[1], uv[2]), color: color)
+            let code = SIMD2<Float>(creases[face], 0)
+            mesh.triangle(p[0], p[1], p[2], uv: (uv[0], uv[1], uv[2]), color: color,
+                          channel1: corner, channel2: (code, code, code))
         }
 
         let material = SCNMaterial()
@@ -56,6 +61,7 @@ enum TerrainMesh {
         material.diffuse.wrapT = .repeat
         material.diffuse.mipFilter = .linear
         material.diffuse.maxAnisotropy = 8
+        material.shaderModifiers = [.geometry: creaseGeometry, .surface: creaseSurface]
 
         let node = SCNNode(geometry: mesh.geometry(materials: [material]))
         node.name = "terrain"
@@ -100,6 +106,69 @@ enum TerrainMesh {
         // cliff turned from the sun went near black, and the ground is a backdrop.
         return max(1 + 1.4 * (relative - 1), 0.62)
     }
+
+    /// Per face, how sharply it is folded along each of its three edges — the edge opposite
+    /// corner 0, 1, 2 — packed into one float: each a signed level from -7 (sharp valley) to 7
+    /// (sharp ridge), offset to 1...15 and stored four bits apart. Whole numbers below 4096
+    /// survive a float and the rasteriser exactly, since all three vertices carry the same one.
+    ///
+    /// Graded on the folds this landscape actually has — half its edges turn by under 3°, a
+    /// tenth by over 12° — so meadow creases are faint and a ridge is a clear line. A ramp
+    /// pitched at sharp folds left every line invisible.
+    private static func creaseCodes(_ terrain: Terrain, points: [[SIMD3<Float>]],
+                                    normals: [SIMD3<Float>]) -> [Float] {
+        let lattice = terrain.lattice
+        let centres = points.map { ($0[0] + $0[1] + $0[2]) / 3 }
+        let gentle: Float = 2 * .pi / 180, sharp: Float = 10 * .pi / 180
+        return (0..<lattice.faceCount).map { face in
+            let c = lattice.corners(of: face)
+            let corners = [c.x, c.y, c.z]
+            var code: Float = 0
+            for k in 0..<3 {
+                let edge = [corners[(k + 1) % 3], corners[(k + 2) % 3]]
+                var level: Float = 0
+                if let other = lattice.neighbours[face].first(where: { n in
+                    edge.allSatisfy { any(lattice.corners(of: n) .== $0) }
+                }) {
+                    let angle = acos(min(max(simd_dot(normals[face], normals[other]), -1), 1))
+                    // The neighbour's middle below this face's plane: the fold between them is a ridge.
+                    let ridge = simd_dot(centres[other] - centres[face], normals[face]) < 0
+                    level = (smoothstep(gentle, sharp, angle) * 7).rounded() * (ridge ? 1 : -1)
+                }
+                code += (level + 8) * pow(16, Float(k))
+            }
+            return code
+        }
+    }
+
+    /// Unpacks the fold levels once per vertex and hands the fragment its place in the face.
+    private static let creaseGeometry = """
+    #pragma varyings
+    float3 facet;
+    float3 fold;
+    #pragma body
+    float2 corner = _geometry.texcoords[1];
+    out.facet = float3(corner.x, corner.y, 1.0 - corner.x - corner.y);
+    float packed = _geometry.texcoords[2].x;
+    float3 levels = float3(fmod(packed, 16.0), fmod(floor(packed / 16.0), 16.0), floor(packed / 256.0));
+    out.fold = (levels - 8.0) / 7.0;
+    """
+
+    /// A crease about a pixel and a half wide along each folded edge, measured in screen pixels
+    /// so it stays a fine score line at every size: a ridge catches a little light, a valley a
+    /// little shade. Both faces of an edge draw their half of the line.
+    private static let creaseSurface = """
+    #pragma varyings
+    float3 facet;
+    float3 fold;
+    #pragma body
+    float3 pixel = max(fwidth(in.facet), float3(1e-6));
+    float3 near = 1.0 - smoothstep(float3(0.0), pixel * 1.6, in.facet);
+    float3 f = in.fold * near;
+    float ridge = max(max(f.x, f.y), max(f.z, 0.0));
+    float valley = max(max(-f.x, -f.y), max(-f.z, 0.0));
+    _surface.diffuse.rgb *= 1.0 + 0.3 * (0.7 * ridge - valley);
+    """
 
     // MARK: Colour
 
