@@ -68,6 +68,21 @@ words decided several details; the rest are calls made for him (*call*).
   an airfield (a runway and a hangar) on clear, flat ground on its side of the view; replacement
   planes take off from it and tanks roll out of it. Free-for-all uses today's edge entry.
 
+**Where the two halves met** (built separately, then integrated):
+- *Call:* an airfield is never built across a road, rather than cars stopping short of a runway.
+  The roads are therefore the sim's (`Sim/Roads.swift`), a pure function of the seed's terrain
+  and props, never of the season. It costs some sites: about 77% of team sides get an airfield
+  over a broad soak, against about 78% before (a narrow team-match sample fell to 70%, mostly
+  where the road out of the view runs along a team's edge).
+- Sheep clear an airfield's ground. The next match is drawn as the two-second intermission begins
+  rather than as it ends — nothing draws from the match stream in between, so it is the same
+  match — which gives a flock time to trot off before the runway unrolls.
+- The scoreboard card skips a corner an airfield stands in.
+- Winter has its own dawn and dusk light colours (`DayLight`): the shared keys turned snow
+  peach-mauve at dusk and lilac at dawn. Hangars take the season as they are built; sheep take no
+  snow and wear cream fleece in winter; stage-1 damage is crisp graphite scuffs, since a soft grey
+  wash was invisible on yellow and pink paper.
+
 ## v2: after the first look (2026-10-07)
 
 Brandon watched v1 and liked the overall design, the terrain and the lake banks. What he asked
