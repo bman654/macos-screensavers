@@ -39,6 +39,9 @@ struct Traffic {
         }
     }
 
+    /// Whether `advance(to:)` would do anything at `time`.
+    func isDue(at time: Double) -> Bool { Int(floor(time / Traffic.step)) != steps }
+
     /// `tanks` are where any tank is now: a car will not drive into one.
     mutating func advance(to time: Double, tanks: [SIMD2<Float>]) {
         let due = Int(floor(time / Traffic.step)) - steps
@@ -80,9 +83,11 @@ struct Traffic {
         }
     }
 
-    /// Where a car is between the last two steps, and which way it faces.
-    func pose(of index: Int, at time: Double) -> (position: SIMD2<Float>, heading: Float) {
+    /// Where a car is between the last two steps, and which way it faces — drawn a step behind
+    /// the frame's time, as the sheep are (`Pasture.pose`).
+    func pose(of index: Int, at frameTime: Double) -> (position: SIMD2<Float>, heading: Float) {
         let car = cars[index]
+        let time = frameTime - Traffic.step
         let alpha = Float(min(max(time / Traffic.step - Double(steps - 1), 0), 1))
         let along = car.previousAlong + (car.along - car.previousAlong) * alpha
         let sample = roads[car.road].sample(at: along)

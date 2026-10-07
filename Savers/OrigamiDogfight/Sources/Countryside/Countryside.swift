@@ -66,10 +66,35 @@ final class Countryside {
         marks.burned(at: position, size: size, time: time, id: wreck, props: sim.props, seed: seed)
     }
 
-    /// Brings everything with a clock of its own up to `time`, the sim's time for this frame.
-    func advance(to time: Double, sim: DogfightSim) {
+    /// Steps the fight `count` times and the countryside with it, a step at a time: each of the
+    /// fight's steps is heard as it happens, and the flocks and the cars step at their own
+    /// boundaries with the tanks and the airfields as they stood at that very step. So where a
+    /// sheep is after four minutes is the seed's to say, not the display's — fed one snapshot per
+    /// frame instead, a 15 Hz frame stepped a flock twice against the same tanks and a 120 Hz one
+    /// once each, and the two drifted apart. Returns what the fight did, for the renderer.
+    func advance(_ sim: DogfightSim, steps count: Int) -> [SimEvent] {
+        var happened: [SimEvent] = []
+        for _ in 0..<max(count, 0) {
+            sim.advance()
+            let events = sim.drainEvents()
+            for event in events { observe(event, sim: sim, live: true) }
+            catchUp(with: sim)
+            happened += events
+        }
+        return happened
+    }
+
+    /// Brings everything with a clock of its own up to the sim's time, and no further — the
+    /// renderer draws between the last two steps and never steps anything itself. Called by
+    /// `advance` after every sim step, and once when a scene is built, to pick up a sim that ran
+    /// on before there was a countryside (a warmup).
+    func catchUp(with sim: DogfightSim) {
+        let time = sim.time
         marks.forget(before: time)
         cranes.advance(to: time)
+        // The tanks and airfields are gathered only on a step that needs them: this runs at the
+        // sim's 120 Hz, and the flocks and cars step at 30.
+        guard pasture.isDue(at: time) || traffic.isDue(at: time) else { return }
         let tanks = sim.tanks.map(\.position)
         pasture.advance(to: time, tanks: tanks, airfields: sim.airfieldsAhead)
         traffic.advance(to: time, tanks: tanks)

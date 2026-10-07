@@ -49,7 +49,14 @@ final class Landscape {
                      marks.root, scenery, life.root, fires.root, cranes.root, daylight.root] {
             root.addChildNode(node)
         }
+        countryside.catchUp(with: sim)
         update(sim: sim, time: sim.time)
+    }
+
+    /// Steps the fight and the countryside together (`Countryside.advance`), and returns what
+    /// the fight did.
+    func advance(_ sim: DogfightSim, steps count: Int) -> [SimEvent] {
+        countryside.advance(sim, steps: count)
     }
 
     /// What the fight just did. `live` is false for what happened before this scene existed.
@@ -57,9 +64,9 @@ final class Landscape {
         countryside.observe(event, sim: sim, live: live)
     }
 
-    /// `time` is the sim's time at this frame, between its fixed steps.
+    /// `time` is the sim's time at this frame, between its fixed steps. Draws only: everything
+    /// with a clock of its own was stepped with the sim.
     func update(sim: DogfightSim, time: Double) {
-        countryside.advance(to: time, sim: sim)
         sweep(at: time)
         daylight.update(phase: countryside.atmosphere.phase(at: time))
         life.update(countryside, time: time)

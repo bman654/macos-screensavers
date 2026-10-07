@@ -10,11 +10,17 @@
 //   iceTank  tank-time with a tank's centre over a frozen lake — tanks may cross
 //   sheepWet sheep-steps on a lake, frozen or not; sheepTight the closest two sheep came, as a
 //            fraction of their spacing — neither may go wrong
-//   roadWet  road points over a lake — must be 0
+//   roadWet  stretches of road whose strip, at its full width, lies over a lake face, frozen or
+//            not — must be 0
+//   carWet   car-steps with a car's centre over a lake, frozen or not — must be 0
 //   onRwy    sheep-steps with a sheep's centre on a standing airfield, and car-steps with a car on
 //            one — both must be 0; "airfields" the airfields stood, to show the rule was tested
 //   flocks   crane flocks that set off; scorch / trees the marks and fires the fight left
 //   hash     everything the countryside drew, for determinism: two runs of a seed must agree
+//
+// And for each seed, the cadence check: the same 240 s stepped by a renderer drawing at 120, 60,
+// 30 and 15 Hz must leave every sheep and every car in the same place, to the bit — the
+// countryside steps with the sim, never with the frame.
 //
 //   swiftc -O -parse-as-library tools/origami-atmos-probe.swift Shared/SaverKit/Rand.swift \
 //       Savers/OrigamiDogfight/Sources/Sim/*.swift Savers/OrigamiDogfight/Sources/Countryside/*.swift \
@@ -31,7 +37,7 @@ struct Tally {
     var splash = 0, iceShot = 0, landShot = 0, iceCrash = 0, crashes = 0, kills = 0
     var iceTank: Double = 0, tankTime: Double = 0
     var sheepWet = 0, sheepTight: Float = .infinity, sheep = 0
-    var roadWet = 0, roads = 0, cars = 0, mills = 0
+    var roadWet = 0, roads = 0, cars = 0, mills = 0, carWet = 0
     var sheepOnAirfield = 0, carsOnAirfield = 0, airfields = Set<String>()
     var flocks = Set<Double>(), scorches = Set<Int>(), trees = Set<Int>()
     var nonFinite = 0
@@ -62,13 +68,16 @@ func soak(seed: UInt64, season: Season, teams: TeamsChoice, minutes: Double) -> 
     t.cars = land.traffic.cars.count
     t.mills = land.windmills.count
     t.sheep = land.pasture.sheep.count
-    for road in land.roads { t.roadWet += road.points.filter { sim.terrain.isLake(at: $0) }.count }
+    for road in land.roads {
+        t.roadWet += zip(road.points, road.points.dropFirst())
+            .filter { sim.terrain.isLake(alongSegment: $0, $1, radius: Roads.halfWidth) }.count
+    }
     let start = Date()
     var settled = Set<Int>()
     let steps = Int(minutes * 60 / DogfightSim.stepSeconds)
     for step in 0..<steps {
-        sim.advance()
-        for event in sim.drainEvents() {
+        // As the renderer does it: the countryside steps with the sim and hears each step's events.
+        for event in land.advance(sim, steps: 1) {
             switch event {
             case .splashed: t.splash += 1
             case .crashed(_, let p, _, let inWater, _, _):
@@ -77,7 +86,6 @@ func soak(seed: UInt64, season: Season, teams: TeamsChoice, minutes: Double) -> 
             case .downed: t.kills += 1
             default: break
             }
-            land.observe(event, sim: sim, live: true)
         }
         for p in sim.projectiles {
             guard case .landed = p.state, settled.insert(p.id).inserted else { continue }
@@ -88,9 +96,8 @@ func soak(seed: UInt64, season: Season, teams: TeamsChoice, minutes: Double) -> 
             t.tankTime += DogfightSim.stepSeconds
             if sim.terrain.isLake(at: tank.position) { t.iceTank += DogfightSim.stepSeconds }
         }
-        // The renderer advances the countryside once a frame; every fourth step is 30 fps.
+        // Sampled at the countryside's own 30 Hz.
         guard step % 4 == 0 else { continue }
-        land.advance(to: sim.time, sim: sim)
         let flock = land.pasture.sheep
         for (i, s) in flock.enumerated() {
             if !s.position.x.isFinite || !s.position.y.isFinite { t.nonFinite += 1 }
@@ -104,16 +111,28 @@ func soak(seed: UInt64, season: Season, teams: TeamsChoice, minutes: Double) -> 
         let bases = standing(sim)
         for base in bases { t.airfields.insert("\(sim.match.index)-\(base.side)") }
         t.sheepOnAirfield += flock.filter { s in bases.contains { $0.covers(s.position) } }.count
-        t.carsOnAirfield += land.traffic.cars.indices.filter { i in
-            let p = land.traffic.pose(of: i, at: sim.time).position
-            return bases.contains { $0.covers(p) }
-        }.count
+        let carSpots = land.traffic.cars.indices.map { land.traffic.pose(of: $0, at: sim.time).position }
+        t.carsOnAirfield += carSpots.filter { p in bases.contains { $0.covers(p) } }.count
+        t.carWet += carSpots.filter { sim.terrain.isLake(at: $0) }.count
         for flock in land.cranes.flocks { t.flocks.insert(flock.start) }
         for mark in land.marks.scorches { t.scorches.insert(mark.id) }
         for fire in land.marks.fires { t.trees.insert(fire.prop) }
     }
     t.seconds = Date().timeIntervalSince(start)
     return t
+}
+
+/// Where every sheep and car stands after `seconds`, with the renderer drawing every `cadence`
+/// sim steps — 1 is 120 Hz, 8 is 15 Hz.
+func countrysideAfter(seed: UInt64, cadence: Int, seconds: Double) -> [Float] {
+    let atmosphere = Atmosphere(season: .summer, dayTime: .midday, seed: seed)
+    let sim = DogfightSim(seed: seed, aspect: 16.0 / 9.0, config: SimConfig(teams: .teams, planes: .lots, tanks: .always))
+    let land = Countryside(sim: sim, atmosphere: atmosphere, environment: [:])
+    land.catchUp(with: sim)
+    let updates = Int((seconds * 120).rounded()) / cadence
+    for _ in 0..<updates { _ = land.advance(sim, steps: cadence) }
+    return land.pasture.sheep.flatMap { [$0.position.x, $0.position.y, $0.heading] }
+        + land.traffic.cars.flatMap { [$0.along, $0.direction] }
 }
 
 @main
@@ -132,7 +151,7 @@ struct AtmosProbe {
             }
         }
 
-        print("run                 kills crash iceCrash splash iceShot landShot iceTank%  sheep wet tight  roads wet cars mills flocks scorch trees fields onRwy nan   sec hash")
+        print("run                 kills crash iceCrash splash iceShot landShot iceTank%  sheep wet tight  roads wet cars wet mills flocks scorch trees fields onRwy nan   sec hash")
         var failures: [String] = []
         for seed in seeds {
             for season in Season.allCases {
@@ -140,19 +159,28 @@ struct AtmosProbe {
                 let b = soak(seed: seed, season: season, teams: teams, minutes: min(minutes, 2))
                 let c = soak(seed: seed, season: season, teams: teams, minutes: min(minutes, 2))
                 let label = "s\(seed) \(season.rawValue)"
-                print(String(format: "%-19@ %5d %5d %8d %6d %7d %8d %7.2f%%  %5d %3d %5.2f  %5d %3d %4d %5d %6d %6d %5d %6d %2d/%-2d %3d %5.1f %016llx",
+                print(String(format: "%-19@ %5d %5d %8d %6d %7d %8d %7.2f%%  %5d %3d %5.2f  %5d %3d %4d %3d %5d %6d %6d %5d %6d %2d/%-2d %3d %5.1f %016llx",
                              label as NSString, a.kills, a.crashes, a.iceCrash, a.splash, a.iceShot, a.landShot,
                              a.tankTime > 0 ? 100 * a.iceTank / a.tankTime : 0, a.sheep, a.sheepWet, a.sheepTight,
-                             a.roads, a.roadWet, a.cars, a.mills, a.flocks.count, a.scorches.count, a.trees.count,
+                             a.roads, a.roadWet, a.cars, a.carWet, a.mills, a.flocks.count, a.scorches.count, a.trees.count,
                              a.airfields.count, a.sheepOnAirfield, a.carsOnAirfield, a.nonFinite, a.seconds, a.hash))
                 if b.hash != c.hash { failures.append("\(label): countryside not deterministic") }
-                if a.sheepWet > 0 || a.roadWet > 0 || a.nonFinite > 0 { failures.append("\(label): sheep or road on a lake, or NaN") }
+                if a.sheepWet > 0 || a.roadWet > 0 || a.carWet > 0 || a.nonFinite > 0 {
+                    failures.append("\(label): sheep, road or car on a lake, or NaN")
+                }
                 if a.sheepOnAirfield > 0 || a.carsOnAirfield > 0 {
                     failures.append("\(label): \(a.sheepOnAirfield) sheep-steps and \(a.carsOnAirfield) car-steps on an airfield")
                 }
                 if a.sheepTight < 0.5 { failures.append("\(label): two sheep stacked (\(a.sheepTight))") }
                 if season == .winter && a.splash > 0 { failures.append("\(label): \(a.splash) splashes on a frozen lake") }
             }
+        }
+        for seed in seeds {
+            let runs = [1, 2, 4, 8].map { (hz: 120 / $0, state: countrysideAfter(seed: seed, cadence: $0, seconds: 240)) }
+            let same = runs.allSatisfy { $0.state.map(\.bitPattern) == runs[0].state.map(\.bitPattern) }
+            print("cadence s\(seed): " + runs.map { "\($0.hz) Hz" }.joined(separator: ", ")
+                  + " after 240 s: \(runs[0].state.count) numbers, \(same ? "identical" : "DIFFERENT")")
+            if !same { failures.append("s\(seed): the countryside depends on the frame rate") }
         }
         print(failures.isEmpty ? "all rules held" : "FAILED:\n  " + failures.joined(separator: "\n  "))
         exit(failures.isEmpty ? 0 : 1)

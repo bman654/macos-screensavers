@@ -112,19 +112,25 @@ struct Pasture {
     }
 
     /// The nearest grass off every airfield, by rings two centimetres apart out to forty, and on
-    /// the nearest ring the point most nearly ahead — a sheep turns as little as it can.
-    private func wayOff(_ airfields: [Airfield], from p: SIMD2<Float>, facing: Float) -> SIMD2<Float>? {
-        for ring in 1...20 {
-            let r = Float(ring) * 0.02
-            var best: (point: SIMD2<Float>, turn: Float)?
-            for k in 0..<24 {
-                let a = Float(k) * .pi / 12
-                let q = p + SIMD2(cos(a), sin(a)) * r
-                guard isGrass(q), !Pasture.isOn(airfields, q, margin: Pasture.airfieldRoom + 0.01) else { continue }
-                let turn = abs((a - facing).wrappedAngle)
-                if turn < best?.turn ?? .infinity { best = (q, turn) }
+    /// the nearest ring the point most nearly ahead — a sheep turns as little as it can. Ground
+    /// another sheep stands on or is already heading for is passed over while there is any other:
+    /// two sheep side by side on a strip otherwise found the same spot, trotted to it together and
+    /// stood in one another.
+    private func wayOff(_ airfields: [Airfield], from p: SIMD2<Float>, facing: Float, sheep index: Int?) -> SIMD2<Float>? {
+        for sharing in [false, true] {
+            for ring in 1...20 {
+                let r = Float(ring) * 0.02
+                var best: (point: SIMD2<Float>, turn: Float)?
+                for k in 0..<24 {
+                    let a = Float(k) * .pi / 12
+                    let q = p + SIMD2(cos(a), sin(a)) * r
+                    guard isGrass(q), !Pasture.isOn(airfields, q, margin: Pasture.airfieldRoom + 0.01),
+                          sharing || isClear(q, ignoring: index) else { continue }
+                    let turn = abs((a - facing).wrappedAngle)
+                    if turn < best?.turn ?? .infinity { best = (q, turn) }
+                }
+                if let best { return best.point }
             }
-            if let best { return best.point }
         }
         return nil
     }
@@ -135,6 +141,9 @@ struct Pasture {
                 && (sheep[j].target.map { simd_distance($0, p) > Pasture.spacing } ?? true)
         }
     }
+
+    /// Whether `advance(to:)` would do anything at `time`.
+    func isDue(at time: Double) -> Bool { Int(floor(time / Pasture.step)) != steps }
 
     /// Steps the flocks up to `time`. `tanks` are where any tank is now, and `airfields` the
     /// ones standing or about to (`DogfightSim.airfieldsAhead`), for the sheep to keep clear of.
@@ -147,7 +156,7 @@ struct Pasture {
             for i in sheep.indices {
                 // Nobody saw the gap, so nobody sees it walk off: put it where it would have gone.
                 if Pasture.isOn(airfields, sheep[i].position, margin: Pasture.airfieldRoom),
-                   let off = wayOff(airfields, from: sheep[i].position, facing: sheep[i].heading) {
+                   let off = wayOff(airfields, from: sheep[i].position, facing: sheep[i].heading, sheep: i) {
                     sheep[i].position = off
                     sheep[i].target = nil
                     sheep[i].clearing = false
@@ -174,7 +183,7 @@ struct Pasture {
             // On an airfield's ground, or heading onto it: off by the shortest way, at a trot.
             let onAirfield = Pasture.isOn(airfields, s.position, margin: Pasture.airfieldRoom)
             if onAirfield, !s.clearing || s.target.map({ Pasture.isOn(airfields, $0, margin: Pasture.airfieldRoom) }) ?? true,
-               let off = wayOff(airfields, from: s.position, facing: s.heading) {
+               let off = wayOff(airfields, from: s.position, facing: s.heading, sheep: i) {
                 s.target = off
                 s.speed = 0.13
                 s.restUntil = now
@@ -256,10 +265,13 @@ struct Pasture {
     }
 
     /// Two sheep closer than a body length step apart — half the overlap each, along the line
-    /// between them — where the grass allows. Only a trot from a tank can bring that about.
+    /// between them — wherever each may walk: grass off the airfields, or for a sheep trotting
+    /// off one, the strip too. A trot from a tank brings that about, and so do two sheep side by
+    /// side clearing a strip, whose ways off can cross.
     private mutating func separate(_ airfields: [Airfield]) {
-        func allowed(_ p: SIMD2<Float>) -> Bool {
-            isGrass(p) && !Pasture.isOn(airfields, p, margin: Pasture.airfieldRoom)
+        func allowed(_ p: SIMD2<Float>, clearing: Bool) -> Bool {
+            let onAirfield = Pasture.isOn(airfields, p, margin: Pasture.airfieldRoom)
+            return clearing ? isGrass(p) || onAirfield : isGrass(p) && !onAirfield
         }
         for i in sheep.indices {
             for j in (i + 1)..<sheep.count {
@@ -267,16 +279,18 @@ struct Pasture {
                 let distance = simd_length(d)
                 guard distance < Pasture.spacing * 0.9 else { continue }
                 let push = (distance > 1e-5 ? d / distance : SIMD2(1, 0)) * (Pasture.spacing * 0.9 - distance) * 0.5
-                if allowed(sheep[i].position - push) { sheep[i].position -= push }
-                if allowed(sheep[j].position + push) { sheep[j].position += push }
+                if allowed(sheep[i].position - push, clearing: sheep[i].clearing) { sheep[i].position -= push }
+                if allowed(sheep[j].position + push, clearing: sheep[j].clearing) { sheep[j].position += push }
             }
         }
     }
 
-    /// Between the last two steps, for a frame that falls between them.
+    /// Between the last two steps, for a frame. The flock is stepped only as far as the sim has
+    /// got (`Countryside.advance`), so a frame's time lies past its last step; it is drawn a step
+    /// behind, where a frame always falls between two steps.
     func pose(of index: Int, at time: Double) -> (position: SIMD2<Float>, heading: Float) {
         let s = sheep[index]
-        let alpha = Float(min(max(time / Pasture.step - Double(steps - 1), 0), 1))
+        let alpha = Float(min(max(time / Pasture.step - Double(steps), 0), 1))
         return (s.previous + (s.position - s.previous) * alpha,
                 s.previousHeading + (s.heading - s.previousHeading).wrappedAngle * alpha)
     }

@@ -130,14 +130,15 @@ final class DogfightScene {
             due = 0
         }
         clockOrigin = origin
-        sim.advance(steps: due)
+        // The countryside hears each step's events as it is taken; anything emitted outside a
+        // step — nothing, today — is heard here.
+        let happened = landscape.advance(sim, steps: due)
+        let stray = sim.drainEvents()
+        for event in stray { landscape.observe(event, sim: sim, live: true) }
         let alpha = Float(min(max((frame.time - origin) / step - Double(sim.steps), 0), 1))
 
         effects.update(time: frame.time)
-        for event in sim.drainEvents() {
-            react(to: event)
-            landscape.observe(event, sim: sim, live: true)
-        }
+        for event in happened + stray { react(to: event) }
         // Airfields first: the landscape's sweep lights the windows of whatever stands this
         // frame, and a hangar is built on the frame its match begins.
         airfields.sync(sim, now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
