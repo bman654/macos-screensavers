@@ -67,12 +67,11 @@ enum DamageMarks {
             ctx.strokeLineSegments(between: [CGPoint(x: p.x - d.x, y: p.y - d.y), CGPoint(x: p.x + d.x, y: p.y + d.y)])
         }
         if stage >= 2 {
-            // Stage 2: brown scorches with darker hearts, where shots burned through.
+            // Stage 2: scorches, where shots singed the paper.
             for _ in 0..<16 {
                 let p = edgeward()
                 let r = CGFloat(rand.inRange(0.05, 0.1)) * s
-                blot(ctx, at: p, radius: r, colour: (0.62, 0.45, 0.28), alpha: 0.75, rand: &rand)
-                blot(ctx, at: p, radius: r * 0.45, colour: (0.32, 0.22, 0.15), alpha: 0.8, rand: &rand)
+                scorch(ctx, at: p, radius: r, char: false, rand: &rand)
             }
         }
         if stage >= 3 {
@@ -80,14 +79,61 @@ enum DamageMarks {
             for _ in 0..<14 {
                 let p = edgeward()
                 let r = CGFloat(rand.inRange(0.08, 0.15)) * s
-                blot(ctx, at: p, radius: r, colour: (0.40, 0.30, 0.22), alpha: 0.8, rand: &rand)
-                blot(ctx, at: p, radius: r * 0.5, colour: (0.16, 0.13, 0.11), alpha: 0.85, rand: &rand)
+                scorch(ctx, at: p, radius: r, char: true, rand: &rand)
             }
             ctx.setStrokeColor(CGColor(srgbRed: 0.25, green: 0.19, blue: 0.14, alpha: 0.7))
             ctx.setLineWidth(s * 0.05)
             ctx.stroke(CGRect(x: 0, y: 0, width: s, height: s))
         }
         return ctx.makeImage()
+    }
+
+    /// A scorch as paper takes one: a wide, faint singe; inside it a smudge drawn out along one
+    /// direction, the way a flame licks across a sheet, with a ragged edge that tapers to tongues;
+    /// and a darker core inside that, smeared the same way and off-centre. Never a disc and never
+    /// black — round marks with near-black hearts, multiplied over bright yellow or pink paper,
+    /// read as holes punched through it, a sheet of Swiss cheese. `char` is stage 3's: the same
+    /// shape burnt deeper.
+    private static func scorch(_ ctx: CGContext, at p: CGPoint, radius r: CGFloat, char: Bool, rand: inout Rand) {
+        let angle = CGFloat(rand.inRange(0, 2 * .pi))
+        let along = CGPoint(x: cos(angle), y: sin(angle)), across = CGPoint(x: -sin(angle), y: cos(angle))
+        func at(_ t: CGFloat, _ side: CGFloat) -> CGPoint {
+            CGPoint(x: p.x + along.x * t + across.x * side, y: p.y + along.y * t + across.y * side)
+        }
+        let singe: (CGFloat, CGFloat, CGFloat) = char ? (0.66, 0.52, 0.38) : (0.86, 0.68, 0.42)
+        let body: (CGFloat, CGFloat, CGFloat) = char ? (0.42, 0.33, 0.26) : (0.60, 0.45, 0.31)
+        let core: (CGFloat, CGFloat, CGFloat) = char ? (0.25, 0.20, 0.17) : (0.42, 0.32, 0.25)
+        // The singe: barely there, and wider than the burn.
+        for _ in 0..<4 {
+            let c = at(CGFloat(rand.inRange(-0.6, 0.6)) * r, CGFloat(rand.inRange(-0.3, 0.3)) * r)
+            soft(ctx, at: c, radius: r * CGFloat(rand.inRange(0.9, 1.3)), colour: singe, alpha: 0.24)
+        }
+        // The smudge: blobs strung along the lick, fattest in the middle, each a little off the
+        // line, so the outline wanders and tapers at both ends.
+        let blobs = 8
+        for k in 0..<blobs {
+            let t = (CGFloat(k) / CGFloat(blobs - 1) - 0.5) * 2
+            let taper = 1 - 0.55 * t * t
+            let c = at(t * r * 0.85, CGFloat(rand.inRange(-0.3, 0.3)) * r * taper)
+            soft(ctx, at: c, radius: r * taper * CGFloat(rand.inRange(0.45, 0.7)), colour: body, alpha: 0.4)
+        }
+        // The core: smaller, darker, smeared the same way and off-centre.
+        let shift = CGFloat(rand.inRange(-0.3, 0.3)) * r
+        for _ in 0..<4 {
+            let c = at(shift + CGFloat(rand.inRange(-0.4, 0.4)) * r, CGFloat(rand.inRange(-0.12, 0.12)) * r)
+            soft(ctx, at: c, radius: r * CGFloat(rand.inRange(0.2, 0.32)), colour: core, alpha: 0.38)
+        }
+    }
+
+    /// One feathered spot: full `alpha` at its centre, fading to nothing at `radius`.
+    private static func soft(_ ctx: CGContext, at c: CGPoint, radius: CGFloat, colour: (CGFloat, CGFloat, CGFloat),
+                             alpha: CGFloat) {
+        let colours = [CGColor(srgbRed: colour.0, green: colour.1, blue: colour.2, alpha: alpha),
+                       CGColor(srgbRed: colour.0, green: colour.1, blue: colour.2, alpha: alpha * 0.5),
+                       CGColor(srgbRed: colour.0, green: colour.1, blue: colour.2, alpha: 0)] as CFArray
+        guard let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colours,
+                                        locations: [0, 0.45, 1]) else { return }
+        ctx.drawRadialGradient(gradient, startCenter: c, startRadius: 0, endCenter: c, endRadius: radius, options: [])
     }
 
     /// A ragged soft-edged mark: a cluster of overlapping discs, faint at its rim.
