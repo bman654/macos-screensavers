@@ -7,6 +7,8 @@
 // Screenshots capture only this process's window, which needs no Screen Recording permission.
 
 import AppKit
+import AVFoundation
+import CoreMedia
 import Foundation
 import ScreenCaptureKit
 import ScreenSaver
@@ -43,12 +45,20 @@ struct Options {
     /// avoid — and a settings sheet that can only be opened there is one that gets shipped
     /// untested. With `--screenshot` the *sheet* is what is captured.
     var configure = false
+
+    /// Record the view to a movie for the whole run.
+    ///
+    /// A still cannot show whether a saver *moves* right — a dogfight, a school turning — and
+    /// a movie is what a person can actually judge that from. Same window-only capture as the
+    /// screenshot, so it needs no Screen Recording permission and never films anything else.
+    var recordPath: String?
 }
 
 func usage(program: String) -> String {
     """
     usage: \(program) <Name|path-to.saver> [--preview] [--size WxH] [--seconds N]
            [--resize WxH] [--instances N] [--configure] [--screenshot out.png]
+           [--record out.mov]
 
       Name                  opens build/Name.saver relative to the repository
       path-to.saver         opens that bundle directly
@@ -63,6 +73,7 @@ func usage(program: String) -> String {
       --configure           opens the saver's settings sheet; with --screenshot, the
                             sheet is what gets captured
       --screenshot out.png  captures the view to PNG and exits
+      --record out.mov      records the view for the whole run (.mov or .mp4, H.264)
       --help                shows this help
     """
 }
@@ -139,6 +150,19 @@ func parseArguments() -> Options {
                 fail("--screenshot requires an output path", code: 2)
             }
             options.screenshotPath = arguments[index + 1]
+            index += 2
+        case "--record":
+            // Same guard as --screenshot, for the same reason: an unconstrained value swallows
+            // the next flag.
+            guard index + 1 < arguments.count, !arguments[index + 1].isEmpty,
+                  !arguments[index + 1].hasPrefix("-") else {
+                fail("--record requires an output path", code: 2)
+            }
+            let ext = URL(fileURLWithPath: arguments[index + 1]).pathExtension.lowercased()
+            guard ext == "mov" || ext == "mp4" else {
+                fail("--record output must end in .mov or .mp4", code: 2)
+            }
+            options.recordPath = arguments[index + 1]
             index += 2
         case "--help", "-h":
             print(usage(program: CommandLine.arguments[0]))
@@ -243,6 +267,76 @@ func capturePNG(of view: NSView, in window: NSWindow, to path: String,
     }
 }
 
+/// Films one window of this process to a movie file.
+///
+/// `SCRecordingOutput` writes the file itself, so no sample buffers pass through this tool.
+/// Retained in a global for the life of the run: a stream whose owner is released stops
+/// delivering without telling anyone, and the movie is then silently truncated.
+final class WindowRecorder: NSObject, SCStreamDelegate, SCRecordingOutputDelegate,
+                            @unchecked Sendable {
+    private let stream: SCStream
+    private var onFinish: ((Error?) -> Void)?
+    private var failure: Error?
+
+    /// Held from `stop` until the file is finalised. The output's delegate reference is weak
+    /// and finalisation lands after `stopCapture` has returned, so a caller that lets go of
+    /// the recorder once it has asked it to stop gets a finished movie and never hears so.
+    private var keepAlive: WindowRecorder?
+
+    init(window: SCWindow, pixelSize: CGSize, output: URL) throws {
+        let configuration = SCStreamConfiguration()
+        // Even dimensions: H.264 encodes 4:2:0, and an odd size is rejected by the encoder
+        // rather than rounded.
+        configuration.width = max(2, Int(pixelSize.width.rounded()) & ~1)
+        configuration.height = max(2, Int(pixelSize.height.rounded()) & ~1)
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+        configuration.showsCursor = false
+        configuration.queueDepth = 6
+
+        let recordingConfiguration = SCRecordingOutputConfiguration()
+        recordingConfiguration.outputURL = output
+        recordingConfiguration.outputFileType =
+            output.pathExtension.lowercased() == "mp4" ? .mp4 : .mov
+        recordingConfiguration.videoCodecType = .h264
+
+        stream = SCStream(filter: SCContentFilter(desktopIndependentWindow: window),
+                          configuration: configuration, delegate: nil)
+        super.init()
+        // The stream retains its outputs, and the output holds its delegate weakly, so this
+        // object owning the stream is what keeps the whole chain alive.
+        try stream.addRecordingOutput(
+            SCRecordingOutput(configuration: recordingConfiguration, delegate: self))
+    }
+
+    func start(completion: @escaping (Error?) -> Void) {
+        stream.startCapture { error in completion(error) }
+    }
+
+    /// Calls back once the file is finalised — not when capture stops, which is earlier and
+    /// would hand back a movie whose header has not been written.
+    func stop(completion: @escaping (Error?) -> Void) {
+        onFinish = completion
+        keepAlive = self
+        stream.stopCapture { [weak self] error in
+            if let error { self?.finish(error) }
+        }
+    }
+
+    private func finish(_ error: Error?) {
+        guard let onFinish else { return }
+        self.onFinish = nil
+        onFinish(error ?? failure)
+        keepAlive = nil
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) { finish(error) }
+    func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) { finish(nil) }
+    func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
+        failure = error
+        finish(error)
+    }
+}
+
 let options = parseArguments()
 let application = NSApplication.shared
 let bundleURL = saverURL(for: options.saverArgument)
@@ -333,19 +427,21 @@ let configureSheet: NSWindow? = options.configure ? {
 // real window instead of flashing into the middle of the screen on every run. Not stealing
 // focus was never sufficient — a window that merely appears, several times a minute, across
 // several concurrent agents, is its own kind of hostile.
-application.setActivationPolicy(options.screenshotPath == nil ? .regular : .accessory)
+// A recording is a capture too, and is run from the same scripted loops.
+let isCapture = options.screenshotPath != nil || options.recordPath != nil
+application.setActivationPolicy(isCapture ? .accessory : .regular)
 
 // A borderless screenshot window makes the requested dimensions describe only saver content.
-let style: NSWindow.StyleMask = options.screenshotPath == nil
-    ? [.titled, .closable, .miniaturizable, .resizable]
-    : [.borderless]
+let style: NSWindow.StyleMask = isCapture
+    ? [.borderless]
+    : [.titled, .closable, .miniaturizable, .resizable]
 let window = NSWindow(contentRect: frame, styleMask: style, backing: .buffered, defer: false)
 window.isReleasedWhenClosed = false
 window.title = declaredName
 window.contentView = saverView
 window.center()
 
-if options.screenshotPath == nil {
+if !isCapture {
     // Interactive viewing: the developer asked to watch it, so give it focus.
     window.makeKeyAndOrderFront(nil)
     application.activate(ignoringOtherApps: true)
@@ -356,6 +452,50 @@ if options.screenshotPath == nil {
     window.orderFrontRegardless()
 }
 saverView.startAnimation()
+
+@MainActor var recorder: WindowRecorder?
+
+/// Starts filming once the window is listed as shareable, which is asynchronous; the first
+/// frame or two of a movie may therefore precede the saver's own first frame.
+@MainActor
+func startRecording(to path: String) {
+    let output = URL(fileURLWithPath: path).standardizedFileURL
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: output.deletingLastPathComponent().path,
+                                         isDirectory: &isDirectory), isDirectory.boolValue else {
+        fail("output directory does not exist: \(output.deletingLastPathComponent().path)")
+    }
+    // The recording output fails rather than overwrites, and does so only once capture has
+    // started — a stale movie from the previous run would otherwise cost the whole run.
+    try? FileManager.default.removeItem(at: output)
+    let windowID = CGWindowID(window.windowNumber)
+    let pixelSize = saverView.convertToBacking(saverView.bounds).size
+    SCShareableContent.getCurrentProcessShareableContent { content, error in
+        DispatchQueue.main.async {
+            guard let shared = content?.windows.first(where: { $0.windowID == windowID }) else {
+                fail("could not find the host window to record: " +
+                     (error?.localizedDescription ?? "not listed"))
+            }
+            do {
+                let active = try WindowRecorder(window: shared, pixelSize: pixelSize,
+                                                output: output)
+                recorder = active
+                active.start { error in
+                    guard let error else { return }
+                    DispatchQueue.main.async {
+                        fail("could not start recording: \(error.localizedDescription)")
+                    }
+                }
+            } catch {
+                fail("could not set up recording: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
+if let recordPath = options.recordPath {
+    MainActor.assumeIsolated { startRecording(to: recordPath) }
+}
 
 // Companion instances for `--instances`. Retained for the life of the process, because a
 // saver view released while still animating is retained by the run loop anyway and goes on
@@ -379,9 +519,9 @@ let companions: [(view: ScreenSaverView, window: NSWindow)] =
         companionWindow.setFrameOrigin(
             NSPoint(x: window.frame.minX + CGFloat(offset) * 24,
                     y: max(0, window.frame.minY - CGFloat(offset) * 24)))
-        companionWindow.level = options.screenshotPath == nil
-            ? window.level
-            : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
+        companionWindow.level = isCapture
+            ? NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
+            : window.level
         companionWindow.orderFrontRegardless()
         companion.startAnimation()
         return (companion, companionWindow)
@@ -451,8 +591,33 @@ let stopAllViews = {
     }
 }
 
+/// Finalises the movie before anything else ends the run, so a recording and a screenshot can
+/// be asked for together and the movie is complete either way.
 @MainActor
 func finish() {
+    guard let active = recorder, let path = options.recordPath else {
+        finishCapture()
+        return
+    }
+    recorder = nil
+    let watchdog = Timer(timeInterval: 10.0, repeats: false) { _ in
+        fail("recording did not finish within 10s — the movie may be incomplete")
+    }
+    RunLoop.main.add(watchdog, forMode: .common)
+    active.stop { error in
+        DispatchQueue.main.async {
+            watchdog.invalidate()
+            if let error {
+                fail("recording failed: \(error.localizedDescription)")
+            }
+            print("Wrote \(URL(fileURLWithPath: path).standardizedFileURL.path)")
+            finishCapture()
+        }
+    }
+}
+
+@MainActor
+func finishCapture() {
     guard let path = options.screenshotPath else {
         stopAllViews()
         endSheetIfOpen()
