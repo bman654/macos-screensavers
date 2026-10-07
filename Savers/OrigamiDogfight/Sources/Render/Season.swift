@@ -142,6 +142,13 @@ enum SeasonDress {
             // Lit windows and doors are vertical and never take snow, and a window that took a
             // tint would lose its glow at dusk.
             if name.contains("window") || name.contains("door") { return nil }
+            // A sheep wears no snow, and its fleece is the cream real sheep turn against a
+            // snowfield: in the white it was folded in, under winter's snow rule, a flock all but
+            // vanished into the field it stood in.
+            if name.contains("wool") {
+                return Look(tint: (PaperColor(0.86, 0.80, 0.66), PaperColor(0.82, 0.76, 0.62)), snow: 0, snowFrom: 1)
+            }
+            if name.contains("sheep") { return nil }
             if leaf && name.contains("pine") {
                 // Dark needles under snow: the darkest thing on a white landscape, which is
                 // what a winter wood looks like from above.

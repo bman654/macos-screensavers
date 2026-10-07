@@ -24,6 +24,8 @@ final class DayLight {
     /// Materials named for a window, whose emission comes up as the evening does.
     private var windows: [SCNMaterial] = []
     private var shown: Double = -1
+    /// The day's keys in this session's season (`keys(for:)`).
+    private let keys: [Key]
 
     private struct Key {
         let phase: Double
@@ -52,14 +54,38 @@ final class DayLight {
             skyColour: SIMD3(0.52, 0.61, 0.90), skyIntensity: 320),
     ]
 
-    /// The sun's direction of travel at a point on the dial.
+    /// Winter's ends of the day, in colour only — the sun's path and strength are the same. Snow
+    /// shows every cast, and the summer keys on it summed to pink: an orange sun and a blue sky
+    /// lift red and blue over green, and snow at dusk came out peach-mauve, at dawn faintly
+    /// lilac. Here the evening sun is golden rather than orange and the sky under it a greyer
+    /// blue, so a snowfield at dusk is warm — amber in the light, blue-grey in the folds — but
+    /// never pink; and the morning's sun is a paler, whiter yellow, so its cool sky reads as cold
+    /// rather than violet.
+    private static let winterColours: [(colour: SIMD3<Float>, skyColour: SIMD3<Float>)?] = [
+        (SIMD3(1.0, 0.97, 0.91), SIMD3(0.80, 0.87, 0.93)),
+        nil,
+        (SIMD3(1.0, 0.88, 0.68), SIMD3(0.70, 0.77, 0.86)),
+        (SIMD3(1.0, 0.83, 0.58), SIMD3(0.62, 0.70, 0.81)),
+    ]
+
+    private static func keys(for season: Season) -> [Key] {
+        guard season == .winter else { return keys }
+        return zip(keys, winterColours).map { key, winter in
+            guard let winter else { return key }
+            return Key(phase: key.phase, travel: key.travel, colour: winter.colour, intensity: key.intensity,
+                       skyColour: winter.skyColour, skyIntensity: key.skyIntensity)
+        }
+    }
+
+    /// The sun's direction of travel at a point on the dial — the same in every season.
     static func sunTravel(at phase: Double) -> SIMD3<Float> {
-        blend(phase) { $0.travel }
+        blend(phase, keys) { $0.travel }
     }
 
     /// `terrain` is the landscape's material, whose fold shading follows the sun.
-    init(quality: RenderQuality, terrain: SCNMaterial?) {
+    init(quality: RenderQuality, season: Season, terrain: SCNMaterial?) {
         self.terrain = terrain
+        keys = DayLight.keys(for: season)
         key.type = .directional
         key.castsShadow = true
         // The one fidelity knob a `.reduced` tile may turn: the shadow map does not shrink with
@@ -98,10 +124,10 @@ final class DayLight {
         shown = phase
         let travel = DayLight.sunTravel(at: phase)
         keyNode.simdLook(at: SIMD3(travel.x, travel.z, -travel.y), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
-        key.color = DayLight.colour(DayLight.blend(phase) { $0.colour })
-        key.intensity = CGFloat(DayLight.blend(phase) { SIMD3(repeating: $0.intensity) }.x)
-        sky.color = DayLight.colour(DayLight.blend(phase) { $0.skyColour })
-        sky.intensity = CGFloat(DayLight.blend(phase) { SIMD3(repeating: $0.skyIntensity) }.x)
+        key.color = DayLight.colour(DayLight.blend(phase, keys) { $0.colour })
+        key.intensity = CGFloat(DayLight.blend(phase, keys) { SIMD3(repeating: $0.intensity) }.x)
+        sky.color = DayLight.colour(DayLight.blend(phase, keys) { $0.skyColour })
+        sky.intensity = CGFloat(DayLight.blend(phase, keys) { SIMD3(repeating: $0.skyIntensity) }.x)
         if let terrain { TerrainMesh.aim(terrain, foldsFrom: travel) }
 
         // Lamps are lit as the sun goes: none by day, most by golden evening, all at dusk. Full
@@ -118,7 +144,7 @@ final class DayLight {
     }
 
     /// A value between the two keys either side of `phase`, smoothly.
-    private static func blend(_ phase: Double, _ value: (Key) -> SIMD3<Float>) -> SIMD3<Float> {
+    private static func blend(_ phase: Double, _ keys: [Key], _ value: (Key) -> SIMD3<Float>) -> SIMD3<Float> {
         let p = min(max(phase, 0), 1)
         guard let upper = keys.firstIndex(where: { $0.phase >= p }) else { return value(keys[keys.count - 1]) }
         guard upper > 0 else { return value(keys[0]) }

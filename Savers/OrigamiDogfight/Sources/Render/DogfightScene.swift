@@ -56,7 +56,7 @@ final class DogfightScene {
         shots = ProjectileField(shelf: shelf)
         wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour)
         supplies = SupplyField(shelf: shelf)
-        airfields = AirfieldField(shelf: shelf, papers: papers)
+        airfields = AirfieldField(shelf: shelf, papers: papers, season: countryside.atmosphere.season)
         // The lineup is for looking at models; a card in the corner would only be in the way.
         scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
 
@@ -80,12 +80,17 @@ final class DogfightScene {
             let shots = WeaponKind.allCases.map { "\($0)=\(shelf.projectile($0).isStandIn ? "stand-in" : "library")" }
             let tanks = TankType.allCases.map { type -> String in
                 let template = shelf.tank(type)
-                let model = armour.model(type: type, paper: Paper(kind: .plain, tint: 0), size: 0.2)
-                var paper = 0
+                // The side's colour replaces every material named "paper" (the asset contract), so
+                // what was skinned is counted by identity, and any "paper" left is untinted.
+                let skin = SCNMaterial()
+                let model = armour.model(type: type, paper: Paper(kind: .plain, tint: 0), size: 0.2, material: skin)
+                var skinned = 0, untinted = 0
                 model.node.enumerateHierarchy { node, _ in
-                    paper += node.geometry?.materials.filter { $0.name == "paper" }.count ?? 0
+                    skinned += node.geometry?.materials.filter { $0 === skin }.count ?? 0
+                    untinted += node.geometry?.materials.filter { $0.name == "paper" }.count ?? 0
                 }
-                return "\(type.modelName)=\(template.isStandIn ? "stand-in" : "library") turret=\(model.turret != nil) paperMaterials=\(paper)"
+                return "\(type.modelName)=\(template.isStandIn ? "stand-in" : "library") turret=\(model.turret != nil) "
+                    + "sideColour=\(skinned) untinted=\(untinted)"
             }
             let props = PropKind.allCases.map { kind in "\(kind.rawValue)×\(shelf.props(kind).filter { !$0.isStandIn }.count)" }
             NSLog("Origami lineup: %d library models; planes %@; shots %@; tanks %@; props %@; fire=%@ smoke=%@",
@@ -133,13 +138,15 @@ final class DogfightScene {
             react(to: event)
             landscape.observe(event, sim: sim, live: true)
         }
+        // Airfields first: the landscape's sweep lights the windows of whatever stands this
+        // frame, and a hangar is built on the frame its match begins.
+        airfields.sync(sim, now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
         landscape.update(sim: sim, time: sim.time + Double(alpha) * DogfightSim.stepSeconds)
         fleet.sync(sim, alpha: alpha, time: frame.time)
         armour.sync(sim, alpha: alpha)
         shots.sync(sim, alpha: alpha)
         wrecks.sync(sim, time: frame.time)
         supplies.sync(sim, alpha: alpha, time: frame.time)
-        airfields.sync(sim, now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
         scoreboard?.update(sim, drawableSize: frame.drawableSize,
                            now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
     }

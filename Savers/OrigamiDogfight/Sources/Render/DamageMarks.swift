@@ -35,7 +35,7 @@ enum DamageMarks {
         // An overall grime that deepens with each stage, under the marks: wherever a model's
         // paper is unwrapped onto the sheet, and however few marks land there, it is seen to
         // get dirtier. A tank's hull top missed most of the marks without it.
-        let grime: CGFloat = [0.97, 0.9, 0.8][stage - 1]
+        let grime: CGFloat = [0.98, 0.9, 0.8][stage - 1]
         ctx.setFillColor(CGColor(srgbRed: grime, green: grime * 0.98, blue: grime * 0.95, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
         // One stream for every stage, so stage 2 redraws stage 1's marks exactly and adds more.
@@ -50,11 +50,21 @@ enum DamageMarks {
             return CGPoint(x: x * s, y: y * s)
         }
 
-        // Stage 1: grey smudges — the thumbprints and graphite of a plane that has been in a fight.
-        for _ in 0..<14 {
+        // Stage 1: graphite scuffs — the smudges and grazes of a plane that has been clipped.
+        // Firm-hearted and few, with a short crisp graze through most: it is the edges that
+        // show on a bright yellow or pink sheet, where a soft grey wash only dulled the colour,
+        // and a few marks with edges read as hits where a wash all over read as dirt.
+        for _ in 0..<12 {
             let p = edgeward()
-            let r = CGFloat(rand.inRange(0.035, 0.08)) * s
-            blot(ctx, at: p, radius: r, colour: (0.70, 0.69, 0.68), alpha: 0.55, rand: &rand)
+            let r = CGFloat(rand.inRange(0.04, 0.075)) * s
+            blot(ctx, at: p, radius: r, colour: (0.50, 0.50, 0.53), alpha: 0.9, rand: &rand)
+            guard rand.next() < 0.75 else { continue }
+            let angle = CGFloat(rand.inRange(0, 2 * .pi)), length = CGFloat(rand.inRange(0.05, 0.1)) * s
+            let d = CGPoint(x: cos(angle) * length / 2, y: sin(angle) * length / 2)
+            ctx.setStrokeColor(CGColor(srgbRed: 0.38, green: 0.38, blue: 0.42, alpha: 0.8))
+            ctx.setLineWidth(s * CGFloat(rand.inRange(0.008, 0.014)))
+            ctx.setLineCap(.round)
+            ctx.strokeLineSegments(between: [CGPoint(x: p.x - d.x, y: p.y - d.y), CGPoint(x: p.x + d.x, y: p.y + d.y)])
         }
         if stage >= 2 {
             // Stage 2: brown scorches with darker hearts, where shots burned through.

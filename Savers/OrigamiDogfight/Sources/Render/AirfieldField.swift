@@ -17,6 +17,7 @@ final class AirfieldField {
     let root = SCNNode()
     private let shelf: ModelShelf
     private let papers: PaperMaterials
+    private let season: Season
     private var runwayMaterials: [Int: SCNMaterial] = [:]
 
     private final class Visual {
@@ -42,9 +43,10 @@ final class AirfieldField {
     /// samples it is draped through, under a plane's keel on its roll.
     private static let lift: Float = 0.004
 
-    init(shelf: ModelShelf, papers: PaperMaterials) {
+    init(shelf: ModelShelf, papers: PaperMaterials, season: Season) {
         self.shelf = shelf
         self.papers = papers
+        self.season = season
     }
 
     func sync(_ sim: DogfightSim, now: Double) {
@@ -91,6 +93,12 @@ final class AirfieldField {
             // keep their authored materials, which the seasons recolour by name.
             copy.materials = geometry.materials.map { $0.name == "paper" ? skin : $0 }
             node.geometry = copy
+        }
+        // The season dresses the authored materials as it does a house's — snow on the roof's
+        // up-facing folds — before the hangar is ever drawn, so it never pops up bare and then
+        // whitens. The team's stripe is left in its colour, lying across the snow.
+        for material in SeasonDress.materials(under: hangar) where material !== skin {
+            SeasonDress.dress(material, season: season)
         }
         // Sitting on the highest ground under its corners, so no corner is buried.
         let d = base.direction, n = SIMD2(-d.y, d.x)

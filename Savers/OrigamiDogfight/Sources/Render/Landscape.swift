@@ -18,7 +18,7 @@ final class Landscape {
     private let marks: GroundMarks
     private let fires: TreeFires
     /// The whole scene, swept now and then for models this file did not build but must still
-    /// light or dress: a window anywhere, and the fight's hangars, whose snow is the season's.
+    /// light: a window anywhere, the fight's hangars' among them.
     private weak var scene: SCNNode?
     private var nextSweep = -Double.infinity
     private var sweeps = 0
@@ -43,7 +43,7 @@ final class Landscape {
         marks = GroundMarks(terrain: sim.terrain)
         fires = TreeFires(shelf: shelf, props: sim.props)
         SeasonDress.dress(life.root, season: season)
-        daylight = DayLight(quality: quality, terrain: terrain.geometry?.firstMaterial)
+        daylight = DayLight(quality: quality, season: season, terrain: terrain.geometry?.firstMaterial)
 
         for node in [terrain, RoadStrips.node(roads: countryside.roads, terrain: sim.terrain, season: season),
                      marks.root, scenery, life.root, fires.root, cranes.root, daylight.root] {
@@ -75,12 +75,8 @@ final class Landscape {
         guard time >= nextSweep || time < nextSweep - 10, let scene else { return }
         sweeps += 1
         nextSweep = time + (sweeps < 8 ? 0.25 : 2)
-        let season = countryside.atmosphere.season
-        let ws = SeasonDress.materials(under: scene).filter { ($0.name ?? "").contains("window") }
-        for material in SeasonDress.materials(under: scene) {
-            let name = material.name ?? ""
-            if name.contains("window") { daylight.adopt(window: material) }
-            if name.contains("hangar"), material.shaderModifiers == nil { SeasonDress.dress(material, season: season) }
+        for material in SeasonDress.materials(under: scene) where (material.name ?? "").contains("window") {
+            daylight.adopt(window: material)
         }
     }
 
