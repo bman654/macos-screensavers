@@ -114,7 +114,7 @@ enum Scatter {
 
 /// A uniform hash grid for "is anything within r of here", which keeps four hundred trees'
 /// worth of rejection sampling linear rather than quadratic.
-private struct SpacingGrid {
+struct SpacingGrid {
     let cell: Float
     private var buckets: [SIMD2<Int32>: [(SIMD2<Float>, Float)]] = [:]
     /// The widest radius placed so far, which bounds how many buckets a query must visit.

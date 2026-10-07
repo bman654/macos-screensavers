@@ -28,7 +28,8 @@ enum PlaneType: Int, CaseIterable {
         }
     }
 
-    var spec: PlaneSpec {
+    /// The v1 numbers, at scale 1. `spec(scale:)` is what a plane actually flies with.
+    private var baseSpec: PlaneSpec {
         switch self {
         // Fastest, widest turns: a dart boom-and-zooms rather than turning with anything.
         case .dart:
@@ -50,6 +51,15 @@ enum PlaneType: Int, CaseIterable {
                              armour: 5, size: 0.28, weapons: [.rubberBand, .thumbtack])
         }
     }
+
+    /// Every length and speed at the match's scale; turn rate and armour are not lengths, so
+    /// a smaller plane turns in the same number of its own lengths and takes the same hits.
+    func spec(scale: Float) -> PlaneSpec {
+        let b = baseSpec
+        return PlaneSpec(minSpeed: b.minSpeed * scale, cruiseSpeed: b.cruiseSpeed * scale,
+                         maxSpeed: b.maxSpeed * scale, turnRate: b.turnRate, armour: b.armour,
+                         size: b.size * scale, weapons: b.weapons, scale: scale)
+    }
 }
 
 struct PlaneSpec {
@@ -67,8 +77,12 @@ struct PlaneSpec {
     /// much nearer the camera.
     let size: Float
     let weapons: [WeaponKind]
+    /// The match's scale, which every pilot distance — how close is close, how far a break
+    /// jinks — is multiplied by.
+    var scale: Float = 1
 
-    /// Vertical speed limit, m/s. Shared, because altitude is play rather than performance.
+    /// Vertical speed limit, m/s. Shared and not scaled: altitude is play rather than
+    /// performance, and the band the planes fly in is the camera's, which never changes.
     var climbRate: Float { 0.32 }
 
     /// The radius of a plane for a projectile's hit test: a little under half the length,
@@ -78,6 +92,8 @@ struct PlaneSpec {
 
 enum WeaponKind: Int, CaseIterable {
     case spitball, thumbtack, paperClip, eraser, paperBall, confetti, staples, rubberBand
+    /// A tank's: a pencil stub thrown steeply up at a plane, which falls back if it misses.
+    case pencil
 
     /// The projectile model's name in `Assets/index.json`. Confetti has none: it is runtime
     /// discs, per the plan.
@@ -91,10 +107,23 @@ enum WeaponKind: Int, CaseIterable {
         case .confetti: return nil
         case .staples: return "staple"
         case .rubberBand: return "rubber_band"
+        case .pencil: return "pencil"
         }
     }
 
-    var spec: WeaponSpec {
+    /// Lengths, speeds and the toy gravity at the match's scale, so a smaller plane's shot
+    /// follows the same arc in its own lengths. The pencil's gravity is the exception: it climbs
+    /// from the ground to the planes' band, and the band does not scale.
+    func spec(scale: Float) -> WeaponSpec {
+        let b = baseSpec
+        return WeaponSpec(muzzleSpeed: b.muzzleSpeed * scale, dragTime: b.dragTime,
+                          gravity: self == .pencil ? b.gravity : b.gravity * scale, damage: b.damage,
+                          cooldown: b.cooldown, range: b.range * scale, cone: b.cone,
+                          radius: b.radius * scale, size: b.size * scale, pellets: b.pellets,
+                          spread: b.spread, burst: b.burst, burstInterval: b.burstInterval)
+    }
+
+    private var baseSpec: WeaponSpec {
         switch self {
         case .spitball:
             return WeaponSpec(muzzleSpeed: 2.6, dragTime: 0.45, gravity: 1.6, damage: 0.8,
@@ -125,6 +154,12 @@ enum WeaponKind: Int, CaseIterable {
         case .rubberBand:
             return WeaponSpec(muzzleSpeed: 3.2, dragTime: 0.8, gravity: 1.0, damage: 1.5,
                               cooldown: 1.52, range: 1.35, cone: 0.12, radius: 0.02, size: 0.14)
+        // Thrown up, not along: the muzzle speed is how hard it is thrown upward, and its
+        // horizontal speed is whatever the lead needs (`TankGunnery`). No drag, so the lead is
+        // a straight line; the tank's range is in `TankSpec`.
+        case .pencil:
+            return WeaponSpec(muzzleSpeed: 1.6, dragTime: 1_000, gravity: 1.3, damage: 1.4,
+                              cooldown: 2.6, range: 1.0, cone: 0.12, radius: 0.02, size: 0.1)
         }
     }
 }
@@ -161,6 +196,8 @@ struct WeaponSpec {
     /// How long a miss lies on the ground before it fades, and how long the fade takes.
     static let lieTime: Float = 4.0
     static let fadeTime: Float = 1.2
+    /// How long a shot that came down in a lake takes to go under.
+    static let sinkTime: Float = 1.6
 }
 
 // MARK: - Paper

@@ -1,5 +1,5 @@
 // What is in the air and on the ground: planes, projectiles, wrecks, and the events the world
-// reports as they change.
+// reports as they change. Tanks are in `Tank.swift`.
 //
 // Plain value types the renderer reads each frame. Every moving thing keeps the pose it had at
 // the start of the last step, so the renderer can interpolate between fixed steps instead of
@@ -61,6 +61,9 @@ struct PilotMemory {
     var jinkAltitude: Float?
     /// The strongest soft-wall pull this step, kept for the probe's "stuck at the wall" count.
     var wallUrgency: Float = 0
+    /// A strafing run on a tank, while one is on.
+    var strafe: StrafeRun?
+    var nextStrafeAllowed: Double = 0
 }
 
 struct Plane {
@@ -86,6 +89,8 @@ struct Plane {
     var cooldown: Float = 0.6
     var burstLeft = 0
     var burstTimer: Float = 0
+    /// A burst aimed down at a tank keeps the first round's aim for the rest.
+    var burstClimb: Float?
 
     var direction: SIMD2<Float> { SIMD2(cos(pose.heading), sin(pose.heading)) }
     var velocity: SIMD2<Float> { direction * speed }
@@ -94,12 +99,18 @@ struct Plane {
 
     /// Below half armour a plane trails paper scraps.
     var isDamaged: Bool { health < spec.armour * 0.5 }
+
+    /// Its weapon at its own scale.
+    var gun: WeaponSpec { weapon.spec(scale: spec.scale) }
 }
 
 enum ProjectileState: Equatable {
     case flying
     /// On the ground since `age` was this; lies for `WeaponSpec.lieTime`, then fades.
     case landed(at: Float)
+    /// Came down in a lake when `age` was this, and is going under: a crashed plane's end in
+    /// miniature, rather than a spitball lying on top of the water.
+    case sinking(at: Float)
 }
 
 struct Projectile {
@@ -109,6 +120,8 @@ struct Projectile {
     let side: Int
     /// The shooter's paper — confetti is punched out of it.
     let paper: Paper
+    /// The shooter's match scale, which sizes it and everything it does.
+    let scale: Float
     /// Tumble axis times rate, radians per second, so every clip turns its own way.
     let spin: SIMD3<Float>
 
@@ -121,18 +134,42 @@ struct Projectile {
     var age: Float = 0
     var state: ProjectileState = .flying
 
+    var spec: WeaponSpec { kind.spec(scale: scale) }
+
     /// How far it has tumbled. Frozen on landing, so a miss lies still.
     var tumble: Float {
-        if case .landed(let at) = state { return at }
-        return age
+        switch state {
+        case .flying: return age
+        case .landed(let at), .sinking(let at): return at
+        }
     }
 
     /// 1 while it can be seen at full strength, falling to 0 over its fade.
     var opacity: Float {
-        guard case .landed(let at) = state else { return 1 }
-        let lying = age - at - WeaponSpec.lieTime
-        return 1 - min(max(lying / WeaponSpec.fadeTime, 0), 1)
+        switch state {
+        case .flying:
+            return 1
+        case .landed(let at):
+            let lying = age - at - WeaponSpec.lieTime
+            return 1 - min(max(lying / WeaponSpec.fadeTime, 0), 1)
+        case .sinking(let at):
+            return 1 - smoothstep(0.5, 1, sinking(since: at))
+        }
     }
+
+    /// 0 at the splash, 1 once it has gone under.
+    func sinking(since at: Float) -> Float { min(max((age - at) / WeaponSpec.sinkTime, 0), 1) }
+
+    var isSettled: Bool {
+        if case .flying = state { return false }
+        return true
+    }
+}
+
+/// What crashed or was knocked out — the wreck path draws both, a tank at its own scale.
+enum WreckModel: Equatable {
+    case plane(PlaneType)
+    case tank(TankType)
 }
 
 struct Wreck {
@@ -144,12 +181,17 @@ struct Wreck {
     static let sinkDuration: Double = 3
 
     let id: Int
-    let type: PlaneType
+    let model: WreckModel
     let paper: Paper
+    /// The match scale it crashed at, kept across a match boundary: a wreck from a match of
+    /// big planes still burning as a furball of small ones begins is the size it was.
+    let scale: Float
     let position: SIMD2<Float>
     let ground: Float
     let heading: Float
     let roll: Float
+    /// A tank's turret, relative to its hull, as it was knocked out.
+    var turret: Float = 0
     let crashedAt: Double
     let inWater: Bool
 
@@ -163,10 +205,19 @@ enum SimEvent {
     case matchEnded(index: Int, kills: Int)
     case spawned(plane: Int)
     case fired(plane: Int, weapon: WeaponKind)
-    case hit(victim: Int, by: Int, weapon: WeaponKind, position: SIMD2<Float>, altitude: Float, paper: Paper)
+    case hit(victim: Int, by: Int, weapon: WeaponKind, position: SIMD2<Float>, altitude: Float, paper: Paper,
+             scale: Float)
     case downed(victim: Int, by: Int)
-    case crashed(wreck: Int, position: SIMD2<Float>, ground: Float, inWater: Bool, paper: Paper)
+    case crashed(wreck: Int, position: SIMD2<Float>, ground: Float, inWater: Bool, paper: Paper, scale: Float)
     case exited(plane: Int)
+    /// A shot came down in a lake.
+    case splashed(position: SIMD2<Float>, kind: WeaponKind, scale: Float)
+    case tankSpawned(tank: Int)
+    case tankFired(tank: Int)
+    case tankHit(tank: Int, by: Int, position: SIMD2<Float>, altitude: Float, paper: Paper, scale: Float)
+    case tankDestroyed(tank: Int, by: Int, wreck: Int, position: SIMD2<Float>, ground: Float, paper: Paper,
+                       scale: Float)
+    case tankLeft(tank: Int)
 }
 
 /// `sin(time × rate + phase)`, with the argument formed in `Double`.

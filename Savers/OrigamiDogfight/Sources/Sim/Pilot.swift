@@ -11,6 +11,9 @@
 // Over all of it sits the **predictive soft wall**: the playable area is the camera's view at
 // the top of the band, and a plane starts turning away early enough, given its own turn
 // radius, that it rarely leaves the screen. Entering and exiting planes ignore it.
+//
+// Every distance here is in v1's metres times the match's scale (`k`), so a furball of small
+// planes fights exactly as a few big ones do, only smaller.
 
 import Foundation
 import simd
@@ -32,7 +35,7 @@ extension DogfightSim {
         case .entering(let aim):
             // In once it is clear of the wall — or after long enough that it must have been
             // turned round by something, so it fights from wherever it is.
-            if rig.wall.contains(me.position, margin: 0.05) || now - me.stateSince > 7 {
+            if wall.contains(me.position, margin: 0.05 * me.spec.scale) || now - me.stateSince > 7 {
                 planes[i].state = .fighting
                 planes[i].stateSince = now
             }
@@ -45,7 +48,7 @@ extension DogfightSim {
 
     /// Whether `other` is something a pilot may chase or shoot at.
     func isTargetable(_ other: Plane, by me: Plane) -> Bool {
-        guard other.side != me.side, other.id != me.id else { return false }
+        guard other.side != me.side, other.id != me.id, match.phase == .fighting else { return false }
         switch other.state {
         case .fighting: return true
         case .entering: return rig.visible(atAltitude: other.altitude).contains(other.position)
@@ -56,6 +59,7 @@ extension DogfightSim {
     private func fightingCommand(for i: Int, among others: [Plane], now: Double) -> Command {
         var me = planes[i]
         let spec = me.spec
+        let k = spec.scale
         let dt = DogfightSim.step
         let heading = me.direction
         var pilot = me.pilot
@@ -82,7 +86,7 @@ extension DogfightSim {
 
         // Threat: an enemy behind me, close, with its nose on me.
         var threat: Plane?
-        var threatDistance: Float = 1.3
+        var threatDistance: Float = 1.3 * k
         for other in others where other.side != me.side && !other.state.isDowned {
             let offset = other.position - me.position
             let distance = simd_length(offset)
@@ -100,6 +104,12 @@ extension DogfightSim {
             break
         }
 
+        if threat != nil {
+            abandonStrafe(&pilot, now: now)
+        } else {
+            maybeStartStrafe(me, pilot: &pilot, target: target, now: now)
+        }
+
         if let threat, pilot.maneuver == .pursue, now >= pilot.nextBreakAllowed {
             let toThreat = threat.position - me.position
             let side: Float = cross(heading, toThreat) >= 0 ? 1 : -1
@@ -108,7 +118,7 @@ extension DogfightSim {
             // Jink away from the attacker's altitude: shots are only good within a hand's
             // breadth of height, so changing it is half of a break.
             let away: Float = threat.altitude > me.altitude ? -1 : 1
-            pilot.jinkAltitude = min(max(me.altitude + away * combat.inRange(0.15, 0.25),
+            pilot.jinkAltitude = min(max(me.altitude + away * combat.inRange(0.15, 0.25) * k,
                                          ViewRig.bandLow), ViewRig.bandHigh)
         }
 
@@ -135,7 +145,7 @@ extension DogfightSim {
             // The fast types fight by boom-and-zoom: through, out and round again, rather
             // than turning with anything nimbler.
             let zoomer = me.type == .dart || me.type == .interceptor
-            if distance < 0.7, behind || (zoomer && now - pilot.lastShotAt < 0.2 && distance < 0.45),
+            if distance < 0.7 * k, behind || (zoomer && now - pilot.lastShotAt < 0.2 && distance < 0.45 * k),
                combat.next() < (zoomer ? 0.05 : 0.02) {
                 pilot.maneuver = .extend(heading: openSkyHeading(for: me, among: others),
                                          until: now + Double(combat.inRange(1.5, 2.6)))
@@ -153,36 +163,43 @@ extension DogfightSim {
         var altitude = pilot.jinkAltitude ?? pilot.cruiseAltitude
         var forcedTurn: Float?
 
-        switch pilot.maneuver {
-        case .breakTurn(let direction, _):
-            forcedTurn = direction * spec.turnRate
-            speed = spec.minSpeed
-        case .extend(let h, _):
-            desired = SIMD2(cos(h), sin(h))
-            speed = spec.maxSpeed
-        case .pursue:
-            if let target {
-                let weapon = me.weapon.spec
-                let offset = target.position - me.position
-                let distance = simd_length(offset)
-                // Lead pursuit: aim where the target will be when a shot would arrive.
-                let flight = min(distance / (weapon.muzzleSpeed + me.speed), 0.6)
-                let lead = target.position + target.velocity * flight
-                desired = unit(lead - me.position, or: heading)
-                let off = angleBetween(heading, lead - me.position)
-                if off > 1.2 {
-                    speed = spec.minSpeed          // tighten the turn
-                } else if distance < 0.5 && off < 0.5 {
-                    speed = max(min(target.speed * 0.95, spec.maxSpeed), spec.minSpeed)  // do not overshoot
-                } else if distance > 1.6 {
-                    speed = spec.maxSpeed          // close the range
+        let run = strafeSteering(me, pilot: &pilot, now: now)
+        if let run {
+            desired = run.desired
+            speed = run.speed
+            altitude = run.altitude
+        } else {
+            switch pilot.maneuver {
+            case .breakTurn(let direction, _):
+                forcedTurn = direction * spec.turnRate
+                speed = spec.minSpeed
+            case .extend(let h, _):
+                desired = SIMD2(cos(h), sin(h))
+                speed = spec.maxSpeed
+            case .pursue:
+                if let target {
+                    let weapon = me.gun
+                    let offset = target.position - me.position
+                    let distance = simd_length(offset)
+                    // Lead pursuit: aim where the target will be when a shot would arrive.
+                    let flight = min(distance / (weapon.muzzleSpeed + me.speed), 0.6)
+                    let lead = target.position + target.velocity * flight
+                    desired = unit(lead - me.position, or: heading)
+                    let off = angleBetween(heading, lead - me.position)
+                    if off > 1.2 {
+                        speed = spec.minSpeed          // tighten the turn
+                    } else if distance < 0.5 * k && off < 0.5 {
+                        speed = max(min(target.speed * 0.95, spec.maxSpeed), spec.minSpeed)  // do not overshoot
+                    } else if distance > 1.6 * k {
+                        speed = spec.maxSpeed          // close the range
+                    }
+                    // Hold the target's height plus what the shot will drop on the way.
+                    altitude = pilot.jinkAltitude ?? (target.altitude + 0.5 * weapon.gravity * flight * flight)
+                } else {
+                    // Nothing to fight: drift toward the middle of the arena.
+                    let toCenter = wall.centroid - me.position
+                    if simd_length(toCenter) > 0.5 { desired = unit(heading + unit(toCenter, or: heading) * 0.4, or: heading) }
                 }
-                // Hold the target's height plus what the shot will drop on the way.
-                altitude = pilot.jinkAltitude ?? (target.altitude + 0.5 * weapon.gravity * flight * flight)
-            } else {
-                // Nothing to fight: drift toward the middle of the arena.
-                let toCenter = rig.wall.centroid - me.position
-                if simd_length(toCenter) > 0.5 { desired = unit(heading + unit(toCenter, or: heading) * 0.4, or: heading) }
             }
         }
 
@@ -192,12 +209,12 @@ extension DogfightSim {
             let offset = me.position - other.position
             let distance = simd_length(offset)
             guard distance > 1e-4 else { continue }
-            let reach: Float = other.side == me.side ? 0.5 : 0.22
+            let reach: Float = (other.side == me.side ? 0.5 : 0.22) * k
             if distance < reach {
                 push += offset / distance * (reach - distance) / reach
             }
-            if distance < 0.3, abs(other.altitude - me.altitude) < 0.12 {
-                altitude += (me.altitude >= other.altitude ? 1 : -1) * 0.15
+            if run == nil, distance < 0.3 * k, abs(other.altitude - me.altitude) < 0.12 * k {
+                altitude += (me.altitude >= other.altitude ? 1 : -1) * 0.15 * k
             }
         }
         if simd_length(push) > 0 { desired = unit(desired + push * 1.5, or: heading) }
@@ -208,6 +225,8 @@ extension DogfightSim {
         // An extension that has reached the edge is over: the run out was the point, and
         // carrying it on would only press the plane along the wall.
         if urgency > 0.8, case .extend = pilot.maneuver { pilot.maneuver = .pursue }
+        // The same for a run still lining up: the wall has turned it away, so the run is off.
+        if urgency > 1, let strafe = pilot.strafe, case .approach = strafe.phase { abandonStrafe(&pilot, now: now) }
         if urgency > 0 {
             let weight = min(urgency, 1)
             desired = unit(desired * (1 - weight) + inward * urgency * 1.5, or: inward)
@@ -221,27 +240,28 @@ extension DogfightSim {
         // Facing straight into the wall, either way round is "toward" it; turn toward the open
         // side so the choice is the short one rather than whichever the arithmetic rounds to.
         if urgency > 1, angleBetween(heading, inward) > 2.6 {
-            let toCenter = rig.wall.centroid - me.position
+            let toCenter = wall.centroid - me.position
             turn = (cross(heading, toCenter) >= 0 ? 1 : -1) * spec.turnRate
         }
 
         me.pilot = pilot
         planes[i] = me
-        return Command(turn: turn, speed: speed,
-                       altitude: min(max(altitude, ViewRig.bandLow), ViewRig.bandHigh))
+        let floor = pilot.strafe.map { $0.floor } ?? ViewRig.bandLow
+        return Command(turn: turn, speed: speed, altitude: min(max(altitude, floor), ViewRig.bandHigh))
     }
 
     /// A heading out of the crowd: away from the nearby planes, toward the middle of the arena,
     /// and not far off the way the plane is already going — an extension is a straight line,
     /// so it has to be one the plane can fly without first turning round.
     func openSkyHeading(for me: Plane, among others: [Plane]) -> Float {
+        let k = me.spec.scale
         var away = SIMD2<Float>(0, 0)
         for other in others where other.id != me.id && !other.state.isDowned {
             let offset = me.position - other.position
-            let distance = max(simd_length(offset), 0.05)
-            if distance < 1.5 { away += offset / distance * (1.5 - distance) }
+            let distance = max(simd_length(offset), 0.05 * k)
+            if distance < 1.5 * k { away += offset / distance * (1.5 * k - distance) / k }
         }
-        let toCenter = rig.wall.centroid - me.position
+        let toCenter = wall.centroid - me.position
         var direction = me.direction * 1.2 + away * 0.8
         if simd_length(toCenter) > 0.3 { direction += unit(toCenter, or: .zero) * min(simd_length(toCenter), 1.5) }
         let length = simd_length(direction)
@@ -256,10 +276,10 @@ extension DogfightSim {
     /// turning that far out, plus a reaction distance, plus a soft zone over which the pull
     /// ramps up. So a fast, wide-turning dart begins its turn much earlier than a glider does.
     func wallPull(for plane: Plane) -> (urgency: Float, inward: SIMD2<Float>) {
-        let wall = rig.wall
+        let k = plane.spec.scale
         let radius = plane.speed / plane.spec.turnRate
         let heading = plane.direction
-        let soft: Float = 0.25
+        let soft: Float = 0.25 * k
         var urgency: Float = 0
         var inward = SIMD2<Float>(0, 0)
         for e in 0..<4 {
@@ -273,9 +293,9 @@ extension DogfightSim {
                 let need = radius * (1 - max(0, 1 - approach * approach).squareRoot())
                 u = (need + plane.speed * 0.3 + soft - d) / soft
             } else {
-                u = (0.15 - d) / 0.3
+                u = (0.15 * k - d) / (0.3 * k)
             }
-            if d < 0 { u = max(u, 1 + min(-d * 4, 1)) }
+            if d < 0 { u = max(u, 1 + min(-d * 4 / k, 1)) }
             u = min(max(u, 0), 2)
             urgency = max(urgency, u)
             inward += n * u
