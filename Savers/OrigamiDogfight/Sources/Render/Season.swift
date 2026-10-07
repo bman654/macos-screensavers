@@ -93,6 +93,9 @@ enum SeasonDress {
         /// How fully snow covers an up-facing facet, and from how steep up it starts.
         let snow: Float
         let snowFrom: Float
+        /// A bare crown's lace: a web of twigs drawn over it, and snow caught in the twigs as a
+        /// fine dusting rather than lying in a sheet — 0 for everything else.
+        var lace: Float = 0
     }
 
     static func dress(_ root: SCNNode, season: Season) {
@@ -155,10 +158,23 @@ enum SeasonDress {
                 return Look(tint: (PaperColor(0.16, 0.33, 0.24), PaperColor(0.21, 0.38, 0.27)), snow: 0.85, snowFrom: 0.72)
             }
             if leaf {
-                // Bare: the canopy folded in the dark warm brown of twigs, and no snow on it — snow
-                // does not lie on bare twigs, and a canopy under a white cap read as one more
-                // snowy boulder.
-                return Look(tint: (PaperColor(0.33, 0.24, 0.20), PaperColor(0.42, 0.31, 0.24)), snow: 0, snowFrom: 1)
+                // Bare crowns under snow. A crown is a round folded blob from above, so its
+                // surface is all that can say "tree": a plain dark brown crown read as a boulder
+                // lying on the snow, one with whole facets white as a cut gem, and one mottled all
+                // over as granite. So snow lies on the crown's upper side and thins softly down its
+                // flanks into a violet-brown underside laced with darker twigs — a snow-laden tree,
+                // whose shadow falls clear of it the way a rock's never does. Poplars keep a paler,
+                // warmer twig and bushes the red of winter stems, so a wood still has more than
+                // one kind of tree in it.
+                let twigs: (PaperColor, PaperColor)
+                if name.contains("poplar") {
+                    twigs = (PaperColor(0.55, 0.47, 0.38), PaperColor(0.49, 0.42, 0.35))
+                } else if name.contains("bush") {
+                    twigs = (PaperColor(0.52, 0.30, 0.28), PaperColor(0.45, 0.26, 0.25))
+                } else {
+                    twigs = (PaperColor(0.45, 0.37, 0.38), PaperColor(0.38, 0.31, 0.33))
+                }
+                return Look(tint: twigs, snow: 0.92, snowFrom: 0.25, lace: 1)
             }
             if name.contains("roof") { return Look(tint: nil, snow: 0.95, snowFrom: 0.42) }
             return Look(tint: nil, snow: 0.9, snowFrom: 0.7)
@@ -177,6 +193,7 @@ enum SeasonDress {
         material.setValue(NSNumber(value: look.tint == nil ? 0 : 1), forKey: "tintMix")
         material.setValue(NSNumber(value: look.snow), forKey: "snowAmount")
         material.setValue(NSNumber(value: look.snowFrom), forKey: "snowFrom")
+        material.setValue(NSNumber(value: look.lace), forKey: "lace")
         material.setValue(NSValue(scnVector3: linear(snowColour)), forKey: "snowColour")
     }
 
@@ -194,6 +211,7 @@ enum SeasonDress {
     float tintMix;
     float snowAmount;
     float snowFrom;
+    float lace;
     float3 snowColour;
     #pragma body
     float4 wp = scn_frame.inverseViewTransform * float4(_surface.position, 1.0);
@@ -209,7 +227,36 @@ enum SeasonDress {
     float n = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
     float3 tinted = mix(tintA, tintB, n);
     _surface.diffuse.rgb = mix(_surface.diffuse.rgb, tinted, tintMix);
-    float snow = smoothstep(snowFrom, snowFrom + 0.12, wn.y) * snowAmount;
+    // A bare crown's snow thins over a wide band of slope, so it shades round the crown rather
+    // than stopping at a fold.
+    float snow = smoothstep(snowFrom, snowFrom + mix(0.12, 0.45, lace), wn.y) * snowAmount;
+    if (lace > 0.0) {
+        // Twigs: where a fine noise crosses its middle value it draws a wandering line, and
+        // its lines together a web, seen where the snow thins. Snow: a second noise as fine,
+        // which breaks the snow's lower edge into flecks caught in the twigs, so it never
+        // follows a facet's edge.
+        float2 tq = wp.xz / 0.006;
+        float2 ti = floor(tq);
+        float2 tf = tq - ti;
+        tf = tf * tf * (3.0 - 2.0 * tf);
+        float t00 = fract(sin(dot(ti, float2(269.5, 183.3))) * 43758.5453);
+        float t10 = fract(sin(dot(ti + float2(1.0, 0.0), float2(269.5, 183.3))) * 43758.5453);
+        float t01 = fract(sin(dot(ti + float2(0.0, 1.0), float2(269.5, 183.3))) * 43758.5453);
+        float t11 = fract(sin(dot(ti + float2(1.0, 1.0), float2(269.5, 183.3))) * 43758.5453);
+        float tn = mix(mix(t00, t10, tf.x), mix(t01, t11, tf.x), tf.y);
+        float twig = 1.0 - smoothstep(0.03, 0.09, abs(tn - 0.5));
+        _surface.diffuse.rgb *= mix(1.0, 0.6, twig * lace * (1.0 - snow));
+        float2 sq = wp.xz / 0.006 + float2(17.0, 31.0);
+        float2 si = floor(sq);
+        float2 sf = sq - si;
+        sf = sf * sf * (3.0 - 2.0 * sf);
+        float s00 = fract(sin(dot(si, float2(127.1, 311.7))) * 43758.5453);
+        float s10 = fract(sin(dot(si + float2(1.0, 0.0), float2(127.1, 311.7))) * 43758.5453);
+        float s01 = fract(sin(dot(si + float2(0.0, 1.0), float2(127.1, 311.7))) * 43758.5453);
+        float s11 = fract(sin(dot(si + float2(1.0, 1.0), float2(127.1, 311.7))) * 43758.5453);
+        float sn = mix(mix(s00, s10, sf.x), mix(s01, s11, sf.x), sf.y);
+        snow = mix(snow, snow * smoothstep(0.2, 0.6, sn + snow * 0.5), lace);
+    }
     _surface.diffuse.rgb = mix(_surface.diffuse.rgb, snowColour, snow);
     """
 }
