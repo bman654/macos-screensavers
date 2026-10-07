@@ -66,8 +66,8 @@ extension DogfightSim {
             let angle = me.pose.heading + fan + combat.inRange(-0.14, 0.14)
             let direction = SIMD2(cos(angle), sin(angle))
             let start = me.position + me.direction * me.spec.size * 0.5
-            let axis = simd_normalize(SIMD3(combat.inRange(-1, 1), combat.inRange(-1, 1), combat.inRange(-1, 1))
-                                      + SIMD3(0, 0, 0.001))
+            let raw = SIMD3(combat.inRange(-1, 1), combat.inRange(-1, 1), combat.inRange(-1, 1))
+            let axis = simd_length(raw) > 1e-4 ? simd_normalize(raw) : SIMD3<Float>(0, 0, 1)
             let spinRate = combat.inRange(8, 16) * (me.weapon == .paperBall ? 0.5 : 1)
             let projectile = Projectile(
                 id: makeID(), kind: me.weapon, owner: me.id, side: me.side, paper: me.paper,

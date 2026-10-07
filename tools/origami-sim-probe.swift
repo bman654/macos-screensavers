@@ -32,6 +32,8 @@ struct Report {
     var longestCircle: Double = 0
     /// The longest one plane spent continuously with the wall in command — hugging, not turning.
     var longestWall: Double = 0
+    /// Plane-steps with a NaN or infinite pose. Must be zero: a NaN heading loses a plane silently.
+    var nonFinite = 0
     var maxKillsIn3s = 0
     var maxProjectiles = 0
     var fullStrengthFraction: Double = 0
@@ -122,6 +124,9 @@ func soak(seed: UInt64, mode: MatchMode?, planes: Int?, minutes: Double, aspect:
             r.spreadSamples += 1
         }
         for p in sim.planes {
+            let pose = p.pose
+            if ![pose.position.x, pose.position.y, pose.altitude, pose.heading, pose.bank, pose.pitch, p.speed]
+                .allSatisfy(\.isFinite) { r.nonFinite += 1 }
             switch p.state {
             case .fighting:
                 airborne += 1
@@ -232,8 +237,10 @@ struct Probe {
         // Determinism: the same seed must name the same fight, event for event.
         let first = soak(seed: seeds.first ?? 1, mode: nil, planes: planes, minutes: min(minutes, 10), aspect: aspect)
         let second = soak(seed: seeds.first ?? 1, mode: nil, planes: planes, minutes: min(minutes, 10), aspect: aspect)
-        print(String(format: "\ndeterminism: %016llx vs %016llx  %@", first.hash, second.hash,
+        let nonFinite = all.reduce(0) { $0 + $1.nonFinite }
+        print("\nnon-finite plane poses across every run: \(nonFinite)")
+        print(String(format: "determinism: %016llx vs %016llx  %@", first.hash, second.hash,
                      first.hash == second.hash ? "SAME" : "DIFFERENT"))
-        if !covered || first.hash != second.hash { exit(1) }
+        if !covered || first.hash != second.hash || nonFinite > 0 { exit(1) }
     }
 }

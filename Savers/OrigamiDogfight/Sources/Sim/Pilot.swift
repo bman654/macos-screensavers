@@ -36,7 +36,7 @@ extension DogfightSim {
                 planes[i].state = .fighting
                 planes[i].stateSince = now
             }
-            return Command(turn: turnToward(simd_normalize(aim - me.position), from: me, gain: 3),
+            return Command(turn: turnToward(unit(aim - me.position, or: me.direction), from: me, gain: 3),
                            speed: me.spec.cruiseSpeed, altitude: me.pilot.cruiseAltitude)
         case .fighting:
             return fightingCommand(for: i, among: others, now: now)
@@ -168,7 +168,7 @@ extension DogfightSim {
                 // Lead pursuit: aim where the target will be when a shot would arrive.
                 let flight = min(distance / (weapon.muzzleSpeed + me.speed), 0.6)
                 let lead = target.position + target.velocity * flight
-                desired = simd_normalize(lead - me.position)
+                desired = unit(lead - me.position, or: heading)
                 let off = angleBetween(heading, lead - me.position)
                 if off > 1.2 {
                     speed = spec.minSpeed          // tighten the turn
@@ -182,7 +182,7 @@ extension DogfightSim {
             } else {
                 // Nothing to fight: drift toward the middle of the arena.
                 let toCenter = rig.wall.centroid - me.position
-                if simd_length(toCenter) > 0.5 { desired = simd_normalize(heading + simd_normalize(toCenter) * 0.4) }
+                if simd_length(toCenter) > 0.5 { desired = unit(heading + unit(toCenter, or: heading) * 0.4, or: heading) }
             }
         }
 
@@ -200,7 +200,7 @@ extension DogfightSim {
                 altitude += (me.altitude >= other.altitude ? 1 : -1) * 0.15
             }
         }
-        if simd_length(push) > 0 { desired = simd_normalize(desired + push * 1.5) }
+        if simd_length(push) > 0 { desired = unit(desired + push * 1.5, or: heading) }
 
         // The wall has the last word.
         let (urgency, inward) = wallPull(for: me)
@@ -210,7 +210,7 @@ extension DogfightSim {
         if urgency > 0.8, case .extend = pilot.maneuver { pilot.maneuver = .pursue }
         if urgency > 0 {
             let weight = min(urgency, 1)
-            desired = simd_normalize(desired * (1 - weight) + inward * urgency * 1.5 + heading * 0.001)
+            desired = unit(desired * (1 - weight) + inward * urgency * 1.5, or: inward)
             if urgency > 0.7 {
                 forcedTurn = nil
                 speed = min(speed, (spec.minSpeed + spec.cruiseSpeed) / 2)
@@ -243,7 +243,7 @@ extension DogfightSim {
         }
         let toCenter = rig.wall.centroid - me.position
         var direction = me.direction * 1.2 + away * 0.8
-        if simd_length(toCenter) > 0.3 { direction += simd_normalize(toCenter) * min(simd_length(toCenter), 1.5) }
+        if simd_length(toCenter) > 0.3 { direction += unit(toCenter, or: .zero) * min(simd_length(toCenter), 1.5) }
         let length = simd_length(direction)
         let out = length > 1e-4 ? direction / length : me.direction
         return atan2(out.y, out.x)
@@ -287,6 +287,15 @@ extension DogfightSim {
         let difference = (goal - plane.pose.heading).wrappedAngle
         return max(min(difference * gain, plane.spec.turnRate), -plane.spec.turnRate)
     }
+}
+
+/// `v` scaled to unit length, or `fallback` when it has none to scale. Every steering vector
+/// here is a sum of pulls that can cancel exactly — a target dead ahead of a push away from a
+/// teammate — and `simd_normalize` of a zero vector is NaN, which would turn a heading into NaN
+/// and lose the plane for good without a single visible error.
+func unit(_ v: SIMD2<Float>, or fallback: SIMD2<Float>) -> SIMD2<Float> {
+    let length = simd_length(v)
+    return length > 1e-6 ? v / length : fallback
 }
 
 func angleBetween(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
