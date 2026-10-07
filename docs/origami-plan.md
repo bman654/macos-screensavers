@@ -153,7 +153,9 @@ as a simple stand-in, never a black screen.
   colours.
 - **Manifest** — at least `name`, `kind` (`plane` / `projectile` / `tree` / `rock` / `house` /
   `boat` / `fire` / `smoke` / `tank`), `asset`, and `bounds` (min and max in metres, in the authored
-  Blender axes). Planes add `sheetAspect`.
+  Blender axes). Planes add `sheetAspect`. Tanks add `sheetAspect` and `turret: {node, pivot,
+  muzzles}` — the pivot in Blender axes, the barrel tips in the turret's own space, which is
+  where the runtime spawns a shot.
 
 ## Shared code
 
