@@ -127,8 +127,49 @@ dropped below about 55° and lost under a fifth of its strength. Now (`DayLight.
   level ground. Tanks, crates and wrecks keep the sun's shadows.
 - **Winter has its own dusk**: a dimmer gold sun under a cyan-leaning slate sky — a warm sun
   over a blue sky on flat snow sums to mauve, and did, twice.
-- `ORIGAMI_PHASE` (0 dawn … 1 dusk) pins the dial in the harness: a warmup stops at ten minutes
-  and the drift takes an hour, so it is the only way to see dusk in a still.
+- `ORIGAMI_PHASE` (0 dawn … 1 dusk … 1.25 night) pins the dial in the harness: a warmup stops at
+  ten minutes and the drift takes an hour, so it is the only way to see dusk or night in a still.
+
+**Night, and light from things that burn and shine** (Brandon's ideas, 2026-10-08: fires that
+give off light, headlamps, a true dark night with glow-in-the-dark camouflage paint; the rest are
+calls made for him):
+- **Night is a fourth time of day** (sheet, surprise me, `ORIGAMI_TIME=night`). The dial runs on
+  past dusk (1) to night (1.25): an evening or morning session reaches dusk at an hour, as before,
+  then night half an hour later and stays; a night session starts there. A white-blue moon high
+  in the south-east, faint soft shadows, a dark blue sky. Mean scene luminance (seed 38, summer):
+  dusk 0.040, nightfall 0.017, night 0.015. *Call:* the land is also **graded to moonlight** —
+  its lit colour drained toward a cool blue (`GroundLights.moonlight`), since a dimmer green
+  meadow read as dusk, not night; lamps, fires and glow are added after and keep their colour.
+  The fight's paper takes half the grade, so it goes toward grey but keeps a hint of its side.
+- **Firelight, lamplight, headlamps and blast flashes are real light on the ground**, not SceneKit
+  lights and not pools blended over it (`GroundLights.swift`): a per-frame list in a tiny float
+  texture, read by a fragment shader modifier on the terrain, roads, runways and UV-mapped
+  models, adding albedo × light. *Call:* real lights were ruled out because fifteen of them are
+  paid for on every fragment of every material; the old blended lamp pools were replaced because
+  a blend replaces the ground's colour, and at night they read as beige blots. Houses' lamps are
+  drawn once into a ground lamp map; hangars, fires, beams and flashes are listed each frame.
+  Fire is a faint warmth at midday, a pool at evening, the brightest thing on the land at night;
+  the most fires seen at once in a 60-seed soak is 12. Headlamps come on from late evening.
+  *Limit:* SceneKit binds a modifier's texture through a UV channel, so the flat-coloured
+  Blender props (trees, houses, sheep) cannot read the list and stand dark in the light.
+- **Glow-in-the-dark paint** (`GlowPaint.swift`): each paper gets a runtime swirl-and-blot sheet
+  in luminous paint plus a rim round the sheet's edge, as emission through the sheet UVs — zero
+  by day, rising from evening (0.3) through dusk (0.55) to night (1). Team colours glow as
+  their own hue, free-for-all papers by their ink (notebook blue, newspaper phosphor green,
+  kraft amber). Damage marks multiply the glow too. Red and green wingtip navigation dots on
+  every plane (not on tanks: their turrets turn and the hull paint already reads). Shots: a
+  faint spitball, LED thumbtack head, LED points on clips and staples, flecked eraser and paper
+  ball, glowstick rubber band, glowing pencil tip, glowing confetti, and a short trail in the
+  shooter's glow colour (`ShotGlow.swift`). The crate's star glows and the canopy faintly;
+  stickers light themselves; the score card is dimmed 30% at night rather than glaring.
+- *Call:* **no bloom.** The scene renders without HDR, SceneKit's bloom needs it, and its radius
+  is in render-target pixels (the backing-scale trap); the glow reads without it.
+- Midday is unchanged except a faint warmth round a fire: a frozen-moment diff against the
+  previous build changes nothing outside the fire's pool beyond the same build's run-to-run
+  noise. GPU at night with lots of planes, tanks and 12 fires: 1.7 ms mean at 2056x1329, 0.6 ms
+  in the reduced tier, 2.2–2.5 ms at the largest window this display allows (3379x1378).
+- Still weak: shots are small at night even with trails; firelit grass is lit through a paler
+  albedo than its own (the saturated green came out lime); the flat props are not firelit.
 
 ## v2: after the first look (2026-10-07)
 

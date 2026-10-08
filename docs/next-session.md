@@ -1429,6 +1429,18 @@ tank as the same seed with the shipped one.
 - **A multiply-blended shadow darkens once per overlapping triangle.** Projecting a folded paper
   plane's own mesh gave a shadow stepped darker wherever its layers overlap; a shadow map never
   does this. Project a one-layer outline instead.
+- **An `SCNPlane`'s vertex data is a unit square; its width is applied elsewhere.** Anything that
+  reads a node tree's triangles (`StickerSpots.topTriangles`) sees a 1 cm wingtip dot as a sheet a
+  metre wide. Origami's dart cut its shadow outline with the dots in it and threw dark wedges across
+  half the field — which, being transient and shadow-shaped, looked exactly like a shadow-map bug.
+  Name decorations and exclude them from geometry readers.
+- **A shader modifier's texture argument needs the mesh to have UVs.** SceneKit binds it like a
+  material's own texture, through texcoord0, and a mesh without one fails to build its pipeline:
+  "Vertex attribute texcoord0(6) is missing from the vertex descriptor", only in the system log
+  (`log stream --predicate 'senderImagePath CONTAINS "SceneKit"'`). The flat-coloured props simply
+  vanished while their shadows stayed. A plain float argument has no such need.
+- **A compile failure in a shader modifier draws magenta**, and a Swift multi-line string has no
+  trailing newline, so `"""…#pragma body"""` + `body` fuses into `#pragma bodyif (…`.
 - **`run-saver` captures in the colour profile of whichever display its window lands on.** A
   picker tile re-rendered with nothing changed differed in nearly every pixel (mean 12.9/255)
   from the committed one, because one was tagged Display P3 (the Retina panel) and the other the
