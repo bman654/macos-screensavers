@@ -13,7 +13,12 @@ final class PlaneFleet {
     private let papers: PaperMaterials
     private let effects: Effects
     private let shadows: PlaneShadows
-    let stickers = StickerMaterials()
+    let stickers: StickerMaterials
+    /// Navigation lights in luminous paint: red on the port wingtip, green on the starboard.
+    private let port: SCNMaterial
+    private let starboard: SCNMaterial
+    /// The navigation lights' node, by name, so a plane's shadow can leave it out.
+    static let navigationLights = "navigationLights"
 
     private final class Visual {
         let node: SCNNode
@@ -49,6 +54,9 @@ final class PlaneFleet {
     private var visuals: [Int: Visual] = [:]
 
     init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects, shadows: PlaneShadows) {
+        stickers = StickerMaterials(paint: papers.paint)
+        port = papers.paint.dotMaterial(PaperColor(1.0, 0.12, 0.10), strength: 1.3)
+        starboard = papers.paint.dotMaterial(PaperColor(0.15, 1.0, 0.30), strength: 1.3)
         self.shadows = shadows
         self.shelf = shelf
         self.papers = papers
@@ -100,6 +108,17 @@ final class PlaneFleet {
         let holder = SCNNode()
         holder.simdScale = SIMD3(repeating: plane.spec.size / max(template.extent.x, template.extent.z, 1e-5))
         model.addChildNode(holder)
+        let lights = SCNNode()
+        lights.name = PlaneFleet.navigationLights
+        for (tip, material) in zip(shelf.wingtips(plane: plane.type), [port, starboard]) {
+            let dot = GlowPaint.dot(material, diameter: tip.size)
+            // An `SCNPlane` faces +Z; laid on the wing, a hair above it.
+            dot.simdOrientation = simd_quatf(from: SIMD3(0, 0, 1), to: tip.normal)
+            dot.simdPosition = tip.position + tip.normal * tip.size * 0.05
+            lights.addChildNode(dot)
+        }
+        papers.paint.glowOnly(lights)
+        holder.addChildNode(lights)
         let tail = SCNNode()
         tail.simdPosition = SIMD3(-plane.spec.size * 0.45, 0, 0)
         node.addChildNode(tail)

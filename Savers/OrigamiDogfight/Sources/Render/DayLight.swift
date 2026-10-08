@@ -1,7 +1,7 @@
 // The sun and the sky over the diorama, and where they stand at each hour of the session's day.
 //
-// The day is a dial from 0 (early morning) to 1 (dusk), from `Atmosphere.phase`; midday, 0.5, is
-// exactly the light v1 and v2 shipped with. Six keys and a blend between neighbours, rather than
+// The day is a dial from 0 (early morning) to 1 (dusk) and on to 1.25 (night), from
+// `Atmosphere.phase`; midday, 0.5, is exactly the light v1 and v2 shipped with. Six keys and a blend between neighbours, rather than
 // an astronomical sun: its shadows are the scene's main depth cue, so it never sets. It does get
 // low: about 31° at dawn and 29° at evening against midday's 61°, and 23° at dusk, which throws a
 // tree's shadow three to four times as far as midday's. A plane's would land 1.5–2 m away, no
@@ -15,7 +15,10 @@
 //   - midday: v1's light, untouched — the reference;
 //   - evening: a low deep-orange sun from the west, a much dimmer blue-violet sky, so the shade
 //     is cool and dark and the sun's side warm, then dusk — red sun, dark blue shade, a dusk
-//     haze, every window lit. The scene at dusk has about an eighth of midday's luminance.
+//     haze, every window lit. The scene at dusk has about an eighth of midday's luminance;
+//   - night: the moon, high and white-blue, under a dark blue sky — soft faint shadows, the land
+//     barely readable, and what shows is light: lamps, fires, headlamps and the glow-in-the-dark
+//     paint the fight is painted in (`GlowPaint`).
 // The fight is kept readable through it by a fill light of its own (`fightCategory`), which
 // tracks the camera and lights only planes, tanks, shots, stickers and crates.
 //
@@ -40,6 +43,8 @@ final class DayLight {
     private weak var scene: SCNScene?
     private let lamplight: Lamplight
     private let planeShadows: PlaneShadows
+    private let paint: GlowPaint
+    private let groundLights: GroundLights
     /// Materials named for a window, whose emission comes up as the evening does.
     private var windows: [SCNMaterial] = []
     private var shown: Double = -1
@@ -77,8 +82,14 @@ final class DayLight {
         /// distance from the camera. Planes, nearer the camera, take about half as much.
         let haze: Float
         let hazeColour: SIMD3<Float>
-        /// Lamplight in the windows, 0 to 1.
+        /// Lamplight in the windows, and cars' headlamps, 0 to 1.
         let lamps: Float
+        /// Glow-in-the-dark paint, 0 to 1 (`GlowPaint`).
+        let glow: Float
+        /// How strongly fire lights the ground round it (`GroundLights.fireStrength`).
+        let fire: Float
+        /// How much of their colour the unlit effects keep (`GlowPaint.ambient`).
+        let ambient: Float
     }
 
     /// Morning comes from the right of the frame — the east, since sim x is east — evening from
@@ -87,30 +98,42 @@ final class DayLight {
     /// what is left is blue. Not violet: a warm sun and a violet sky sum to pink, and a winter
     /// evening came out a field of pink paper rather than snow in low light.
     private static let keys: [Key] = [
-        // Dawn: about 30° up, rosy-gold, a cool sky, a pearl haze; the night's lamps still on.
+        // Dawn: about 30° up, rosy-gold, a cool sky, a pearl haze; the night's lamps still on and
+        // the last of the paint's glow.
         Key(phase: 0, travel: SIMD3(-1.55, -0.55, -1), colour: SIMD3(1.0, 0.80, 0.70), intensity: 900,
             skyColour: SIMD3(0.70, 0.79, 1.0), skyIntensity: 390, shadow: 0.55, fill: 110,
-            haze: 0.14, hazeColour: SIMD3(0.93, 0.86, 0.88), lamps: 0.45),
+            haze: 0.14, hazeColour: SIMD3(0.93, 0.86, 0.88), lamps: 0.45, glow: 0.08, fire: 0.25, ambient: 1),
         // Mid-morning: the haze has lifted and the lamps are out.
         Key(phase: 0.2, travel: SIMD3(-0.70, -0.48, -1), colour: SIMD3(1.0, 0.91, 0.82), intensity: 860,
             skyColour: SIMD3(0.78, 0.84, 0.98), skyIntensity: 420, shadow: 0.46, fill: 0,
-            haze: 0.04, hazeColour: SIMD3(0.90, 0.88, 0.90), lamps: 0),
-        // v1's sun: from the upper left, warm, the shadows offset down and to the right.
+            haze: 0.04, hazeColour: SIMD3(0.90, 0.88, 0.90), lamps: 0, glow: 0, fire: 0.15, ambient: 1),
+        // v1's sun: from the upper left, warm, the shadows offset down and to the right. A fire's
+        // light is only a warmth on the grass round it.
         Key(phase: 0.5, travel: SIMD3(0.36, -0.42, -1), colour: SIMD3(1.0, 0.93, 0.80), intensity: 820,
             skyColour: SIMD3(0.80, 0.85, 0.96), skyIntensity: 430, shadow: 0.42, fill: 0,
-            haze: 0, hazeColour: SIMD3(0.80, 0.85, 0.96), lamps: 0),
+            haze: 0, hazeColour: SIMD3(0.80, 0.85, 0.96), lamps: 0, glow: 0, fire: 0.15, ambient: 1),
         // Late afternoon: lower and golden, the sky starting to dim.
         Key(phase: 0.7, travel: SIMD3(0.95, -0.40, -1), colour: SIMD3(1.0, 0.85, 0.64), intensity: 840,
             skyColour: SIMD3(0.72, 0.78, 0.96), skyIntensity: 360, shadow: 0.50, fill: 40,
-            haze: 0, hazeColour: SIMD3(0.60, 0.62, 0.80), lamps: 0),
-        // Evening, where an evening session begins: a low deep-orange sun, a dim blue-violet sky.
+            haze: 0, hazeColour: SIMD3(0.60, 0.62, 0.80), lamps: 0, glow: 0, fire: 0.3, ambient: 1),
+        // Evening, where an evening session begins: a low deep-orange sun, a dim blue-violet sky,
+        // and the paint beginning to show.
         Key(phase: 0.85, travel: SIMD3(1.75, -0.35, -1), colour: SIMD3(1.0, 0.66, 0.38), intensity: 700,
             skyColour: SIMD3(0.50, 0.55, 0.92), skyIntensity: 300, shadow: 0.64, fill: 340,
-            haze: 0.06, hazeColour: SIMD3(0.36, 0.36, 0.58), lamps: 0.9),
-        // Dusk, where every session ends: a red sun on the horizon's edge, the shade dark blue.
+            haze: 0.06, hazeColour: SIMD3(0.36, 0.36, 0.58), lamps: 0.9, glow: 0.3, fire: 0.65, ambient: 1),
+        // Dusk: a red sun on the horizon's edge, the shade dark blue.
         Key(phase: 1, travel: SIMD3(2.30, -0.20, -1), colour: SIMD3(1.0, 0.47, 0.26), intensity: 560,
             skyColour: SIMD3(0.40, 0.45, 0.86), skyIntensity: 200, shadow: 0.66, fill: 500,
-            haze: 0.14, hazeColour: SIMD3(0.24, 0.25, 0.44), lamps: 1),
+            haze: 0.14, hazeColour: SIMD3(0.24, 0.25, 0.44), lamps: 1, glow: 0.55, fire: 0.85, ambient: 0.8),
+        // Nightfall: the sun gone, the moon not yet risen far — a deep blue sky and little else.
+        Key(phase: 1.12, travel: SIMD3(0.40, -0.90, -1), colour: SIMD3(0.62, 0.70, 0.95), intensity: 80,
+            skyColour: SIMD3(0.28, 0.36, 0.78), skyIntensity: 70, shadow: 0.5, fill: 260,
+            haze: 0.12, hazeColour: SIMD3(0.08, 0.10, 0.22), lamps: 1, glow: 0.85, fire: 1, ambient: 0.55),
+        // Night: a white-blue moon high in the south-east, soft faint shadows, a dark blue sky.
+        // The land is barely there; the lamps, the fires and the fight's paint are what shows.
+        Key(phase: 1.25, travel: SIMD3(-0.45, -0.55, -1), colour: SIMD3(0.62, 0.74, 1.0), intensity: 62,
+            skyColour: SIMD3(0.20, 0.28, 0.72), skyIntensity: 40, shadow: 0.45, fill: 150,
+            haze: 0.12, hazeColour: SIMD3(0.04, 0.06, 0.16), lamps: 1, glow: 1, fire: 1, ambient: 0.4),
     ]
 
     /// Winter's colours at the ends of the day — the sun's path and strength, the lamps and the
@@ -128,6 +151,10 @@ final class DayLight {
         // Dusk's sun dimmed in its colour, since winter shares the keys' strengths: on flat snow
         // the summer key's share outweighed the sky and summed to mauve.
         (SIMD3(0.86, 0.70, 0.46), SIMD3(0.34, 0.60, 0.82), SIMD3(0.26, 0.36, 0.46)),
+        // Night on snow is blue: the moon a cold white and the sky a clear deep blue, so the
+        // snowfield reads as moonlit snow and not as grey paper.
+        (SIMD3(0.62, 0.72, 0.95), SIMD3(0.28, 0.42, 0.80), SIMD3(0.08, 0.12, 0.26)),
+        (SIMD3(0.66, 0.78, 1.0), SIMD3(0.24, 0.38, 0.78), SIMD3(0.05, 0.09, 0.22)),
     ]
 
     private static func keys(for season: Season) -> [Key] {
@@ -136,7 +163,8 @@ final class DayLight {
             guard let winter else { return key }
             return Key(phase: key.phase, travel: key.travel, colour: winter.colour, intensity: key.intensity,
                        skyColour: winter.skyColour, skyIntensity: key.skyIntensity, shadow: key.shadow,
-                       fill: key.fill, haze: key.haze, hazeColour: winter.haze, lamps: key.lamps)
+                       fill: key.fill, haze: key.haze, hazeColour: winter.haze, lamps: key.lamps, glow: key.glow,
+                       fire: key.fire, ambient: key.ambient)
         }
     }
 
@@ -147,13 +175,16 @@ final class DayLight {
 
     /// `terrain` is the landscape's material, whose fold shading follows the sun; `scene` takes
     /// the haze; `lamplight` is the glow round every lit window; `planeShadows` the planes'
-    /// shadows, which follow the sun.
+    /// shadows, which follow the sun; `paint` the fight's luminous paint and `groundLights` the
+    /// firelight and headlamps, which both come up as the light goes.
     init(quality: RenderQuality, season: Season, terrain: SCNMaterial?, scene: SCNScene, lamplight: Lamplight,
-         planeShadows: PlaneShadows) {
+         planeShadows: PlaneShadows, paint: GlowPaint, groundLights: GroundLights) {
         self.terrain = terrain
         self.scene = scene
         self.lamplight = lamplight
         self.planeShadows = planeShadows
+        self.paint = paint
+        self.groundLights = groundLights
         keys = DayLight.keys(for: season)
         key.type = .directional
         key.castsShadow = true
@@ -228,6 +259,12 @@ final class DayLight {
             window.emission.contents = NSColor(srgbRed: 1.0 * glow, green: 0.82 * glow, blue: 0.45 * glow, alpha: 1)
         }
         lamplight.glow = lamps
+        // Headlamps only once it is dusky: dawn keeps the night's last lamps in the windows, but
+        // a beam on a sunlit lane read as a mistake.
+        groundLights.headlampStrength = smoothstep(0.5, 0.9, lamps)
+        groundLights.fireStrength = value { $0.fire }
+        groundLights.moonlight = 0.65 * smoothstep(1, Float(Atmosphere.nightPhase), Float(phase))
+        paint.set(level: value { $0.glow }, ambient: value { $0.ambient })
     }
 
     /// Scene fog standing in for haze. Fog is by distance from the eye, and from straight above
@@ -260,7 +297,7 @@ final class DayLight {
 
     /// A value between the two keys either side of `phase`, smoothly.
     private static func blend(_ phase: Double, _ keys: [Key], _ value: (Key) -> SIMD3<Float>) -> SIMD3<Float> {
-        let p = min(max(phase, 0), 1)
+        let p = min(max(phase, 0), Atmosphere.nightPhase)
         guard let upper = keys.firstIndex(where: { $0.phase >= p }) else { return value(keys[keys.count - 1]) }
         guard upper > 0 else { return value(keys[0]) }
         let a = keys[upper - 1], b = keys[upper]

@@ -44,6 +44,7 @@ final class OrigamiSettingsSheet: NSObject {
         Choice(value: .morning, title: "Morning"),
         Choice(value: .midday, title: "Midday"),
         Choice(value: .evening, title: "Evening"),
+        Choice(value: .night, title: "Night"),
         Choice(value: .surprise, title: "Surprise me"),
     ]
 
@@ -261,7 +262,7 @@ final class OrigamiSettingsSheet: NSObject {
             group("Planes", planeButtons, caption: "More planes fly smaller, so the sky stays busy, not crowded."),
             group("Tanks", tankButtons, caption: "Paper tanks on the ground that throw pencils at the planes."),
             group("Season", seasonButtons, caption: "Green fields, autumn gold, or snow with the lakes frozen over."),
-            group("Time of day", dayTimeButtons, caption: "Where the sun starts. It drifts slowly toward evening."),
+            group("Time of day", dayTimeButtons, caption: "Where the day starts. It drifts slowly on toward evening and night."),
             scoreboardButton,
         ])
         groups.orientation = .vertical

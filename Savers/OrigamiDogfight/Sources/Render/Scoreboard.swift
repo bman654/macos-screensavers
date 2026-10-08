@@ -27,6 +27,9 @@ final class Scoreboard {
     /// The corner chosen, and for which match, frame and card, since it is the same all match.
     private var placed: (match: Int, frame: CGSize, card: SIMD2<Float>, corner: Int)?
     private var drawn: (content: ScoreCardContent, size: CGSize, pixelsPerPoint: CGFloat)?
+    private let paint: GlowPaint
+    /// The night's dimming last applied to the card (`dim`).
+    private var dimmed: Float = 0
 
     /// In front of everything: the camera's near plane is 1.5 m and the nearest plane is
     /// about 3.8 m off. The card ignores depth anyway; this only keeps it out of the far clip.
@@ -34,7 +37,8 @@ final class Scoreboard {
     /// The share of the frame kept clear at each edge — inside the central ~92%.
     private static let edgeMargin: Float = 0.045
 
-    init(seed: UInt64) {
+    init(seed: UInt64, paint: GlowPaint) {
+        self.paint = paint
         firstCorner = Int(seed % 4)
         material.lightingModel = .constant
         material.isDoubleSided = true
@@ -51,6 +55,7 @@ final class Scoreboard {
     }
 
     func update(_ sim: DogfightSim, drawableSize: CGSize, now: Double) {
+        dim()
         let match = sim.match
         let teams = match.mode != .ffa
         let entries = (0..<match.sides).map { side in
@@ -120,6 +125,17 @@ final class Scoreboard {
             opacity = Float(min(max((until - now) / 1.2, 0), 1))
         }
         node.opacity = CGFloat(opacity)
+    }
+
+    /// The card lights itself, so it stays legible however dark the night — but a white card at
+    /// full brightness on a moonlit landscape glares, and is the one thing on screen that does not
+    /// move. At night it is a dimmer, slightly moonlit card; by day exactly as drawn.
+    private func dim() {
+        let night = paint.isLit ? paint.level : 0
+        guard abs(night - dimmed) > 0.005 else { return }
+        dimmed = night
+        let k = CGFloat(1 - 0.3 * night)
+        material.multiply.contents = night > 0 ? NSColor(srgbRed: k * 0.96, green: k * 0.97, blue: k, alpha: 1) : nil
     }
 
     /// This match's corner: one round from the last match's, or further round if an airfield

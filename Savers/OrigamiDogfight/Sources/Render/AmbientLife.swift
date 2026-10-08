@@ -17,15 +17,21 @@ final class AmbientLife {
     private var mills: [(node: SCNNode, sails: Articulated.Part?, mill: Windmill)] = []
     private var boats: [(node: SCNNode, mooring: Mooring, home: SIMD2<Float>, yaw: Float)] = []
     private var flock: [SCNNode] = []
-    private var cars: [SCNNode] = []
+    private var cars: [(node: SCNNode, lamps: SCNNode)] = []
+    private let lights: GroundLights
+    /// Headlamps and tail-lights, shared by every car and turned up with the dusk.
+    private let headlamp = GlowPaint.dotMaterial(PaperColor(1.0, 0.95, 0.80))
+    private let tailLight = GlowPaint.dotMaterial(PaperColor(1.0, 0.16, 0.10))
 
     /// Soft paper colours for the cars, none of them a team's, so a car is never read as a side.
     private static let carPapers = [PaperColor(0.95, 0.92, 0.84), PaperColor(0.58, 0.74, 0.88),
                                     PaperColor(0.62, 0.82, 0.66), PaperColor(0.94, 0.62, 0.52),
                                     PaperColor(0.90, 0.80, 0.46), PaperColor(0.56, 0.58, 0.66)]
 
-    init(countryside: Countryside, sim: DogfightSim, shelf: ModelShelf, models: AmbientModels) {
+    init(countryside: Countryside, sim: DogfightSim, shelf: ModelShelf, models: AmbientModels,
+         lights: GroundLights) {
         terrain = sim.terrain
+        self.lights = lights
         frozen = countryside.atmosphere.frozenLakes
 
         for mill in countryside.windmills {
@@ -60,8 +66,10 @@ final class AmbientLife {
         }
         for car in countryside.traffic.cars {
             let node = models.car(paper: AmbientLife.carPapers[car.paper % AmbientLife.carPapers.count])
+            let lamps = AmbientLife.lamps(headlamp: headlamp, tail: tailLight)
+            node.addChildNode(lamps)
             root.addChildNode(node)
-            cars.append(node)
+            cars.append((node, lamps))
         }
     }
 
@@ -105,11 +113,46 @@ final class AmbientLife {
             node.simdScale = SIMD3(repeating: sheep.size)
         }
 
-        for (index, node) in cars.enumerated() {
+        let lampsOn = lights.headlampStrength > 0.01
+        headlamp.emission.intensity = CGFloat(lights.headlampStrength)
+        tailLight.emission.intensity = CGFloat(lights.headlampStrength)
+        for (index, car) in cars.enumerated() {
             let pose = countryside.traffic.pose(of: index, at: time)
-            node.simdPosition = Drape.point(pose.position, on: terrain)
-            node.simdOrientation = TankField.sitting(on: terrain, at: pose.position, heading: pose.heading,
-                                                     size: AmbientModels.carLength)
+            car.node.simdPosition = Drape.point(pose.position, on: terrain)
+            car.node.simdOrientation = TankField.sitting(on: terrain, at: pose.position, heading: pose.heading,
+                                                         size: AmbientModels.carLength)
+            // Off while it is parked in the village; on again as it turns to set off.
+            let driving = time >= countryside.traffic.cars[index].parkedUntil - 1.5
+            car.lamps.isHidden = !(lampsOn && driving)
+            guard lampsOn, driving else { continue }
+            let forward = SIMD2(cos(pose.heading), sin(pose.heading)), left = SIMD2(-forward.y, forward.x)
+            let ground = terrain.surfaceHeight(at: pose.position)
+            for side: Float in [-1, 1] {
+                let lamp = pose.position + forward * (AmbientModels.carLength * 0.5) + left * (side * 0.009)
+                lights.beam(from: lamp.scene(altitude: ground + 0.012), direction: SIMD2(forward.x, -forward.y),
+                            reach: AmbientLife.beamReach, colour: AmbientLife.beamColour)
+            }
         }
+    }
+
+    /// Five car lengths of lane lit ahead, in a warm white.
+    private static let beamReach: Float = 0.32
+    private static let beamColour = SIMD3<Float>(1.0, 0.84, 0.58) * 1.6
+
+    /// Two headlamps on the front and two tail-lights behind, as dots on the car's own frame —
+    /// the car's model faces +X and stands on y = 0 at its real 6 cm.
+    private static func lamps(headlamp: SCNMaterial, tail: SCNMaterial) -> SCNNode {
+        let group = SCNNode()
+        let half = AmbientModels.carLength * 0.5
+        for side: Float in [-1, 1] {
+            let front = GlowPaint.dot(headlamp, diameter: 0.009)
+            front.simdPosition = SIMD3(half + 0.001, 0.013, side * 0.009)
+            let back = GlowPaint.dot(tail, diameter: 0.006)
+            back.simdPosition = SIMD3(-half - 0.001, 0.013, side * 0.009)
+            group.addChildNode(front)
+            group.addChildNode(back)
+        }
+        group.isHidden = true
+        return group
     }
 }

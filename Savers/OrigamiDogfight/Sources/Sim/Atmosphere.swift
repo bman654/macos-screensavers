@@ -15,7 +15,7 @@ enum SeasonChoice: String, CaseIterable {
 }
 
 enum DayTimeChoice: String, CaseIterable {
-    case surprise, morning, midday, evening
+    case surprise, morning, midday, evening, night
 }
 
 enum Season: String, CaseIterable {
@@ -23,15 +23,17 @@ enum Season: String, CaseIterable {
 }
 
 enum DayTime: String, CaseIterable {
-    case morning, midday, evening
+    case morning, midday, evening, night
 
-    /// Where on the day's dial a session that chose this begins. Evening starts short of the end
-    /// so that it, too, has somewhere to drift — into dusk, with every window lit.
+    /// Where on the day's dial a session that chose this begins. Evening starts short of dusk
+    /// so that it, too, has somewhere to drift — into dusk, with every window lit, and on into
+    /// the night. Night begins where the dial ends, and stays.
     var startPhase: Double {
         switch self {
         case .morning: return 0
         case .midday: return 0.5
         case .evening: return 0.85
+        case .night: return Atmosphere.nightPhase
         }
     }
 }
@@ -44,6 +46,11 @@ struct Atmosphere: Equatable {
     /// that nobody watching sees the light move, fast enough that a saver left on all afternoon
     /// ends the day as the room does.
     static let driftSeconds: Double = 3600
+
+    /// Past dusk the dial runs on into moonlit night, which it reaches half an hour after dusk
+    /// and keeps. The dial's first hour is unchanged by it: 1 is still dusk, an hour in.
+    static let nightPhase: Double = 1.25
+    static let nightfallSeconds: Double = 1800
 
     var frozenLakes: Bool { season == .winter }
 
@@ -60,10 +67,15 @@ struct Atmosphere: Equatable {
     }
 
     /// The day's dial at a moment of the session: 0 is early morning, 0.5 midday — the look v1
-    /// and v2 shipped with — 0.85 golden evening and 1 dusk. Sim time, which runs on through an
-    /// idle release and a quality change, so a rebuilt scene picks the light up where it was.
+    /// and v2 shipped with — 0.85 golden evening, 1 dusk and 1.25 night. Sim time, which runs on
+    /// through an idle release and a quality change, so a rebuilt scene picks the light up where
+    /// it was.
     func phase(at time: Double) -> Double {
         let start = dayTime.startPhase
-        return start + (1 - start) * min(max(time / Atmosphere.driftSeconds, 0), 1)
+        guard start < 1 else { return start }
+        let t = max(time, 0)
+        guard t > Atmosphere.driftSeconds else { return start + (1 - start) * t / Atmosphere.driftSeconds }
+        let night = min((t - Atmosphere.driftSeconds) / Atmosphere.nightfallSeconds, 1)
+        return 1 + (Atmosphere.nightPhase - 1) * night
     }
 }

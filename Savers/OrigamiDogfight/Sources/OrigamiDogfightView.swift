@@ -104,8 +104,8 @@ final class OrigamiDogfightView: SaverView {
         resume = nil
         self.countryside = countryside
 
-        let scene = DogfightScene(sim: sim, countryside: countryside, bundle: context.bundle, quality: context.quality,
-                                  showsScoreboard: showsScoreboard)
+        let scene = DogfightScene(sim: sim, countryside: countryside, bundle: context.bundle, device: context.device,
+                                  quality: context.quality, showsScoreboard: showsScoreboard)
         // 4x everywhere, the tile included: a `.reduced` frame is magnified to fill its view, so
         // its edges need antialiasing more than a full one's, and four samples of a 720-pixel
         // frame cost a fraction of one of a full-screen one.

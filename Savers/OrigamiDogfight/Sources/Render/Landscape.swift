@@ -20,21 +20,26 @@ final class Landscape {
     /// The whole scene, swept now and then for models this file did not build but must still
     /// light: a window anywhere, the fight's hangars' among them.
     private weak var scene: SCNScene?
+    private let groundLights: GroundLights
+    /// Models built after this was, outside it, that the firelight should also fall on — the
+    /// airfields', which come and go with the matches. Enlisted on each sweep.
+    private let alsoLit = NSHashTable<SCNNode>.weakObjects()
     /// The fight's fill light, for the scene to hang on its camera (`DayLight.fillNode`).
     var fightFill: SCNNode { daylight.fillNode }
     private var nextSweep = -Double.infinity
     private var sweeps = 0
-    /// `ORIGAMI_PHASE`: the day's dial held at one point (0 dawn … 1 dusk) — a harness override,
-    /// like every `ORIGAMI_*`, empty under `legacyScreenSaver`. The drift takes an hour to reach
-    /// dusk and a warmup stops at ten minutes, so this is the only way to see dusk in a still,
-    /// or two hours of the day on one frame of one fight.
+    /// `ORIGAMI_PHASE`: the day's dial held at one point (0 dawn … 1 dusk … 1.25 night) — a
+    /// harness override, like every `ORIGAMI_*`, empty under `legacyScreenSaver`. The drift takes
+    /// an hour to reach dusk and a warmup stops at ten minutes, so this is the only way to see
+    /// dusk or nightfall in a still, or two hours of the day on one frame of one fight.
     private let pinnedPhase = ProcessInfo.processInfo.environment["ORIGAMI_PHASE"].flatMap(Double.init)
-        .flatMap { $0.isFinite ? min(max($0, 0), 1) : nil }
+        .flatMap { $0.isFinite ? min(max($0, 0), Atmosphere.nightPhase) : nil }
 
     init(sim: DogfightSim, countryside: Countryside, shelf: ModelShelf, quality: RenderQuality, scene: SCNScene,
-         lamplight: Lamplight, planeShadows: PlaneShadows) {
+         lamplight: Lamplight, planeShadows: PlaneShadows, paint: GlowPaint, groundLights: GroundLights) {
         self.countryside = countryside
         self.scene = scene
+        self.groundLights = groundLights
         let season = countryside.atmosphere.season
         let terrain = TerrainMesh.node(for: sim.terrain, seed: sim.seed, season: season)
         // Boats ride and mills turn, so neither can be part of the one flattened node the rest of
@@ -47,20 +52,27 @@ final class Landscape {
         for kind in PropKind.allCases { for template in shelf.props(kind) { SeasonDress.dress(template.node, season: season) } }
         let scenery = Scenery.node(spots: still, shelf: shelf)
         let models = AmbientModels(shelf: shelf)
-        life = AmbientLife(countryside: countryside, sim: sim, shelf: shelf, models: models)
+        life = AmbientLife(countryside: countryside, sim: sim, shelf: shelf, models: models,
+                           lights: groundLights)
         cranes = CraneFlight(models: models)
         marks = GroundMarks(terrain: sim.terrain)
-        fires = TreeFires(shelf: shelf, props: sim.props)
+        fires = TreeFires(shelf: shelf, props: sim.props, lights: groundLights)
         SeasonDress.dress(life.root, season: season)
         daylight = DayLight(quality: quality, season: season, terrain: terrain.geometry?.firstMaterial, scene: scene,
-                            lamplight: lamplight, planeShadows: planeShadows)
+                            lamplight: lamplight, planeShadows: planeShadows, paint: paint, groundLights: groundLights)
         lamplight.light(houses: sim.props, terrain: sim.terrain)
 
         let roads = RoadStrips.node(roads: countryside.roads, terrain: sim.terrain, season: season)
         // Drawn before the planes' shadows, which are laid over them (`PlaneShadows`).
         for ground in [terrain, roads] { ground.renderingOrder = PlaneShadows.groundOrder }
+        // Firelight and headlamps fall on the land and everything standing on it. Last, after
+        // every season's dress, which sets the shader modifiers this adds to. The scenery's
+        // flattened node has no materials until it is first drawn, but shares its templates'.
+        for kind in PropKind.allCases { for template in shelf.props(kind) { groundLights.enlist(under: template.node) } }
+        for lit in [terrain, roads, scenery, life.root] { groundLights.enlist(under: lit) }
+        light(cranes.root)
         for node in [terrain, roads,
-                     marks.root, lamplight.houses, scenery, life.root, fires.root, cranes.root, daylight.root] {
+                     marks.root, scenery, life.root, fires.root, cranes.root, daylight.root] {
             root.addChildNode(node)
         }
         countryside.catchUp(with: sim)
@@ -99,7 +111,11 @@ final class Landscape {
         for material in SeasonDress.materials(under: scene.rootNode) where (material.name ?? "").contains("window") {
             daylight.adopt(window: material)
         }
+        for node in alsoLit.allObjects { groundLights.enlist(under: node) }
     }
+
+    /// Lights `node` from the firelight too, as it is built and rebuilt (`alsoLit`).
+    func light(_ node: SCNNode) { alsoLit.add(node) }
 
     /// For the lineup's census of which models are really the library's.
     static func census(_ shelf: ModelShelf) -> String {

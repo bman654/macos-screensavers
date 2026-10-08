@@ -53,6 +53,11 @@ final class ModelShelf {
         spots("plane-\(type.modelName)") { StickerSpots.spots(on: plane(type)) }
     }
 
+    /// A plane's two wingtips, port then starboard (`StickerSpots.wingtips`).
+    func wingtips(plane type: PlaneType) -> [StickerSpot] {
+        spots("tips-\(type.modelName)") { StickerSpots.wingtips(on: plane(type)) }
+    }
+
     func stickerSpots(tank type: TankType) -> [StickerSpot] {
         spots("tank-\(type.modelName)") { StickerSpots.spots(on: tank(type), exclude: ["turret"]) }
     }

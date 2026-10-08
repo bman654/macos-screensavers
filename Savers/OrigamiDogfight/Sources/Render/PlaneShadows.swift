@@ -110,7 +110,10 @@ final class PlaneShadows {
     /// become one quad. Cells of a hundred-and-twenty-sixth of the plane's length are under a
     /// pixel at the size a plane is drawn in the fight, and still fine on the lineup's large ones.
     private static func outline(of model: SCNNode, material: SCNMaterial) -> SCNGeometry {
-        let triangles = StickerSpots.topTriangles(of: model, exclude: [])
+        // Not the wingtips' navigation lights: an `SCNPlane`'s vertex data is a unit square, sized
+        // elsewhere, so read as triangles a 1 cm dot is a metre-wide sheet — it made the dart's
+        // shadow a wedge across half the field.
+        let triangles = StickerSpots.topTriangles(of: model, exclude: [PlaneFleet.navigationLights])
         var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
         for t in triangles { lo = simd_min(lo, t.lo); hi = simd_max(hi, t.hi) }
         var mesh = FacetMesh()

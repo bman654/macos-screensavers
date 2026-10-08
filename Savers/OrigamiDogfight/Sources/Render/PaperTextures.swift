@@ -222,14 +222,24 @@ enum PaperTextures {
     }
 }
 
-/// One material per paper, shared by every plane folded from it.
+/// One material per paper, shared by every plane folded from it, and painted with its swirls of
+/// glow-in-the-dark paint (`GlowPaint`).
 final class PaperMaterials {
     private var cache: [String: SCNMaterial] = [:]
     /// The same papers with damage marks over them (`DamageMarks`).
     var damaged: [String: SCNMaterial] = [:]
     private let seed: UInt64
+    let paint: GlowPaint
+    /// The moonlight, which takes half the colour out of the paper at night — the paint around
+    /// the glowing swirls goes toward grey, as Brandon pictured it, and keeps a hint of its side.
+    let ground: GroundLights
+    static let moonWeight: Float = 0.5
 
-    init(seed: UInt64) { self.seed = seed }
+    init(seed: UInt64, paint: GlowPaint, ground: GroundLights) {
+        self.seed = seed
+        self.paint = paint
+        self.ground = ground
+    }
 
     func material(for paper: Paper, aspect: CGFloat) -> SCNMaterial {
         let key = "\(paper.kind.rawValue)-\(paper.tint)-\(Int(aspect * 100))"
@@ -246,6 +256,8 @@ final class PaperMaterials {
         } else {
             material.diffuse.contents = PaperPalette.base(paper).ns
         }
+        paint.paint(material, paper: paper, aspect: aspect, seed: seed)
+        ground.grade(material, weight: PaperMaterials.moonWeight)
         cache[key] = material
         return material
     }

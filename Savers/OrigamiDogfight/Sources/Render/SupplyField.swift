@@ -35,7 +35,18 @@ final class SupplyField {
     /// same heights (`SupplyDrop.canopyHeight`).
     static let modelScale: Float = 1.25
 
-    init(shelf: ModelShelf) { self.shelf = shelf }
+    /// At night the crate's star glows and the canopy shows faintly, so a drop can be followed
+    /// down through the dark. The templates' own materials, which every drop shares.
+    init(shelf: ModelShelf, paint: GlowPaint) {
+        self.shelf = shelf
+        for material in SeasonDress.materials(under: shelf.crate().node) + SeasonDress.materials(under: shelf.parachute().node) {
+            let name = material.name ?? ""
+            let strength: Float = name.contains("star") ? 1.5 : name.contains("canopy") ? 0.35 : 0
+            guard strength > 0 else { continue }
+            material.emission.contents = material.diffuse.contents
+            paint.register(material, strength: strength)
+        }
+    }
 
     func sync(_ sim: DogfightSim, alpha: Float, time: Double) {
         let now = sim.time + Double(alpha) * DogfightSim.stepSeconds

@@ -14,6 +14,9 @@ import simd
 
 final class Effects {
     let root = SCNNode()
+    /// The night: unlit effects are dimmed by its `ambient`, which by day is 1 and changes
+    /// nothing, and glowing ones are added while its paint is lit.
+    private let paint: GlowPaint
     private let square: CGImage?
     private let dot: CGImage?
     /// Shared by every shot's splash ring: a splash a second at "lots" is not worth a fresh
@@ -25,7 +28,8 @@ final class Effects {
     private var transients: [(node: SCNNode, start: Double, duration: Double, update: ((Float) -> Void)?)] = []
     private var now: Double = 0
 
-    init() {
+    init(paint: GlowPaint) {
+        self.paint = paint
         square = PaperTextures.square()
         dot = PaperTextures.softDot()
         ringGeometry = SCNTorus(ringRadius: 1, pipeRadius: 0.06)
@@ -53,20 +57,32 @@ final class Effects {
 
     // MARK: Bursts
 
-    /// A puff of paper bits in the victim's colour where a shot connected.
-    func confetti(at position: SIMD3<Float>, color: PaperColor, scale k: Float) {
+    /// A puff of paper bits in the victim's colour where a shot connected — and at night, flecks
+    /// of its glowing paint among them, `glow`.
+    func confetti(at position: SIMD3<Float>, color: PaperColor, glow: PaperColor, scale k: Float) {
         let system = paperBits(color: color, count: 14, speed: 0.22 * k, size: 0.012 * k, life: 0.7, scale: k)
         burst(system, at: position, life: 1.4)
+        if paint.isLit {
+            let flecks = paperBits(color: glow, count: 7, speed: 0.22 * k, size: 0.011 * k, life: 0.7, scale: k, glows: true)
+            burst(flecks, at: position, life: 1.4)
+        }
     }
 
-    /// The moment a plane is shot down: a bigger burst of its own paper.
-    func shootDown(at position: SIMD3<Float>, color: PaperColor, scale k: Float) {
+    /// The moment a plane is shot down: a bigger burst of its own paper, and at night a burst of
+    /// sparks — the brightest thing in the sky for a moment.
+    func shootDown(at position: SIMD3<Float>, color: PaperColor, glow: PaperColor, scale k: Float) {
         let system = paperBits(color: color, count: 22, speed: 0.26 * k, size: 0.014 * k, life: 0.9, scale: k)
         burst(system, at: position, life: 1.8)
+        if paint.isLit {
+            let flecks = paperBits(color: glow, count: 10, speed: 0.26 * k, size: 0.012 * k, life: 0.9, scale: k, glows: true)
+            burst(flecks, at: position, life: 1.8)
+            sparks(at: position, scale: k)
+        }
     }
 
-    /// Hitting the ground: dust and scraps thrown out low.
+    /// Hitting the ground: dust and scraps thrown out low, and at night sparks.
     func crash(at position: SIMD3<Float>, color: PaperColor, scale k: Float) {
+        if paint.isLit { sparks(at: position, scale: k) }
         let scraps = paperBits(color: color, count: 24, speed: 0.3 * k, size: 0.013 * k, life: 0.9, scale: k)
         scraps.emittingDirection = SCNVector3(0, 1, 0)
         scraps.spreadingAngle = 70
@@ -172,7 +188,8 @@ final class Effects {
     /// streams out behind.
     func glintTrail(_ kind: PowerUpKind, scale k: Float) -> SCNParticleSystem {
         let color = kind == .tripleShot ? PaperColor(1.0, 0.82, 0.24) : PaperColor(0.82, 0.92, 1.0)
-        let system = paperBits(color: color, count: 0, speed: 0.04 * k, size: 0.011 * k, life: 0.8, scale: k * 0.2)
+        let system = paperBits(color: color, count: 0, speed: 0.04 * k, size: 0.011 * k, life: 0.8, scale: k * 0.2,
+                               glows: true)
         system.birthRate = 30
         system.loops = true
         system.emissionDuration = 1
@@ -180,6 +197,14 @@ final class Effects {
         // Glitter catches the light: a little glow, so it reads over the meadow as well as the lake.
         system.blendMode = .additive
         return system
+    }
+
+    /// Sparks flung out by an explosion in the dark: hot, bright and short.
+    private func sparks(at position: SIMD3<Float>, scale k: Float) {
+        let system = paperBits(color: PaperColor(1.0, 0.78, 0.36), count: Int(10 + 16 * paint.level), speed: 0.4 * k,
+                               size: 0.009 * k, life: 0.55, scale: k, glows: true)
+        system.particleColorVariation = SCNVector4(0.05, 0.25, 0.2, 0)
+        burst(system, at: position, life: 1)
     }
 
     /// The black-grey trail of a plane going down.
@@ -197,7 +222,7 @@ final class Effects {
     /// Sparks lifting off a burning wreck.
     func embers(scale k: Float) -> SCNParticleSystem {
         let system = paperBits(color: PaperColor(1.0, 0.62, 0.16), count: 0, speed: 0.12 * k, size: 0.008 * k,
-                               life: 1.5, scale: k)
+                               life: 1.5, scale: k, glows: true)
         system.birthRate = 9
         system.loops = true
         system.emissionDuration = 1
@@ -212,8 +237,11 @@ final class Effects {
     // MARK: Particle templates
 
     /// `scale` shrinks the fall with the bits, so a small burst arcs the way a big one does.
+    /// Particles are unlit, so a paper bit is as bright at night as at noon unless it is dimmed
+    /// to the hour; `glows` says it is light itself — an ember, a spark — and keeps its colour.
     private func paperBits(color: PaperColor, count: Int, speed: Float, size: Float, life: CGFloat,
-                           scale: Float) -> SCNParticleSystem {
+                           scale: Float, glows: Bool = false) -> SCNParticleSystem {
+        let color = glows ? color : color.scaled(CGFloat(paint.ambient))
         let system = SCNParticleSystem()
         system.particleImage = square
         system.birthRate = CGFloat(count) / 0.06
@@ -239,6 +267,7 @@ final class Effects {
 
     private func puffs(color: PaperColor, alpha: CGFloat, count: Int, size: Float, growTo: Float,
                        life: CGFloat) -> SCNParticleSystem {
+        let color = color.scaled(CGFloat(paint.ambient))
         let system = SCNParticleSystem()
         system.particleImage = dot
         system.birthRate = CGFloat(count) / 0.06

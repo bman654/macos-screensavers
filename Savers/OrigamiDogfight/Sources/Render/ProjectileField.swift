@@ -15,6 +15,8 @@ final class ProjectileField {
     private struct Entry {
         let node: SCNNode
         let kind: WeaponKind
+        /// Its trail at night (`ShotGlow`).
+        let trail: SCNParticleSystem
         /// Half the model's height as drawn at scale 1, so a landed shot rests on the ground, not
         /// in it.
         let restHeight: Float
@@ -27,7 +29,12 @@ final class ProjectileField {
     /// climbing, even tilted they show only part of their length.
     static let pencilBoost: Float = 1.25
 
-    init(shelf: ModelShelf) { self.shelf = shelf }
+    private let glow: ShotGlow
+
+    init(shelf: ModelShelf, paint: GlowPaint) {
+        self.shelf = shelf
+        glow = ShotGlow(paint: paint)
+    }
 
     func sync(_ sim: DogfightSim, alpha: Float) {
         var seen = Set<Int>()
@@ -73,8 +80,12 @@ final class ProjectileField {
                     * simd_quatf(angle: spinRate * (p.tumble + 0.15 * (p.age - at)), axis: axis)
             }
             node.opacity = CGFloat(p.opacity)
+            var flying = false
+            if case .flying = p.state { flying = true }
+            glow.fly(entry.trail, flying: flying, colour: GlowPaint.colour(for: p.paper))
         }
         for (id, entry) in live where !seen.contains(id) {
+            entry.trail.birthRate = 0
             entry.node.isHidden = true
             pool[entry.kind, default: []].append(entry)
             live[id] = nil
@@ -89,10 +100,14 @@ final class ProjectileField {
             entry.node.isHidden = false
         } else {
             let template = shelf.projectile(p.kind)
+            glow.dress(template, kind: p.kind)
             let size = p.kind.spec(scale: 1).size
             let node = template.instance(size: size, along: .longest)
+            if let bits = glow.bits(kind: p.kind, size: size, seed: p.id) { node.addChildNode(bits) }
+            let trail = glow.trail(size: size)
+            node.addParticleSystem(trail)
             let longest = max(template.extent.x, template.extent.y, template.extent.z, 1e-5)
-            entry = Entry(node: node, kind: p.kind, restHeight: template.extent.y / longest * size / 2)
+            entry = Entry(node: node, kind: p.kind, trail: trail, restHeight: template.extent.y / longest * size / 2)
             if p.kind == .confetti {
                 node.enumerateHierarchy { child, _ in
                     if let geometry = child.geometry, let copy = geometry.copy() as? SCNGeometry {
@@ -115,6 +130,7 @@ final class ProjectileField {
         let key = "\(paper.kind.rawValue)-\(paper.tint)"
         if let hit = confettiMaterials[key] { return hit }
         let material = paperMaterial(PaperPalette.base(paper))
+        glow.dress(confetti: material, paper: paper)
         confettiMaterials[key] = material
         return material
     }

@@ -21,7 +21,9 @@ final class DogfightScene {
     /// background so a frame can never flash a different colour at its edges.
     let clearColor = MTLClearColor(red: 0.86, green: 0.84, blue: 0.78, alpha: 1)
 
-    private let effects = Effects()
+    private let paint = GlowPaint()
+    private let groundLights: GroundLights
+    private let effects: Effects
     private let fleet: PlaneFleet
     private let armour: TankField
     private let shots: ProjectileField
@@ -40,8 +42,13 @@ final class DogfightScene {
     /// rebuild then costs a skipped quarter-second, never a burst of a hundred steps on one frame.
     private static let maxCatchUp = 30
 
-    init(sim: DogfightSim, countryside: Countryside, bundle: Bundle, quality: RenderQuality, showsScoreboard: Bool) {
+    /// `device` is the renderer's, for the small texture the firelight is listed in
+    /// (`GroundLights`).
+    init(sim: DogfightSim, countryside: Countryside, bundle: Bundle, device: MTLDevice?, quality: RenderQuality,
+         showsScoreboard: Bool) {
         self.sim = sim
+        groundLights = GroundLights(device: device)
+        effects = Effects(paint: paint)
         // Zero-duration, for the reason `SceneKitHost.encode` gives: a node property set outside
         // SceneKit's render loop is otherwise an implicit animation stamped with a clock the
         // renderer does not use.
@@ -50,22 +57,25 @@ final class DogfightScene {
         defer { SCNTransaction.commit() }
         let library = OrigamiLibrary(directory: bundle.resourceURL)
         let shelf = ModelShelf(library: library)
-        let papers = PaperMaterials(seed: sim.seed)
-        let lamplight = Lamplight()
+        let papers = PaperMaterials(seed: sim.seed, paint: paint, ground: groundLights)
+        let lamplight = Lamplight(lights: groundLights)
         let planeShadows = PlaneShadows()
         fleet = PlaneFleet(shelf: shelf, papers: papers, effects: effects, shadows: planeShadows)
         armour = TankField(shelf: shelf, papers: papers, stickers: fleet.stickers)
-        shots = ProjectileField(shelf: shelf)
-        wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour)
-        supplies = SupplyField(shelf: shelf)
+        shots = ProjectileField(shelf: shelf, paint: paint)
+        wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour,
+                            lights: groundLights)
+        supplies = SupplyField(shelf: shelf, paint: paint)
         airfields = AirfieldField(shelf: shelf, papers: papers, season: countryside.atmosphere.season,
                                   lamplight: lamplight)
         // The lineup is for looking at models; a card in the corner would only be in the way.
-        scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
+        scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed, paint: paint) : nil
 
         scene.background.contents = NSColor(srgbRed: 0.86, green: 0.84, blue: 0.78, alpha: 1)
         landscape = Landscape(sim: sim, countryside: countryside, shelf: shelf, quality: quality, scene: scene,
-                              lamplight: lamplight, planeShadows: planeShadows)
+                              lamplight: lamplight, planeShadows: planeShadows, paint: paint,
+                              groundLights: groundLights)
+        landscape.light(airfields.root)
         scene.rootNode.addChildNode(landscape.root)
         for root in [planeShadows.root, airfields.root, wrecks.root, armour.root, shots.root, fleet.root, supplies.root, effects.root] {
             scene.rootNode.addChildNode(root)
@@ -143,7 +153,8 @@ final class DogfightScene {
         let alpha = Float(min(max((frame.time - origin) / step - Double(sim.steps), 0), 1))
 
         effects.update(time: frame.time)
-        for event in happened + stray { react(to: event) }
+        groundLights.begin()
+        for event in happened + stray { react(to: event, time: frame.time) }
         // Airfields first: the landscape's sweep lights the windows of whatever stands this
         // frame, and a hangar is built on the frame its match begins.
         airfields.sync(sim, now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
@@ -155,6 +166,7 @@ final class DogfightScene {
         supplies.sync(sim, alpha: alpha, time: frame.time)
         scoreboard?.update(sim, drawableSize: frame.drawableSize,
                            now: sim.time + Double(alpha) * DogfightSim.stepSeconds)
+        groundLights.commit(time: frame.time)
     }
 
     /// The scale actually rendered at, from `RenderTargets` — the scene is built before the
@@ -163,28 +175,37 @@ final class DogfightScene {
         scoreboard?.backingScale = backingScale
     }
 
-    private func react(to event: SimEvent) {
+    private func react(to event: SimEvent, time: Double) {
         switch event {
         case .hit(_, _, _, let position, let altitude, let paper, let scale),
              .tankHit(_, _, let position, let altitude, let paper, let scale):
-            effects.confetti(at: position.scene(altitude: altitude), color: PaperPalette.base(paper), scale: scale)
+            effects.confetti(at: position.scene(altitude: altitude), color: PaperPalette.base(paper),
+                             glow: GlowPaint.colour(for: paper), scale: scale)
         case .downed(let victim, _):
             if let plane = sim.plane(id: victim) {
-                effects.shootDown(at: plane.position.scene(altitude: plane.altitude), color: PaperPalette.base(plane.paper),
+                let at = plane.position.scene(altitude: plane.altitude)
+                effects.shootDown(at: at, color: PaperPalette.base(plane.paper), glow: GlowPaint.colour(for: plane.paper),
                                   scale: plane.spec.scale)
+                // A burst in the air: the ground under it lights up from a metre above, more
+                // widely and more softly than a crash does.
+                groundLights.flash(at: at, radius: 1.5 * plane.spec.scale, time: time, life: 0.5, strength: 0.6)
             }
         case .crashed(_, let position, let ground, let inWater, let paper, let scale):
             if inWater {
                 effects.splash(at: position.scene(altitude: ground), scale: scale)
             } else {
                 effects.crash(at: position.scene(altitude: ground + 0.02 * scale), color: PaperPalette.base(paper), scale: scale)
+                groundLights.flash(at: position.scene(altitude: ground + 0.08 * scale), radius: 0.7 * scale, time: time)
             }
         case .tankDestroyed(_, _, _, let position, let ground, let paper, let scale):
             effects.crash(at: position.scene(altitude: ground + 0.03 * scale), color: PaperPalette.base(paper), scale: scale)
+            groundLights.flash(at: position.scene(altitude: ground + 0.08 * scale), radius: 0.7 * scale, time: time)
         case .splashed(let position, let kind, let scale):
             effects.shotSplash(at: position.scene(altitude: Terrain.waterLevel), size: kind.spec(scale: scale).size)
         case .collided(_, _, let position, let altitude, let papers, let scale):
-            effects.collision(at: position.scene(altitude: altitude), colors: papers.map(PaperPalette.base), scale: scale)
+            let at = position.scene(altitude: altitude)
+            effects.collision(at: at, colors: papers.map(PaperPalette.base), scale: scale)
+            groundLights.flash(at: at, radius: 1.5 * scale, time: time, life: 0.5, strength: 0.6)
         case .dropGrabbed(_, _, _, let position, let altitude):
             effects.cratePop(at: position.scene(altitude: altitude + SupplyDrop.canopyHeight * 0.4))
         case .stickered(let vehicle, _, _):

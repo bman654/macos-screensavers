@@ -16,6 +16,7 @@ final class TreeFires {
     let root = SCNNode()
     private let shelf: ModelShelf
     private let props: [PropSpot]
+    private let lights: GroundLights
     private var visuals: [Int: Visual] = [:]
 
     private final class Visual {
@@ -25,8 +26,14 @@ final class TreeFires {
         let char: SCNMaterial
         let fire: SCNNode
         let flames: [(node: SCNNode, base: SIMD3<Float>, axis: Int, phase: Double, rate: Double)]
+        /// Where its light comes from — the middle of the burning crown — and how far it reaches.
+        let glow: SIMD3<Float>
+        let reach: Float
         init(node: SCNNode, overlay: SCNNode, char: SCNMaterial, fire: SCNNode,
-             flames: [(node: SCNNode, base: SIMD3<Float>, axis: Int, phase: Double, rate: Double)]) {
+             flames: [(node: SCNNode, base: SIMD3<Float>, axis: Int, phase: Double, rate: Double)],
+             glow: SIMD3<Float>, reach: Float) {
+            self.glow = glow
+            self.reach = reach
             self.node = node
             self.overlay = overlay
             self.char = char
@@ -35,7 +42,8 @@ final class TreeFires {
         }
     }
 
-    init(shelf: ModelShelf, props: [PropSpot]) {
+    init(shelf: ModelShelf, props: [PropSpot], lights: GroundLights) {
+        self.lights = lights
         self.shelf = shelf
         self.props = props
     }
@@ -95,7 +103,9 @@ final class TreeFires {
         }
         node.addChildNode(fire)
         root.addChildNode(node)
-        return Visual(node: node, overlay: tree, char: char, fire: fire, flames: flames)
+        // A burning tree is a torch: its light carries further than a wreck's low fire.
+        return Visual(node: node, overlay: tree, char: char, fire: fire, flames: flames,
+                      glow: spot.position.scene(altitude: spot.ground + height * 0.55), reach: 0.18 + height * 2.2)
     }
 
     private func animate(_ visual: Visual, _ burn: TreeFire, time: Double) {
@@ -103,6 +113,11 @@ final class TreeFires {
         // The fire takes hold in under a second, and dies back over the last two of its burn.
         let flame = smoothstep(0, 0.8, Float(age)) * (1 - smoothstep(Float(TreeFire.burnTime) - 2, Float(TreeFire.burnTime), Float(age)))
         visual.fire.isHidden = flame <= 0.001
+        if flame > 0.001 {
+            let phase = Double(burn.prop) * 0.7
+            let flicker = 0.8 + 0.12 * wave(time, rate: 6.1, phase: phase) + 0.08 * wave(time, rate: 15.3, phase: phase * 1.9)
+            lights.fire(at: visual.glow, radius: visual.reach, colour: WreckField.fireLight * (flame * flicker * 1.1))
+        }
         for f in visual.flames where flame > 0.001 {
             let lick = 0.78 + 0.22 * wave(time, rate: f.rate, phase: f.phase) + 0.12 * wave(time, rate: f.rate * 2.3, phase: f.phase * 1.7)
             var stretch = SIMD3<Float>(repeating: (1 + 0.1 * wave(time, rate: f.rate * 0.7, phase: f.phase)) * flame)

@@ -112,8 +112,6 @@ final class AirfieldField {
         let ground = corners.map(terrain.surfaceHeight(at:)).max() ?? terrain.surfaceHeight(at: base.hangar)
         hangar.simdPosition = base.hangar.scene(altitude: ground)
         hangar.simdOrientation = simd_quatf(angle: base.heading, axis: SIMD3(0, 1, 0))
-        // Lamplight from the back wall's window: a child, so it rises and folds with the hangar.
-        hangar.addChildNode(lamplight.pool(length: base.hangarLength, width: base.hangarWidth))
         root.addChildNode(hangar)
         return Visual(base: base, runway: runway, roll: roll, hangar: hangar)
     }
@@ -126,6 +124,10 @@ final class AirfieldField {
         let overshoot = 1 + 0.12 * sin(.pi * popped) * popped
         visual.hangar.isHidden = popped <= 0
         visual.hangar.simdScale = SIMD3(1, max(popped * overshoot, 0.01), 1)
+        // Lamplight from the back wall's window, coming up with the hangar and going with it.
+        let back = visual.base.hangar - visual.base.direction * (visual.base.hangarLength * 0.3)
+        lamplight.hangar(back: back.scene(altitude: visual.hangar.simdPosition.y), length: visual.base.hangarLength,
+                         open: popped)
 
         visual.runway.isHidden = unrolled <= 0
         let progress = (unrolled * 50).rounded() / 50

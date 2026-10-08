@@ -167,6 +167,9 @@ enum StickerArt {
 /// The decal materials, one per sticker, shared by every vehicle that wears one.
 final class StickerMaterials {
     private var cache: [Sticker: SCNMaterial] = [:]
+    private let paint: GlowPaint
+
+    init(paint: GlowPaint) { self.paint = paint }
 
     func material(_ sticker: Sticker) -> SCNMaterial {
         if let hit = cache[sticker] { return hit }
@@ -179,6 +182,11 @@ final class StickerMaterials {
         // only let one sticker's clear corner cut a hole in the wing beside it.
         material.writesToDepthBuffer = false
         material.isDoubleSided = false
+        // A sticker is a prize, and stays one at night: it lights itself, a shade under the paint
+        // round it, so a gold star still reads gold on a wing gone dark.
+        material.emission.contents = material.diffuse.contents
+        material.emission.mipFilter = .linear
+        paint.register(material, strength: 0.75)
         cache[sticker] = material
         return material
     }
@@ -247,6 +255,24 @@ enum StickerSpots {
             if let best { chosen.append(best.spot) }
         }
         return chosen
+    }
+
+    /// Where a plane's navigation lights go: its two wingtips — the points of its upper surface
+    /// furthest out to each side, drawn a tenth of the way back toward the middle so a dot sits on
+    /// the wing rather than off its edge. Left (port, -z) first.
+    static func wingtips(on template: ModelTemplate) -> [StickerSpot] {
+        let triangles = topTriangles(of: template.node, exclude: [])
+        let points = triangles.flatMap { [$0.a, $0.b, $0.c] }
+        guard let port = points.min(by: { $0.z < $1.z }), let starboard = points.max(by: { $0.z < $1.z }) else { return [] }
+        let centre = (port + starboard) / 2
+        let size = max(template.extent.x, template.extent.z) * 0.1
+        return [port, starboard].map { tip in
+            let p = SIMD2(centre.x + (tip.x - centre.x) * 0.9, centre.z + (tip.z - centre.z) * 0.9)
+            guard let hit = surface(at: p, in: triangles) else {
+                return StickerSpot(position: tip, normal: SIMD3(0, 1, 0), size: size)
+            }
+            return StickerSpot(position: SIMD3(p.x, hit.height, p.y), normal: hit.normal, size: size)
+        }
     }
 
     struct Triangle {

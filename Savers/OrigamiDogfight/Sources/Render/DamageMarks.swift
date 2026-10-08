@@ -161,8 +161,14 @@ extension PaperMaterials {
         let key = "\(paper.kind.rawValue)-\(paper.tint)-\(Int(aspect * 100))-d\(stage)"
         if let cached = damaged[key] { return cached }
         let material = (clean.copy() as? SCNMaterial) ?? clean
+        // SceneKit applies `multiply` after lighting and emission, so the marks darken the glowing
+        // paint as they darken the paper: a damaged plane still shows its damage at night.
         material.multiply.contents = marks
         material.multiply.mipFilter = .linear
+        if material !== clean {
+            paint.register(material, strength: 1)
+            ground.grade(material, weight: PaperMaterials.moonWeight)
+        }
         damaged[key] = material
         return material
     }

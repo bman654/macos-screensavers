@@ -77,7 +77,7 @@ struct OrigamiSettings: Equatable {
     /// where it matters. `ORIGAMI_TEAMS` (ffa / teams / surprise), `ORIGAMI_PLANES_TIER`
     /// (few / some / lots / surprise), `ORIGAMI_TANKS` (off / sometimes / always),
     /// `ORIGAMI_SCOREBOARD` (0 / 1), `ORIGAMI_SEASON` (summer / autumn / winter / surprise) and
-    /// `ORIGAMI_TIME` (morning / midday / evening / surprise).
+    /// `ORIGAMI_TIME` (morning / midday / evening / night / surprise).
     static func forLaunch(defaults: ScreenSaverDefaults?,
                           environment: [String: String] = ProcessInfo.processInfo.environment) -> OrigamiSettings {
         var settings = load(from: defaults)

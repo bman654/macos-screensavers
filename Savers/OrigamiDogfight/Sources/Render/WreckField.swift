@@ -20,6 +20,7 @@ final class WreckField {
     private let effects: Effects
     private let fleet: PlaneFleet
     private let armour: TankField
+    private let lights: GroundLights
 
     private final class Visual {
         let node: SCNNode
@@ -67,7 +68,9 @@ final class WreckField {
     private static let fireHeight: Float = 0.2
     private static let noseDown: Float = 0.9
 
-    init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects, fleet: PlaneFleet, armour: TankField) {
+    init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects, fleet: PlaneFleet, armour: TankField,
+         lights: GroundLights) {
+        self.lights = lights
         self.shelf = shelf
         self.papers = papers
         self.effects = effects
@@ -82,6 +85,7 @@ final class WreckField {
             let visual = visuals[wreck.id] ?? make(wreck, terrain: sim.terrain)
             visuals[wreck.id] = visual
             animate(visual, wreck, age: sim.time - wreck.crashedAt, time: time)
+            light(visual, wreck, age: sim.time - wreck.crashedAt, time: time)
         }
         for (id, visual) in visuals where !seen.contains(id) {
             visual.node.removeFromParentNode()
@@ -103,7 +107,9 @@ final class WreckField {
         // flying in the same paper must not.
         func scorchable(aspect: Float) -> SCNMaterial {
             let shared = papers.material(for: wreck.paper, aspect: CGFloat(aspect))
-            return (shared.copy() as? SCNMaterial) ?? shared
+            guard let copy = shared.copy() as? SCNMaterial else { return shared }
+            lights.grade(copy, weight: PaperMaterials.moonWeight)
+            return copy
         }
         switch wreck.model {
         case .plane(let type):
@@ -188,6 +194,24 @@ final class WreckField {
         return puff
     }
 
+    /// The fire's light on the ground round it, flickering with its flames and going as they
+    /// fold away. Wider than the fire by a good margin: at night it is the brightest thing on
+    /// the land, and a pool of light the size of the flames would read as part of them.
+    private func light(_ visual: Visual, _ wreck: Wreck, age: Double, time: Double) {
+        guard !wreck.inWater, age < Wreck.fireDuration + Wreck.foldDuration else { return }
+        let folding = Float((age - Wreck.fireDuration) / Wreck.foldDuration)
+        let strength = smoothstep(0, 0.5, Float(age)) * (age < Wreck.fireDuration ? 1 : 1 - smoothstep(0, 1, folding))
+        let phase = Double(wreck.id) * 1.3
+        let flicker = 0.8 + 0.12 * wave(time, rate: 7.3, phase: phase) + 0.08 * wave(time, rate: 17.9, phase: phase * 2.1)
+        let k = visual.scale
+        lights.fire(at: wreck.position.scene(altitude: wreck.ground + WreckField.fireHeight * k * 0.45),
+                    radius: 0.08 + 0.3 * k, colour: WreckField.fireLight * (strength * flicker))
+    }
+
+    /// Firelight, linear: a deep orange, stronger than any paper can reflect at full, so a level
+    /// field beside a fire reads lit rather than tinted.
+    static let fireLight = SIMD3<Float>(1.0, 0.42, 0.13) * 2.2
+
     private func animate(_ visual: Visual, _ wreck: Wreck, age: Double, time: Double) {
         if wreck.inWater {
             // Down through the water's surface, which hides it as it goes — the lake is opaque
@@ -238,6 +262,10 @@ final class WreckField {
         let char = smoothstep(0, 9, Float(age))
         let shade = 1 - 0.45 * CGFloat(char)
         visual.material.multiply.contents = NSColor(srgbRed: shade, green: shade * 0.93, blue: shade * 0.86, alpha: 1)
+        // Its luminous paint burns off with the paper: a wreck is dark, and the glow that is
+        // left in the field is the living.
+        let paint = papers.paint
+        visual.material.emission.intensity = paint.isLit ? CGFloat(paint.level * 0.6 * (1 - char)) : 0
 
         let fading = Float((age - Wreck.fireDuration - Wreck.foldDuration) / Wreck.fadeDuration)
         visual.body.opacity = CGFloat(1 - smoothstep(0, 1, fading))
