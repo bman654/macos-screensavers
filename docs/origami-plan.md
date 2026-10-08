@@ -83,6 +83,25 @@ words decided several details; the rest are calls made for him (*call*).
   snow and wear cream fleece in winter; stage-1 damage is crisp graphite scuffs, since a soft grey
   wash was invisible on yellow and pink paper.
 
+**After the v3 review** (fixes, and calls made for the user):
+- **A landscape must never trap at startup** — that is a black screen every time the seed is
+  drawn. `tools/origami-seed-sweep.swift` builds the whole world (sim, countryside, both team
+  matches' airfields) for the first 200,000 seeds and 100,000 sampled from the saver's range,
+  each a few seconds in, in a child process per batch so a trap names its seed. Run it after any
+  change to what the landscape is built from.
+- **Roads are checked at their full width** against every lake face they overlap, frozen ones
+  included, at every stage of building them; a road that still crossed water would be dropped.
+- **A wreck on a runway holds the take-offs** — burning, folding or fading, anywhere a plane
+  would roll through it or climb out through its fire. *Call:* after 8 s the waiting plane or
+  tank gives up the airfield and comes on from the edge. A wreck that falls in front of a plane
+  already rolling cannot be helped; the soak reports those without failing.
+- **The countryside steps with the sim**, step by step, never per frame: sheep and cars are the
+  same at any frame rate, and are drawn a step behind, between their last two positions.
+- **Winter's bare trees are snow-laden**: white on top, shading into a twig-laced violet-brown
+  underside. A plain brown crown read as a boulder on the snow, whole white facets as a cut gem.
+- **Scorches are smudges, not discs**: round marks with near-black hearts read as holes in
+  bright paper.
+
 ## v2: after the first look (2026-10-07)
 
 Brandon watched v1 and liked the overall design, the terrain and the lake banks. What he asked
