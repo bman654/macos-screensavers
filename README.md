@@ -70,9 +70,9 @@ killall legacyScreenSaver
 
 ## Origami Dogfight
 
-[![Paper planes fighting over a folded-paper landscape with lakes, villages and two airfields](docs/images/origami/hero.jpg)](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)
+[![Paper planes fighting over a folded-paper landscape with lakes, villages and two airfields](docs/images/origami/hero.jpg)](https://youtu.be/hAXJKLrM_hM)
 
-**▶ [Watch a 36-second clip](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)**
+**▶ [Watch it running on YouTube](https://youtu.be/hAXJKLrM_hM)**
 
 Folded paper planes dogfight over a folded-paper landscape, seen from above. Five kinds of paper
 plane — the classic dart, a swept interceptor, a tailed glider, a squat bomber and a delta stunt

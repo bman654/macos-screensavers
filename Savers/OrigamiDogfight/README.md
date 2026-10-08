@@ -6,9 +6,9 @@ other; paper tanks on the ground throw pencils at them. A plane that is shot dow
 burns as a little origami fire, and a new one flies in to take its place. The landscape is folded
 fresh every time it starts, and none of it is a video loop.
 
-[![Paper planes fighting over a folded-paper landscape with lakes, villages and two airfields](../../docs/images/origami/hero.jpg)](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)
+[![Paper planes fighting over a folded-paper landscape with lakes, villages and two airfields](../../docs/images/origami/hero.jpg)](https://youtu.be/hAXJKLrM_hM)
 
-**▶ [Watch a 36-second clip](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)** (MP4, 3 MB)
+**▶ [Watch it running on YouTube](https://youtu.be/hAXJKLrM_hM)**
 
 ---
 
