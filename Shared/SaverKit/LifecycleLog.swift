@@ -1,5 +1,7 @@
 // The lifecycle log: which saver views a host builds and discards, and once a second what
-// each can see of its own window. Off unless asked for; SaverView is the only writer.
+// each can see of its own window. Off unless asked for. SaverView writes the view lines; a
+// saver may add its own beside them, as Origami Dogfight does to show which fight a rebuilt
+// scene is carrying.
 
 import Darwin
 import Foundation

@@ -1418,6 +1418,35 @@ tank as the same seed with the shipped one.
   colour to zero still drew the god rays at full strength. It looks exactly like a mis-tuned
   constant rather than a property with no effect, and it cost a tuning pass spent cutting a number
   that was doing nothing. Bake colour and brightness into the texture.
+- **A light's `categoryBitMask` chooses what it lights, not what casts its shadow.** SceneKit
+  draws every `castsShadow` node into every shadow map, so a second, higher sun "for the planes
+  only" still had the planes casting their long evening shadows from the low one — measured as
+  two shadows per plane. Origami's plane shadows are projected geometry for this reason
+  (`PlaneShadows.swift`).
+- **Scene fog is applied to blended materials too.** An additive glow quad under a morning haze
+  came out as a pale *square*: fog mixed every fragment toward the haze colour, black corners
+  included, and the add put it on screen. Alpha-blend anything that must vanish at its edges.
+- **A multiply-blended shadow darkens once per overlapping triangle.** Projecting a folded paper
+  plane's own mesh gave a shadow stepped darker wherever its layers overlap; a shadow map never
+  does this. Project a one-layer outline instead.
+- **An `SCNPlane`'s vertex data is a unit square; its width is applied elsewhere.** Anything that
+  reads a node tree's triangles (`StickerSpots.topTriangles`) sees a 1 cm wingtip dot as a sheet a
+  metre wide. Origami's dart cut its shadow outline with the dots in it and threw dark wedges across
+  half the field — which, being transient and shadow-shaped, looked exactly like a shadow-map bug.
+  Name decorations and exclude them from geometry readers.
+- **A shader modifier's texture argument needs the mesh to have UVs.** SceneKit binds it like a
+  material's own texture, through texcoord0, and a mesh without one fails to build its pipeline:
+  "Vertex attribute texcoord0(6) is missing from the vertex descriptor", only in the system log
+  (`log stream --predicate 'senderImagePath CONTAINS "SceneKit"'`). The flat-coloured props simply
+  vanished while their shadows stayed. A plain float argument has no such need.
+- **A compile failure in a shader modifier draws magenta**, and a Swift multi-line string has no
+  trailing newline, so `"""…#pragma body"""` + `body` fuses into `#pragma bodyif (…`.
+- **`run-saver` captures in the colour profile of whichever display its window lands on.** A
+  picker tile re-rendered with nothing changed differed in nearly every pixel (mean 12.9/255)
+  from the committed one, because one was tagged Display P3 (the Retina panel) and the other the
+  external monitor's profile — a clean per-channel linear fit, residual 3–4 levels. Check
+  `sips -g profile` before believing a before/after diff, and render a tile on the display the
+  committed one came from.
 - **The near-floor measurement band is the substrate's cross-section, which is a vertical face**,
   so lowering a light's elevation *raises* that reading instead of sparing it. The usual grazing
   light intuition inverts. Dropping the aquarium's accent from 18° to 8° did not move the ratio.

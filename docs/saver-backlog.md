@@ -1,7 +1,8 @@
 # Screensaver backlog
 
 Ideas beyond the aquarium, with the analysis behind their ordering. Nothing here is
-started. The aquarium (`aquarium-plan.md`) is the active track.
+started. The aquarium (`aquarium-plan.md`) and Origami Dogfight (`origami-plan.md`), a paper-plane
+dogfight that was never on this list, are both shipped.
 
 ## The architectural point that drives all of this
 

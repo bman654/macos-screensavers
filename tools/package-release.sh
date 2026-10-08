@@ -64,14 +64,19 @@ if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
   exit 2
 fi
 
-# The library and the grain bed are build outputs, not sources, so a fresh clone reaches this
-# script with an empty Assets/ and would otherwise ship a saver with no fish and no sound.
+# The model library and any grain bed are build outputs, not sources, so a fresh clone reaches
+# this script with an empty Assets/ and would otherwise ship a saver with no models and no sound.
+# Each saver bakes its library with its own tool; only a saver with sound scripts has a grain bed.
 ASSETS="$ROOT/Savers/$NAME/Assets"
+case "$NAME" in
+  OrigamiDogfight) LIBRARY_TOOL="tools/build-origami-library.py" ;;
+  *)               LIBRARY_TOOL="tools/build-library.py" ;;
+esac
 if ! compgen -G "$ASSETS/*.usdz" > /dev/null; then
-  echo "error: no models in $ASSETS — run tools/build-library.py first (needs Blender)" >&2
+  echo "error: no models in $ASSETS — run $LIBRARY_TOOL first (needs Blender)" >&2
   exit 1
 fi
-if [[ ! -d "$ASSETS/audio" ]]; then
+if [[ -d "$ROOT/Savers/$NAME/Sounds" && ! -d "$ASSETS/audio" ]]; then
   echo "error: no grain library in $ASSETS/audio — run tools/build-audio.py first" >&2
   exit 1
 fi

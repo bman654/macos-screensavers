@@ -29,6 +29,7 @@ tools/build-saver.sh Example        # build to build/Example.saver
 tools/build-saver.sh Example -i     # ...and install, killing legacyScreenSaver
 tools/run-saver.swift build/Example.saver --seconds 3 --screenshot /tmp/shot.png
 tools/run-saver.swift Example --configure --seconds 3 --screenshot /tmp/sheet.png
+tools/run-saver.swift Example --seconds 20 --record /tmp/run.mov   # a movie of the run
 ```
 
 Use `run-saver` for iteration. Driving development through System Settings is miserable,

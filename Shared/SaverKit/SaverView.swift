@@ -275,7 +275,7 @@ class SaverView: ScreenSaverView {
                       "bounds=\(Int(bounds.width))x\(Int(bounds.height))",
                       "drawable=\(Int(metalLayer?.drawableSize.width ?? 0))x\(Int(metalLayer?.drawableSize.height ?? 0))",
                       "hidden=\(isHiddenOrHasHiddenAncestor)",
-                      "visibleRect=\(Int(visibleRect.width))x\(Int(visibleRect.height))"]
+                      "visibleRect=\(SaverView.extent(visibleRect.size))"]
         if let window {
             // `windowNumber` is documented as non-positive for a window without a window device,
             // and `CGWindowID` is unsigned: converting a -1 would trap the whole host.
@@ -297,6 +297,20 @@ class SaverView: ScreenSaverView {
         }
         LifecycleLog.emit("SaverKit signals: \(type(of: self)) \(Unmanaged.passUnretained(self).toOpaque()) "
                           + fields.joined(separator: " "))
+    }
+
+    /// A size as `WxH` for the signals line, safe for any value AppKit hands back.
+    ///
+    /// A view with no window reports its `visibleRect` as unbounded — measured at ±1.8e308, the
+    /// largest finite `CGFloat` — and `Int(_:)` traps on a value that large. So the signals line
+    /// took the process down the first time a view lost its window with the log on: in the
+    /// harness that was spike 008's `detach` phase, and in the real host, which has its own
+    /// switch for this log, it would have been `legacyScreenSaver` itself.
+    private static func extent(_ size: CGSize) -> String {
+        func dimension(_ value: CGFloat) -> String {
+            value.isFinite && abs(value) < 1e9 ? "\(Int(value))" : "unbounded"
+        }
+        return "\(dimension(size.width))x\(dimension(size.height))"
     }
 
     // MARK: Init

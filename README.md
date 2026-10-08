@@ -68,6 +68,65 @@ killall legacyScreenSaver
 
 ---
 
+## Origami Dogfight
+
+[![Paper planes fighting over a folded-paper landscape with lakes, villages and two airfields](docs/images/origami/hero.jpg)](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)
+
+**▶ [Watch a 36-second clip](https://github.com/bman654/macos-screensavers/releases/download/origamidogfight-1.0.0/origami-dogfight.mp4)**
+
+Folded paper planes dogfight over a folded-paper landscape, seen from above. Five kinds of paper
+plane — the classic dart, a swept interceptor, a tailed glider, a squat bomber and a delta stunt
+plane — shoot spitballs, thumbtacks, paper clips, rubber bands, staples and crumpled paper at
+each other, while paper tanks on the ground throw pencils at them. A downed plane spirals in and
+burns as a little origami fire, and a replacement flies in — or takes off from its team's
+airfield. Aces earn stickers, supply crates drift down on tissue-paper parachutes, and a
+scoreboard card keeps the tally. The landscape is folded fresh every time: summer, autumn or
+winter with frozen lakes, from morning through to a moonlit night where the planes wear
+glow-in-the-dark paint. About 3 MB, no sound.
+
+**[Full documentation, all the settings, and the planes →](Savers/OrigamiDogfight/README.md)**
+
+### Install
+
+1. Download `OrigamiDogfight-1.0.0.zip` from its
+   [release page](https://github.com/bman654/macos-screensavers/releases/tag/origamidogfight-1.0.0)
+   and double-click to unzip.
+
+2. Install it, and clear the flag macOS puts on downloaded files:
+
+   ```bash
+   mkdir -p ~/Library/Screen\ Savers
+   mv ~/Downloads/OrigamiDogfight.saver ~/Library/Screen\ Savers/
+   xattr -dr com.apple.quarantine ~/Library/Screen\ Savers/OrigamiDogfight.saver
+   ```
+
+   The `xattr` line is required for the same reason as the Aquarium's: the bundle is signed ad-hoc
+   rather than notarized by Apple.
+
+3. **Quit System Settings if it is already open**, or the new screensaver will not show up.
+
+4. Open **System Settings → Wallpaper → "Screen Saver…"**, find the **Other** group, click
+   **Show All**, and pick **OrigamiDogfight**. **Options…** has the settings.
+
+Trouble? See [Troubleshooting](Savers/OrigamiDogfight/README.md#troubleshooting).
+
+### Requirements
+
+| | |
+|---|---|
+| **macOS** | 26.0 (Tahoe) or later — it will not load on earlier versions |
+| **Hardware** | Apple Silicon only; there is no Intel build |
+| **Disk** | about 3 MB |
+
+### Uninstall
+
+```bash
+rm -rf ~/Library/Screen\ Savers/OrigamiDogfight.saver
+killall legacyScreenSaver
+```
+
+---
+
 ## More to come
 
 [`docs/saver-backlog.md`](docs/saver-backlog.md) has what is planned next and why it is ordered
@@ -75,8 +134,8 @@ that way.
 
 ## Building from source
 
-Everything here is generated from code — the fish are parametric Blender scripts, the bubbles
-are synthesis scripts, and neither is committed as a binary. See
+Everything here is generated from code — the fish and the paper planes are parametric Blender
+scripts, the bubbles are synthesis scripts, and none of it is committed as a binary. See
 [`docs/development.md`](docs/development.md) for how to bake the assets and build a `.saver`
 without needing Xcode.
 

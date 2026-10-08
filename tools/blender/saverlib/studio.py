@@ -231,6 +231,13 @@ def frame_orbit(camera, azimuth_deg, elevation_deg, center, radius, margin=1.30)
     if aspect > 1.0:
         half_fov = math.atan(math.tan(half_fov) / aspect)
     distance = (radius * margin) / math.tan(half_fov)
+    # Blender's default near plane is 0.1 m, and a centimetre-sized subject framed this way
+    # sits a few centimetres from the lens — entirely in front of it, so the render is blank
+    # with no error. Pulled in only when the subject would cross it, so every render of a
+    # larger model is unchanged.
+    nearest = distance - radius * margin
+    if nearest < camera.data.clip_start:
+        camera.data.clip_start = max(nearest * 0.5, 1e-6)
 
     az = math.radians(azimuth_deg)
     el = math.radians(elevation_deg)
