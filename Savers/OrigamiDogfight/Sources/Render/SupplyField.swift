@@ -64,6 +64,7 @@ final class SupplyField {
         knot.addChildNode(canopy)
         let node = SCNNode()
         node.addChildNode(knot)
+        DayLight.enlist(node)
         root.addChildNode(node)
         return Visual(node: node, knot: knot, canopy: canopy, phase: Double(drop.id % 89) * 0.37)
     }

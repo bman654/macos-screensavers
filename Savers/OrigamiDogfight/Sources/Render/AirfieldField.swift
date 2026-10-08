@@ -18,6 +18,7 @@ final class AirfieldField {
     private let shelf: ModelShelf
     private let papers: PaperMaterials
     private let season: Season
+    private let lamplight: Lamplight
     private var runwayMaterials: [Int: SCNMaterial] = [:]
 
     private final class Visual {
@@ -43,7 +44,8 @@ final class AirfieldField {
     /// samples it is draped through, under a plane's keel on its roll.
     private static let lift: Float = 0.004
 
-    init(shelf: ModelShelf, papers: PaperMaterials, season: Season) {
+    init(shelf: ModelShelf, papers: PaperMaterials, season: Season, lamplight: Lamplight) {
+        self.lamplight = lamplight
         self.shelf = shelf
         self.papers = papers
         self.season = season
@@ -76,6 +78,8 @@ final class AirfieldField {
         let team = paper ?? Paper(kind: .plain, tint: base.side)
         let runway = SCNNode()
         runway.castsShadow = false
+        // Draped like the roads, and drawn with them, before the planes' shadows.
+        runway.renderingOrder = PlaneShadows.groundOrder
         root.addChildNode(runway)
 
         let roll = SCNNode(geometry: SCNCylinder(radius: 1, height: CGFloat(base.runwayWidth)))
@@ -108,6 +112,8 @@ final class AirfieldField {
         let ground = corners.map(terrain.surfaceHeight(at:)).max() ?? terrain.surfaceHeight(at: base.hangar)
         hangar.simdPosition = base.hangar.scene(altitude: ground)
         hangar.simdOrientation = simd_quatf(angle: base.heading, axis: SIMD3(0, 1, 0))
+        // Lamplight from the back wall's window: a child, so it rises and folds with the hangar.
+        hangar.addChildNode(lamplight.pool(length: base.hangarLength, width: base.hangarWidth))
         root.addChildNode(hangar)
         return Visual(base: base, runway: runway, roll: roll, hangar: hangar)
     }

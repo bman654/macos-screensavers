@@ -100,6 +100,7 @@ final class ProjectileField {
                     }
                 }
             }
+            DayLight.enlist(node)
             root.addChildNode(node)
         }
         if p.kind == .confetti {

@@ -102,6 +102,34 @@ words decided several details; the rest are calls made for him (*call*).
 - **Scorches are smudges, not discs**: round marks with near-black hearts read as holes in
   bright paper.
 
+**Time of day, reworked** (Brandon, on the installed build: "morning vs day almost identical …
+I was expecting evening to be dark but it isn't"). Only the sun's colour had moved; it never
+dropped below about 55° and lost under a fifth of its strength. Now (`DayLight.swift`):
+- **The sun is low at both ends**: about 31° at dawn from the east (right of frame), 29° at the
+  evening a session starts in, 23° at dusk, against midday's unchanged 61° — a tree's shadow
+  three to four times midday's. Midday is the v1 light exactly, and the reference.
+- **Evening is dark because the sky dims far more than the sun**, and turns blue-violet, so the
+  shade is cool and dark and only what faces the low orange-red sun is warm. Mean scene
+  luminance (CIE Y, seed 38, summer): dawn 0.23, midday 0.30, evening 0.08, dusk 0.04; winter
+  0.39 / 0.51 / 0.17 / 0.08. Before: morning 0.29, midday 0.30, evening 0.20.
+- **Morning is a pale haze** (scene fog, set so planes nearer the camera take about half as
+  much) over a rosy-gold sun and a cool sky, lifting by mid-morning; the night's lamps still on.
+- **Lamplight** (`Lamplight.swift`): from above the roofs hide every window, so a lit house is a
+  warm pool on the ground round it — every house, mill and hangar — fading in from late
+  afternoon. The windows' own emission is still set.
+- **The fight keeps a light of its own**: a warm fill from the camera's direction lighting only
+  planes, tanks, shots, stickers and crates (`DayLight.fightCategory`), rising toward dusk. At
+  dusk planes sit ΔE 30–55 from the ground round them, mostly a little lighter than it.
+- **Planes' shadows are projected, not the sun's** (`PlaneShadows.swift`). Under the low sun a
+  plane a metre up would throw its shadow 1.5–2.3 m off across the field; instead each plane's
+  one-layer outline is laid on the ground along the sun's bearing, its reach capped at 0.62 m
+  per metre of height (midday's is 0.55), darkened by exactly what the sun's shadow leaves on
+  level ground. Tanks, crates and wrecks keep the sun's shadows.
+- **Winter has its own dusk**: a dimmer gold sun under a cyan-leaning slate sky — a warm sun
+  over a blue sky on flat snow sums to mauve, and did, twice.
+- `ORIGAMI_PHASE` (0 dawn … 1 dusk) pins the dial in the harness: a warmup stops at ten minutes
+  and the drift takes an hour, so it is the only way to see dusk in a still.
+
 ## v2: after the first look (2026-10-07)
 
 Brandon watched v1 and liked the overall design, the terrain and the lake banks. What he asked

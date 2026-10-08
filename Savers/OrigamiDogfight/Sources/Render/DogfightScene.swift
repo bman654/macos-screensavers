@@ -51,22 +51,27 @@ final class DogfightScene {
         let library = OrigamiLibrary(directory: bundle.resourceURL)
         let shelf = ModelShelf(library: library)
         let papers = PaperMaterials(seed: sim.seed)
-        fleet = PlaneFleet(shelf: shelf, papers: papers, effects: effects)
+        let lamplight = Lamplight()
+        let planeShadows = PlaneShadows()
+        fleet = PlaneFleet(shelf: shelf, papers: papers, effects: effects, shadows: planeShadows)
         armour = TankField(shelf: shelf, papers: papers, stickers: fleet.stickers)
         shots = ProjectileField(shelf: shelf)
         wrecks = WreckField(shelf: shelf, papers: papers, effects: effects, fleet: fleet, armour: armour)
         supplies = SupplyField(shelf: shelf)
-        airfields = AirfieldField(shelf: shelf, papers: papers, season: countryside.atmosphere.season)
+        airfields = AirfieldField(shelf: shelf, papers: papers, season: countryside.atmosphere.season,
+                                  lamplight: lamplight)
         // The lineup is for looking at models; a card in the corner would only be in the way.
         scoreboard = showsScoreboard && !sim.isLineup ? Scoreboard(seed: sim.seed) : nil
 
         scene.background.contents = NSColor(srgbRed: 0.86, green: 0.84, blue: 0.78, alpha: 1)
-        landscape = Landscape(sim: sim, countryside: countryside, shelf: shelf, quality: quality, scene: scene.rootNode)
+        landscape = Landscape(sim: sim, countryside: countryside, shelf: shelf, quality: quality, scene: scene,
+                              lamplight: lamplight, planeShadows: planeShadows)
         scene.rootNode.addChildNode(landscape.root)
-        for root in [airfields.root, wrecks.root, armour.root, shots.root, fleet.root, supplies.root, effects.root] {
+        for root in [planeShadows.root, airfields.root, wrecks.root, armour.root, shots.root, fleet.root, supplies.root, effects.root] {
             scene.rootNode.addChildNode(root)
         }
         buildCamera()
+        cameraNode.addChildNode(landscape.fightFill)
         if let scoreboard { cameraNode.addChildNode(scoreboard.node) }
         // Which fight this scene was handed, and how far into it — the only way to see that an
         // idle release or a quality change resumed the fight rather than starting a new one.

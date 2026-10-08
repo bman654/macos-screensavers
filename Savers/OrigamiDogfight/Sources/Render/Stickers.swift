@@ -249,7 +249,7 @@ enum StickerSpots {
         return chosen
     }
 
-    private struct Triangle {
+    struct Triangle {
         let a: SIMD3<Float>, b: SIMD3<Float>, c: SIMD3<Float>
         let normal: SIMD3<Float>
         /// Its footprint's box, so most triangles are passed over without the barycentric test.
@@ -281,8 +281,9 @@ enum StickerSpots {
     }
 
     /// Every triangle under `root`, in its space, facing up — a folded sheet is double-sided, so
-    /// a face's winding says nothing and its normal is turned to point up.
-    private static func topTriangles(of root: SCNNode, exclude: Set<String>) -> [Triangle] {
+    /// a face's winding says nothing and its normal is turned to point up. Also what a plane's
+    /// shadow is cut from (`PlaneShadows`).
+    static func topTriangles(of root: SCNNode, exclude: Set<String>) -> [Triangle] {
         var triangles: [Triangle] = []
         var skipped = Set<ObjectIdentifier>()
         root.enumerateHierarchy { node, _ in

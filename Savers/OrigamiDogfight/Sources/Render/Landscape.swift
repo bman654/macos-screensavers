@@ -19,11 +19,20 @@ final class Landscape {
     private let fires: TreeFires
     /// The whole scene, swept now and then for models this file did not build but must still
     /// light: a window anywhere, the fight's hangars' among them.
-    private weak var scene: SCNNode?
+    private weak var scene: SCNScene?
+    /// The fight's fill light, for the scene to hang on its camera (`DayLight.fillNode`).
+    var fightFill: SCNNode { daylight.fillNode }
     private var nextSweep = -Double.infinity
     private var sweeps = 0
+    /// `ORIGAMI_PHASE`: the day's dial held at one point (0 dawn … 1 dusk) — a harness override,
+    /// like every `ORIGAMI_*`, empty under `legacyScreenSaver`. The drift takes an hour to reach
+    /// dusk and a warmup stops at ten minutes, so this is the only way to see dusk in a still,
+    /// or two hours of the day on one frame of one fight.
+    private let pinnedPhase = ProcessInfo.processInfo.environment["ORIGAMI_PHASE"].flatMap(Double.init)
+        .flatMap { $0.isFinite ? min(max($0, 0), 1) : nil }
 
-    init(sim: DogfightSim, countryside: Countryside, shelf: ModelShelf, quality: RenderQuality, scene: SCNNode) {
+    init(sim: DogfightSim, countryside: Countryside, shelf: ModelShelf, quality: RenderQuality, scene: SCNScene,
+         lamplight: Lamplight, planeShadows: PlaneShadows) {
         self.countryside = countryside
         self.scene = scene
         let season = countryside.atmosphere.season
@@ -43,10 +52,15 @@ final class Landscape {
         marks = GroundMarks(terrain: sim.terrain)
         fires = TreeFires(shelf: shelf, props: sim.props)
         SeasonDress.dress(life.root, season: season)
-        daylight = DayLight(quality: quality, season: season, terrain: terrain.geometry?.firstMaterial)
+        daylight = DayLight(quality: quality, season: season, terrain: terrain.geometry?.firstMaterial, scene: scene,
+                            lamplight: lamplight, planeShadows: planeShadows)
+        lamplight.light(houses: sim.props, terrain: sim.terrain)
 
-        for node in [terrain, RoadStrips.node(roads: countryside.roads, terrain: sim.terrain, season: season),
-                     marks.root, scenery, life.root, fires.root, cranes.root, daylight.root] {
+        let roads = RoadStrips.node(roads: countryside.roads, terrain: sim.terrain, season: season)
+        // Drawn before the planes' shadows, which are laid over them (`PlaneShadows`).
+        for ground in [terrain, roads] { ground.renderingOrder = PlaneShadows.groundOrder }
+        for node in [terrain, roads,
+                     marks.root, lamplight.houses, scenery, life.root, fires.root, cranes.root, daylight.root] {
             root.addChildNode(node)
         }
         countryside.catchUp(with: sim)
@@ -68,7 +82,7 @@ final class Landscape {
     /// with a clock of its own was stepped with the sim.
     func update(sim: DogfightSim, time: Double) {
         sweep(at: time)
-        daylight.update(phase: countryside.atmosphere.phase(at: time))
+        daylight.update(phase: pinnedPhase ?? countryside.atmosphere.phase(at: time))
         life.update(countryside, time: time)
         cranes.update(countryside.cranes, time: time)
         marks.sync(countryside.marks, time: time)
@@ -82,7 +96,7 @@ final class Landscape {
         guard time >= nextSweep || time < nextSweep - 10, let scene else { return }
         sweeps += 1
         nextSweep = time + (sweeps < 8 ? 0.25 : 2)
-        for material in SeasonDress.materials(under: scene) where (material.name ?? "").contains("window") {
+        for material in SeasonDress.materials(under: scene.rootNode) where (material.name ?? "").contains("window") {
             daylight.adopt(window: material)
         }
     }

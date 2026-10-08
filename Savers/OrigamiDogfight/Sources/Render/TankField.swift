@@ -83,7 +83,9 @@ final class TankField {
         if earned.count > visual.stickerCount {
             let spots = shelf.stickerSpots(tank: tank.type)
             for index in visual.stickerCount..<earned.count where index < spots.count {
-                visual.stickerHolder.addChildNode(StickerSpots.decal(earned[index], at: spots[index], materials: stickers))
+                let decal = StickerSpots.decal(earned[index], at: spots[index], materials: stickers)
+                DayLight.enlist(decal)
+                visual.stickerHolder.addChildNode(decal)
             }
             visual.stickerCount = earned.count
         }
@@ -113,6 +115,7 @@ final class TankField {
 
     private func make(_ tank: Tank) -> Visual {
         let model = model(type: tank.type, paper: tank.paper, size: tank.spec.size)
+        DayLight.enlist(model.node)
         root.addChildNode(model.node)
         let template = shelf.tank(tank.type)
         let holder = SCNNode()

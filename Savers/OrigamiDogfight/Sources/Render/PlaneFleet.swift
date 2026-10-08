@@ -12,6 +12,7 @@ final class PlaneFleet {
     private let shelf: ModelShelf
     private let papers: PaperMaterials
     private let effects: Effects
+    private let shadows: PlaneShadows
     let stickers = StickerMaterials()
 
     private final class Visual {
@@ -47,7 +48,8 @@ final class PlaneFleet {
 
     private var visuals: [Int: Visual] = [:]
 
-    init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects) {
+    init(shelf: ModelShelf, papers: PaperMaterials, effects: Effects, shadows: PlaneShadows) {
+        self.shadows = shadows
         self.shelf = shelf
         self.papers = papers
         self.effects = effects
@@ -60,11 +62,13 @@ final class PlaneFleet {
             let visual = visuals[plane.id] ?? make(plane)
             visuals[plane.id] = visual
             pose(visual, plane, alpha: alpha, time: time, terrain: sim.terrain)
+            shadows.cast(plane.id, kind: "\(plane.type)@\(plane.spec.size)", model: visual.model, terrain: sim.terrain)
             trails(visual, plane, now: sim.time)
             wear(visual, plane)
         }
         for (id, visual) in visuals where !seen.contains(id) {
             retire(visual)
+            shadows.drop(id)
             visuals[id] = nil
         }
     }
@@ -99,6 +103,9 @@ final class PlaneFleet {
         let tail = SCNNode()
         tail.simdPosition = SIMD3(-plane.spec.size * 0.45, 0, 0)
         node.addChildNode(tail)
+        DayLight.enlist(node)
+        // A plane's shadow is `PlaneShadows`', not the sun's (see there).
+        node.enumerateHierarchy { child, _ in child.castsShadow = false }
         root.addChildNode(node)
         return Visual(node: node, model: model, skins: skins, stickerHolder: holder, tail: tail, paper: plane.paper,
                       flutter: Float(plane.id % 97) * 0.731)
@@ -118,7 +125,10 @@ final class PlaneFleet {
         if earned.count > visual.stickerCount {
             let spots = shelf.stickerSpots(plane: plane.type)
             for index in visual.stickerCount..<earned.count where index < spots.count {
-                visual.stickerHolder.addChildNode(StickerSpots.decal(earned[index], at: spots[index], materials: stickers))
+                let decal = StickerSpots.decal(earned[index], at: spots[index], materials: stickers)
+                DayLight.enlist(decal)
+                decal.enumerateHierarchy { child, _ in child.castsShadow = false }
+                visual.stickerHolder.addChildNode(decal)
             }
             visual.stickerCount = earned.count
         }
