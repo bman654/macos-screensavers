@@ -6,10 +6,12 @@ spirals into the ground and burns as a little origami fire for a while before it
 replacement flies in from off-screen, so the number in the air stays constant. Sometimes it is a
 free-for-all, sometimes two or three small teams.
 
-Status: **v2 is built, installed and signed off by eye** (`tools/build-origami-library.py`, then
-`tools/build-saver.sh OrigamiDogfight -i`). Brandon ran it in the installed host on the Retina
-display on 2026-10-07: the scoreboard reads, and pencils read as ballistic. Not yet released —
-it reaches `main` by a release merge, like the Aquarium.
+Status: **released as 1.0.0** on 2026-10-08 (tag `origamidogfight-1.0.0`), with v3 and night
+in it. Brandon judged each round on the installed saver, on the Retina display and the external
+monitor. Build it with `tools/build-origami-library.py`, then `tools/build-saver.sh
+OrigamiDogfight -i`; package it with `tools/package-release.sh OrigamiDogfight <version>`. One
+report is open and unreproduced: Options stopped opening once after a long full-screen Preview
+(see "Open" below).
 Everything under "Decisions" is a starting point chosen so the whole thing could be built and
 watched; **look, feel and balance are judged on the running saver, not on paper**, and any of it
 can move once it has been seen.
@@ -29,6 +31,20 @@ Where v1 departed from the decisions below, and why:
 - **The picker tile is a crop of a frozen frame**, because the whole arena at 108x71 shows the
   planes as specks. Any change to the simulation moves the fight, so the tile's frame has to be
   re-chosen after one (`tools/build-origami-thumbnail.sh`).
+
+## Open
+
+- **Options stopped opening, once.** Brandon opened and closed Options, ran a full-screen Preview
+  for about five minutes, and then Options did nothing — for every saver, and the Aquarium's
+  button disappeared — until System Settings was quit. No crash report. It did not reproduce on a
+  monitored second attempt, which showed the sheet running in a separate, small host process
+  from the full-screen preview, memory flat through the Preview (about 720–760 MB at 3440x1440,
+  falling to 172 MB once released), and every sheet preview freed. A 2,000-seed headless hunt
+  through match changes found no hang in the sim or the countryside. The likeliest reading is a
+  wedged sheet host; whether Origami caused it is unknown. To catch it, touch
+  `~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/tmp/saverkit-lifecycle.enable`,
+  restart the hosts with System Settings closed, and when it recurs leave Settings open and
+  `sample` every `legacyScreenSaver`.
 
 ## v3: more life (2026-10-07)
 
