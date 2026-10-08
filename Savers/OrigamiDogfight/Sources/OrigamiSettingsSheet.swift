@@ -52,8 +52,10 @@ final class OrigamiSettingsSheet: NSObject {
     /// System Settings thumbnail does — `RenderQuality.reduced`, the whole fight at a fraction of
     /// the pixels.
     private static let previewSize = NSSize(width: 384, height: 216)
-    /// The choices' column: wide enough for four choices in a row with "Surprise me" among
-    /// them — at 330 the season's and the hour's first titles were cut to "Sum…" and "Mor…".
+    /// The choices' column at its narrowest, and the width captions wrap at. A floor, not a
+    /// size: a row of choices that needs more widens the sheet, because a fixed width silently
+    /// truncated whichever row outgrew it — the hour's first choice came out as a bare "…" once
+    /// Night made it five.
     private static let columnWidth: CGFloat = 380
     /// Opens on a fight already going rather than on planes still coming on.
     private static let previewWarmup: Double = 9
@@ -304,7 +306,7 @@ final class OrigamiSettingsSheet: NSObject {
 
             groups.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
             groups.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            groups.widthAnchor.constraint(equalToConstant: OrigamiSettingsSheet.columnWidth),
+            groups.widthAnchor.constraint(greaterThanOrEqualToConstant: OrigamiSettingsSheet.columnWidth),
 
             previewContainer.topAnchor.constraint(equalTo: groups.topAnchor),
             previewContainer.leadingAnchor.constraint(equalTo: groups.trailingAnchor, constant: 24),
@@ -347,6 +349,8 @@ final class OrigamiSettingsSheet: NSObject {
     private func radio(_ title: String, tag: Int, action: Selector) -> NSButton {
         let button = NSButton(radioButtonWithTitle: title, target: self, action: action)
         button.tag = tag
+        // A choice is never shortened to fit; the column grows instead.
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
 
